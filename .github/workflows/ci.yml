@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.actor }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim_version: [v0.10.4, v0.11.0, nightly]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim_version }}
+      - run: nvim --version
+      - name: Install dependencies
+        run: |
+          git clone --depth 1 https://github.com/nvim-mini/mini.test \
+            ~/.local/share/nvim/site/pack/core/opt/mini.test
+          git clone --depth 1 https://github.com/nvim-treesitter/nvim-treesitter-textobjects \
+            ~/.local/share/nvim/site/pack/core/opt/nvim-treesitter-textobjects
+      - run: make test
