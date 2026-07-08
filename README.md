@@ -1,8 +1,14 @@
-# celeste_comment
+# celeste_comment.nvim
 
 Toggle comments with line / block / textobject support.
 
 > **Experimental** — Breaking changes may occur.
+
+- **show case**
+  ![demo1](https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a)
+
+- **with [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)**
+  ![demo2](https://github.com/user-attachments/assets/d969c3d3-7646-4f0c-b665-261e78169c8d)
 
 ## Features
 
@@ -23,6 +29,8 @@ Toggle comments with line / block / textobject support.
 - **Cover all cases** — This plugin's aim is to handle the vast majority of
   common scenarios, not every possible case. Known textobject edge cases and
   unusual comment patterns are acknowledged but not planned to fix.
+- **Doc comment**
+- **Header comment**
 
 ### Limitations
 
