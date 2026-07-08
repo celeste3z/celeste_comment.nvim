@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        neovim_version: [v0.10.4, v0.11.0, nightly]
+        neovim_version: [nightly]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -30,4 +30,12 @@ jobs:
             ~/.local/share/nvim/site/pack/core/opt/mini.test
           git clone --depth 1 https://github.com/nvim-treesitter/nvim-treesitter-textobjects \
             ~/.local/share/nvim/site/pack/core/opt/nvim-treesitter-textobjects
+          git clone --depth 1 https://github.com/nvim-treesitter/nvim-treesitter \
+            ~/.local/share/nvim/site/pack/core/opt/nvim-treesitter
+      - uses: tree-sitter/setup-action/cli@v2
+      - name: Install treesitter parsers
+        run: |
+          nvim --headless --noplugin -u scripts/minimal_init.lua \
+            -c "lua vim.cmd('packadd nvim-treesitter'); require('nvim-treesitter').install({ 'cpp', 'bash', 'markdown', 'html' }):wait(600000)" \
+            -c "qa!"
       - run: make test

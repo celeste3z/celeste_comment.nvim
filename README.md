@@ -46,6 +46,10 @@ Toggle comments with line / block / textobject support.
   markers per column. For column-wise comment operations, consider using
   a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
 
+## Requirements
+
+- Neovim **>= 0.13**
+
 ## Installation
 
 ### vim.pack (Neovim 0.12+)
