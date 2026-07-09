@@ -438,8 +438,9 @@ end
 ---@param cms_conf Celeste.Comment.CommentStringConf
 ---@param ctype    Celeste.Comment.CommentType
 ---@param cfg      Celeste.Comment.Opts
+---@param silent?  boolean
 ---@return Celeste.Comment.CommentStringInfo?
-function H.make_csi_from_cms_conf(cms_conf, ctype, cfg)
+function H.make_csi_from_cms_conf(cms_conf, ctype, cfg, silent)
   if not cms_conf then return end
   if type(cms_conf) ~= "table" then return end
   local cms = cms_conf[ctype]
@@ -447,11 +448,13 @@ function H.make_csi_from_cms_conf(cms_conf, ctype, cfg)
   if type(cms) == "string" and cms == "" then return end
   local pairs = H.comment_string_unwrap(cms)
   if ctype == M.CMT.kBlock and (pairs[1][1] == "" or pairs[1][2] == "") then
-    vim.api.nvim_echo(
-      { { "Invalid ", "WarningMsg" }, { "blockwise commentstring : " }, { ("%s"):format(vim.inspect(pairs)) } },
-      true,
-      {}
-    )
+    if not silent then
+      vim.api.nvim_echo(
+        { { "Invalid ", "WarningMsg" }, { "blockwise commentstring : " }, { ("%s"):format(vim.inspect(pairs)) } },
+        true,
+        {}
+      )
+    end
     return
   end
   return H.make_csi(pairs, { pad = cfg.insert_space, ci = cfg.case_insensitive })
@@ -1278,7 +1281,15 @@ function H.compute_x_comment_range(cfg, cursor)
   local cms_conf = H.make_cms_conf(cursor, cfg)
   if not cms_conf then return end
 
-  local lcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kLine, cfg)
+  local lcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kLine, cfg, true)
+  local bcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kBlock, cfg, true)
+  local bprefix = lcsi ~= nil
+    and bcsi ~= nil
+    and bcsi.tlcs ~= lcsi.tlcs
+    and lcsi.tlcs ~= ""
+    and bcsi.tlcs ~= ""
+    and vim.startswith(bcsi.tlcs, lcsi.tlcs)
+
   if lcsi then
     local r
     if lcsi.wrapped and cfg.fallback_to_block == M.FBK2BLOCK.kIfLineCmsWrapped then
@@ -1286,12 +1297,16 @@ function H.compute_x_comment_range(cfg, cursor)
       if r then return r, M.CMT.kBlock, lcsi end
     end
 
+    if bprefix and bcsi then
+      r = H.compute_blockcomment_range(cfg, cursor, bcsi)
+      if r then return r, M.CMT.kBlock, bcsi end
+    end
+
     r = H.compute_linecomment_range(cfg, cursor, lcsi)
     if r then return r, M.CMT.kLine, lcsi end
   end
 
-  local bcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kBlock, cfg)
-  if bcsi then return H.compute_blockcomment_range(cfg, cursor, bcsi), M.CMT.kBlock, bcsi end
+  if not bprefix and bcsi then return H.compute_blockcomment_range(cfg, cursor, bcsi), M.CMT.kBlock, bcsi end
 end
 
 --- Auto-detect linewise or blockwise textobject

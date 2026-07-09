@@ -2201,6 +2201,35 @@ T["textobject"]["gcu special case1"] = function()
   })
 end
 
+T["textobject"]["gcu special case2 : block lcs startswith line lcs"] = function()
+  child.bo.filetype = "lua"
+  child.bo.tabstop = 2
+  child.lua_func(
+    function()
+      vim.b.celeste_comment_config = {
+        cms_confs = { lua = { { "--%s" }, "--[[%s]]" } },
+      }
+    end
+  )
+  set_lines({
+    "  hello",
+    "  world",
+  })
+  set_cursor(1, 2)
+  feed("gbj")
+  eq(get_cursor(), { 1, 7 })
+  eq(get_lines(), {
+    "  --[[ hello",
+    "  world ]]",
+  })
+  feed("gcu")
+  eq(get_cursor(), { 1, 2 })
+  eq(get_lines(), {
+    "  hello",
+    "  world",
+  })
+end
+
 -- textobject treesitter ──────────────────────────────────────────────────────
 
 T["textobject treesitter"] = new_set()
