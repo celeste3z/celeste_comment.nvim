@@ -8,7 +8,7 @@ Toggle comments with line / block / textobject support.
   ![demo1](https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a)
 
 - **with [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)**
-  ![demo2](https://github.com/user-attachments/assets/d969c3d3-7646-4f0c-b665-261e78169c8d)
+  ![demo2](https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517)
 
 ## Features
 
@@ -124,6 +124,16 @@ require("celeste_comment").setup({})
   -- comment pairs when using the block textobject (`gb` in operator-pending).
   -- Only relevant when no treesitter query is available for the buffer.
   block_textobj_nlines   = 200,
+
+  -- Use treesitter to detect comment range for textobjects.
+  -- Falls back to regex matching when no treesitter parser is available.
+  --
+  -- NOTE: When `true` (default), treesitter determines the comment boundary.
+  -- For example, on a line like `// /* hello */`, pressing `gbgb` with cursor
+  -- on `hello` won't react because treesitter sees the entire line (from `//`)
+  -- as the comment region. When `false`, regex matching sees only the
+  -- `/* hello */` pair and uncomments it, producing `// hello`.
+  textobj_treesitter_detect = false,
 
   -- Controls how empty lines are handled during comment toggle:
   -- - "never":  toggle and align empty lines normally.

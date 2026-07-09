@@ -2251,6 +2251,7 @@ T["textobject treesitter"]["works"] = function()
     vim.cmd("packadd nvim-treesitter-textobjects")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
+    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
   end)
   set_lines({
     "int func() {",
@@ -2304,6 +2305,7 @@ T["textobject treesitter"]["works in markdown"] = function()
     vim.treesitter.language.add("markdown")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
+    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
   end)
   set_lines({
     "# title1",
@@ -2365,6 +2367,27 @@ T["textobject treesitter"]["fallback to text match impl while no query"] = funct
   feed("gcu")
   eq(get_cursor(), { 2, 10 })
   eq(get_lines(2, 2), { '  printf("hello, world");' })
+end
+
+T["textobject treesitter"]["fallback to text match impl while disable textobj_treesitter_detect"] = function()
+  child.lua_func(function()
+    vim.bo.filetype = "cpp"
+    vim.bo.tabstop = 2
+    vim.bo.expandtab = true
+    vim.cmd("packadd nvim-treesitter-textobjects")
+    vim.treesitter.language.add("cpp")
+    vim.treesitter.start()
+  end)
+  child.b.celeste_comment_config = { textobj_treesitter_detect = true }
+  set_lines({ "// hello /* world */" })
+  set_cursor(1, 9)
+  feed("gbgb")
+  eq(get_cursor(), { 1, 9 })
+  eq(get_lines(), { "// hello /* world */" })
+
+  child.b.celeste_comment_config = { textobj_treesitter_detect = false }
+  feed("gbgb")
+  eq(get_lines(), { "// hello world" })
 end
 
 -- invert tests ────────────────────────────────────────────────────────────────

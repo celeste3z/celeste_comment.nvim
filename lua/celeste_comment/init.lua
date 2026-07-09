@@ -122,18 +122,19 @@ M.FBK2BLOCK = {
 ---@field invert?           string mode 'nx', invert comment per line, ''
 
 ---@class Celeste.Comment.Opts
----@field keep_cursor?             boolean default true
----@field insert_space?            boolean default true
----@field line_comment_no_indent?  boolean default false
----@field case_insensitive?        boolean default false
----@field block_textobj_nlines?    integer default 200
----@field block_relaxed_detect?    boolean default false
----@field ignore_empty_lines?      Celeste.Comment.Opts.IgnoreEmptyLines default "never"
----@field fallback_to_block?       Celeste.Comment.Opts.FallbackToBlock
----@field cms_confs?               Celeste.Comment.CommentStringConfs|boolean
----@field mappings?                Celeste.Comment.Opts.Mapping
----@field hooks?                   Celeste.Comment.Hooks
----@field log_level?               vim.log.levels default `vim.log.levels.OFF`
+---@field keep_cursor?                boolean default true
+---@field insert_space?               boolean default true
+---@field line_comment_no_indent?     boolean default false
+---@field case_insensitive?           boolean default false
+---@field textobj_treesitter_detect?  boolean default true
+---@field block_textobj_nlines?       integer default 200
+---@field block_relaxed_detect?       boolean default false
+---@field ignore_empty_lines?         Celeste.Comment.Opts.IgnoreEmptyLines default "never"
+---@field fallback_to_block?          Celeste.Comment.Opts.FallbackToBlock
+---@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean
+---@field mappings?                   Celeste.Comment.Opts.Mapping
+---@field hooks?                      Celeste.Comment.Hooks
+---@field log_level?                  vim.log.levels default `vim.log.levels.OFF`
 
 ---@type Celeste.Comment.Range2?
 H.cursor_state = nil
@@ -141,39 +142,40 @@ H.cursor_state = nil
 -- stylua: ignore start
 ---@type Celeste.Comment.Opts
 H.config = {
-  keep_cursor            = true,
-  insert_space           = true,
-  line_comment_no_indent = false,
-  case_insensitive       = false,
-  block_relaxed_detect   = true,
-  block_textobj_nlines   = 200,
-  ignore_empty_lines     = M.IGN_EMT.kIndent,
-  fallback_to_block      = M.FBK2BLOCK.kIfLineCmsWrapped,
-  log_level              = vim.log.levels.OFF,
+  keep_cursor               = true,
+  insert_space              = true,
+  line_comment_no_indent    = false,
+  case_insensitive          = false,
+  block_relaxed_detect      = true,
+  textobj_treesitter_detect = false,
+  block_textobj_nlines      = 200,
+  ignore_empty_lines        = M.IGN_EMT.kIndent,
+  fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
+  log_level                 = vim.log.levels.OFF,
 
   mappings = {
-    comment              = "gc",
-    comment_line         = "gcc",
-    comment_visual       = "gc",
+    comment                 = "gc",
+    comment_line            = "gcc",
+    comment_visual          = "gc",
 
-    block                = "gb",
-    block_line           = "gbc",
-    block_visual         = "gb",
+    block                   = "gb",
+    block_line              = "gbc",
+    block_visual            = "gb",
 
-    textobject_line      = "gc",
-    textobject_block     = "gb",
-    textobject_auto      = "",
-    uncomment_auto       = "",
+    textobject_line         = "gc",
+    textobject_block        = "gb",
+    textobject_auto         = "",
+    uncomment_auto          = "",
 
-    comment_below        = "",
-    comment_above        = "",
-    comment_eol          = "",
-    invert               = "",
+    comment_below           = "",
+    comment_above           = "",
+    comment_eol             = "",
+    invert                  = "",
   },
 
   hooks = {
-    pre_sync_edits       = nil,
-    cms_conf_resolver    = nil
+    pre_sync_edits          = nil,
+    cms_conf_resolver       = nil
   }
 }
 
@@ -1239,7 +1241,7 @@ end
 ---@param ts_range? Celeste.Comment.Range4
 ---@return Celeste.Comment.Range4?
 function H.compute_blockcomment_range(cfg, cursor, csi, ts_range)
-  if not ts_range then
+  if not ts_range and cfg.textobj_treesitter_detect then
     local range, ts_no_comment = H.textobject_comment_at_cursor(cursor)
     if ts_no_comment then return end
     ts_range = range
