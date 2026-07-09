@@ -599,6 +599,50 @@ end
 
 T["edits"] = new_set()
 
+T["edits"]["sort"] = function()
+  local edits = {
+    { range = { 2, 3, 2, 3 }, text = { "Y" } },
+    { range = { 0, 1, 0, 1 }, text = { "X" } },
+    { range = { 1, 0, 1, 0 }, text = { "Z" } },
+    { range = { 2, 0, 2, 0 }, text = { "W" } },
+  }
+  edits.need_sort = true
+
+  H.sort_edits(edits)
+
+  eq(edits.need_sort, nil)
+  eq(edits[1].range[1], 0)
+  eq(edits[1].range[2], 1)
+  eq(edits[2].range[1], 1)
+  eq(edits[2].range[2], 0)
+  eq(edits[3].range[1], 2)
+  eq(edits[3].range[2], 0)
+  eq(edits[4].range[1], 2)
+  eq(edits[4].range[2], 3)
+end
+
+T["edits"]["sort and sync"] = function()
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "ab", "cd", "ef" })
+
+  local edits = {
+    { range = { 2, 1, 2, 1 }, text = { "X" } },
+    { range = { 0, 0, 0, 0 }, text = { "Z" } },
+    { range = { 1, 2, 1, 2 }, text = { "Y" } },
+  }
+  edits.need_sort = true
+  edits.any_multi = true
+
+  H.sync_edits(buf, nil, nil, edits, false)
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  eq(lines[1], "Zab")
+  eq(lines[2], "cdY")
+  eq(lines[3], "eXf")
+
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 T["edits"]["make_comment_edits"] = function()
   local csi = H.make_csi({ { "# ", "" } })
   local edits = H.make_comment_edits("hello", 0, {}, make_line_info({ offset = 0, csi = csi }))

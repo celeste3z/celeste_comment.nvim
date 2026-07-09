@@ -47,6 +47,7 @@ M.FBK2BLOCK = {
 ---@class Celeste.Comment.TextEdits
 ---@field [integer] Celeste.Comment.TextEdit
 ---@field any_multi? boolean some edit have multiple lines
+---@field need_sort? boolean need sort edits
 
 ---@class Celeste.Comment.CommentStringConf
 ---@field [1] (string|string[])?
@@ -926,6 +927,17 @@ function H.compute_block_edits(lines, csi, range, motion, cfg)
   return edits
 end
 
+---@param edits Celeste.Comment.TextEdits
+function H.sort_edits(edits)
+  if edits.need_sort then
+    table.sort(edits, function(a, b)
+      if a.range[1] ~= b.range[1] then return a.range[1] < b.range[1] end
+      return a.range[2] < b.range[2]
+    end)
+    edits.need_sort = nil
+  end
+end
+
 ---@param lines      string[]
 ---@param edits      Celeste.Comment.TextEdits
 ---@param offset_row integer? 0-indexed row offset
@@ -948,6 +960,8 @@ end
 ---@param use_set_text boolean?
 function H.sync_edits(buf, range, lines, edits, use_set_text)
   if #edits == 0 then return end
+
+  H.sort_edits(edits)
 
   if use_set_text or edits.any_multi then
     local max = vim.api.nvim_buf_line_count(buf)
