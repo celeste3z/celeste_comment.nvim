@@ -1,5 +1,26 @@
 # celeste_comment.nvim
 
+<!--toc:start-->
+
+- [celeste_comment.nvim](#celestecommentnvim)
+  - [Features](#features)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+    - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
+    - [lazy.nvim](#lazynvim)
+  - [Configuration](#configuration)
+    - [default](#default)
+    - [Buffer-local configuration](#buffer-local-configuration)
+    - [Custom comment strings](#custom-comment-strings)
+  - [Hooks](#hooks)
+    - [`hooks.pre_sync_edits`](#hookspresyncedits)
+    - [`hooks.cms_conf_resolver`](#hookscmsconfresolver)
+  - [Disabling](#disabling)
+  - [What it doesn't do](#what-it-doesnt-do)
+  - [Limitations](#limitations)
+  - [Acknowledgments](#acknowledgments)
+  <!--toc:end-->
+
 Toggle comments with line / block / textobject support.
 
 > **Experimental** — Breaking changes may occur.
@@ -24,36 +45,6 @@ Toggle comments with line / block / textobject support.
 - Relaxed block detection
 - Precise edit tracking (via TextEdits)
 
-### What it doesn't do
-
-- **Cover all cases** — This plugin's aim is to handle the vast majority of
-  common scenarios, not every possible case. Known textobject edge cases and
-  unusual comment patterns are acknowledged but not planned to fix.
-- **Doc comment**
-- **Header comment**
-
-### Limitations
-
-- **`keep_cursor` during dot-repeat** — Does not work with `.`; this is
-  current Neovim limitation.
-
-- **Auto-detect textobject accuracy** — `textobject_auto()` first checks
-  whether the current line contains a line comment. In languages like Lua
-  where `--` is used for both line comments (`--`) and block comments
-  (`--[[ ]]`), a line starting with `--` may be misidentified as a line
-  comment, leading to incorrect textobject selection.
-
-- **Regex-based textobject range** — Pattern matching can produce false
-  positives in certain scenarios. For example, comment-like tokens inside
-  strings may be mistakenly treated as actual comments. Additionally, the
-  scan range is capped by `block_textobj_nlines` (default 200), so
-  textobject detection may not work beyond that limit.
-
-- **Visual block mode (`<C-v>`)** — Selection is treated as linewise; the
-  entire selected lines are block-commented rather than inserting comment
-  markers per column. For column-wise comment operations, consider using
-  a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
-
 ## Requirements
 
 - Neovim **>= 0.13**
@@ -74,22 +65,9 @@ require("celeste_comment").setup({})
 { "celeste3z/celeste_comment.nvim", opts = {} }
 ```
 
-### Dependencies
+## Configuration
 
-- [nvim-treesitter-textobjects](https://github.com/nvim-treesitter/nvim-treesitter-textobjects) (optional) —
-  Enables treesitter-aware comment textobject detection. When installed,
-  `textobject_auto()`, `textobject_linewise()`, and `textobject_blockwise()`
-  use the `@comment.outer` query to
-  precisely locate comment boundaries. Without it, the plugin falls back
-  to regex-based matching, which works correctly in most scenarios.
-
-## Setup
-
-```lua
-require("celeste_comment").setup({})
-```
-
-### Default configuration
+#### Default
 
 ```lua
 {
@@ -124,16 +102,6 @@ require("celeste_comment").setup({})
   -- comment pairs when using the block textobject (`gb` in operator-pending).
   -- Only relevant when no treesitter query is available for the buffer.
   block_textobj_nlines   = 200,
-
-  -- Use treesitter to detect comment range for textobjects.
-  -- Falls back to regex matching when no treesitter parser is available.
-  --
-  -- NOTE: When `true` (default), treesitter determines the comment boundary.
-  -- For example, on a line like `// /* hello */`, pressing `gbgb` with cursor
-  -- on `hello` won't react because treesitter sees the entire line (from `//`)
-  -- as the comment region. When `false`, regex matching sees only the
-  -- `/* hello */` pair and uncomments it, producing `// hello`.
-  textobj_treesitter_detect = false,
 
   -- Controls how empty lines are handled during comment toggle:
   -- - "never":  toggle and align empty lines normally.
@@ -226,7 +194,7 @@ overridden per buffer — they are fixed at `setup()` time.
 
 #### Custom comment strings
 
-The plugin resolves comment strings through a chain of resolvers
+The plugin resolves comment strings through **a chain of resolvers**
 (high to low priority):
 
 **1. `hooks.cms_conf_resolver`** — Full control, highest priority:
@@ -327,6 +295,36 @@ Set `vim.g.celeste_comment_disable` globally or `vim.b.celeste_comment_disable` 
 ```lua
 vim.g.celeste_comment_disable = true
 ```
+
+## What it doesn't do
+
+- **Cover all cases** — This plugin's aim is to handle the vast majority of
+  common scenarios, not every possible case. Known textobject edge cases and
+  unusual comment patterns are acknowledged but not planned to fix.
+- **Doc comment**
+- **Header comment**
+
+## Limitations
+
+- **`keep_cursor` during dot-repeat** — Does not work with `.`; this is
+  current Neovim limitation.
+
+- **Auto-detect textobject accuracy** — `textobject_auto()` first checks
+  whether the current line contains a line comment. In languages like Lua
+  where `--` is used for both line comments (`--`) and block comments
+  (`--[[ ]]`), a line starting with `--` may be misidentified as a line
+  comment, leading to incorrect textobject selection.
+
+- **Regex-based textobject range** — Pattern matching can produce false
+  positives in certain scenarios. For example, comment-like tokens inside
+  strings may be mistakenly treated as actual comments. Additionally, the
+  scan range is capped by `block_textobj_nlines` (default 200), so
+  textobject detection may not work beyond that limit.
+
+- **Visual block mode (`<C-v>`)** — Selection is treated as linewise; the
+  entire selected lines are block-commented rather than inserting comment
+  markers per column. For column-wise comment operations, consider using
+  a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
 
 ## Acknowledgments
 
