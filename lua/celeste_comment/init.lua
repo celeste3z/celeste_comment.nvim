@@ -197,7 +197,7 @@ function H.should_log(level) return level >= H.config.log_level end
 ---@vararg any
 function H.log(level, ...)
   if level < H.config.log_level then return end
-  if not H._logger then H._logger = vim.log.new({ name = "celeste_comment", current_level = H.config.log_level }) end
+  if not H._logger then H._logger = vim.log.new({ name = "celeste_comment", level = H.config.log_level }) end
   if H._logger then H._logger[log_level_to_name[level]](...) end
 end
 
