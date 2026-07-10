@@ -189,6 +189,20 @@ local log_level_to_name = {
 }
 -- stylua: ignore end
 
+local __supported = vim.fn.has("nvim-0.13") == 1
+---@param silent? boolean
+---@return boolean
+function H.supported(silent)
+  if not __supported and not silent then
+    vim.api.nvim_echo(
+      { { "celeste_comment.nvim", "DiagnosticSignHint" }, { " requires nvim-0.13", "WarningMsg" } },
+      true,
+      {}
+    )
+  end
+  return __supported
+end
+
 ---@param level vim.log.levels
 ---@return boolean
 function H.should_log(level) return level >= H.config.log_level end
@@ -264,7 +278,9 @@ H.comment_string_confs = {
 }
 
 ---@return boolean
-function H.is_disabled() return vim.g.celeste_comment_disable == true or vim.b.celeste_comment_disable == true end
+function H.is_disabled()
+  return vim.g.celeste_comment_disable == true or vim.b.celeste_comment_disable == true or not H.supported()
+end
 
 ---@return boolean
 function H.is_visual() return vim.fn.mode():match("[vV\22]") ~= nil end
