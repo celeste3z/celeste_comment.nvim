@@ -4,12 +4,13 @@
 
 - [celeste_comment.nvim](#celestecommentnvim)
   - [Features](#features)
+  - [Comparison](#comparison)
   - [Requirements](#requirements)
   - [Installation](#installation)
     - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
     - [lazy.nvim](#lazynvim)
   - [Configuration](#configuration)
-    - [default](#default)
+    - [Default](#default)
     - [Buffer-local configuration](#buffer-local-configuration)
     - [Custom comment strings](#custom-comment-strings)
   - [Hooks](#hooks)
@@ -44,6 +45,23 @@ Toggle comments with line / block / textobject support.
 - Case insensitive comment detection
 - Relaxed block detection
 - Precise edit tracking (via TextEdits)
+
+## Comparison
+
+| Feature              | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                                      | [Neovim built-in](https://neovim.io/doc/user/lua.html#vim._comment) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)      | [vim-commentary](https://github.com/tpope/vim-commentary) |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
+| **Edit model**       | **TextEdits** — edits as range+text objects<br>• sortable<br>• hookable (`pre_sync_edits`)<br>• synced via `set_text` or `lockmarks+set_lines` | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• Vim `setline()`              |
+| **Line comment**     | ✅                                                                                                                                             | ✅                                                                  | ✅                                                            | ✅                                                            | ✅                                                        |
+| **Block comment**    | ✅                                                                                                                                             | ❌                                                                  | ✅                                                            | ❌                                                            | ❌                                                        |
+| **Dot-repeat**       | ✅                                                                                                                                             | ✅                                                                  | ✅                                                            | ✅                                                            | ✅                                                        |
+| **Count**            | ✅                                                                                                                                             | ✅                                                                  | ✅                                                            | ✅                                                            | ✅                                                        |
+| **Indent algorithm** | **VSCode-style** — min visible col<br>• handles mixed tab/space<br>• aligns markers<br>• blank lines opt-out                                   | Simple — min whitespace prefix<br>• no visible col align            | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• no mixed tab/space        | Minimal — `^\s*\zs`<br>• optional startofline             |
+| **Keep cursor**      | **Precise tracking** — adjust per TextEdit<br>• row/col shifts<br>• multi-line inserts                                                         | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                            | ❌                                                        |
+| **Invert per line**  | ✅                                                                                                                                             | ❌                                                                  | ❌                                                            | ❌                                                            | ❌                                                        |
+| **Line textobject**  | ✅                                                                                                                                             | ✅                                                                  | ❌                                                            | ✅                                                            | ✅                                                        |
+| **Block textobject** | ✅                                                                                                                                             | ❌                                                                  | ❌                                                            | ❌                                                            | ❌                                                        |
+| **Textobject auto**  | ✅                                                                                                                                             | ❌                                                                  | ❌                                                            | ❌                                                            | ❌                                                        |
+| **gcu**              | ✅                                                                                                                                             | ❌                                                                  | ❌                                                            | ❌                                                            | ✅                                                        |
 
 ## Requirements
 
