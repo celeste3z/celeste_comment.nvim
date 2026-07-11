@@ -19,6 +19,7 @@
   - [Disabling](#disabling)
   - [What it doesn't do](#what-it-doesnt-do)
   - [Limitations](#limitations)
+  - [Future work](#future-work)
   - [Acknowledgments](#acknowledgments)
   <!--toc:end-->
 
@@ -26,10 +27,10 @@ Toggle comments with line / block / textobject support.
 
 > **Experimental** — Breaking changes may occur.
 
-- **show case**
+- **Nomal usage**
   ![demo1](https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a)
 
-- **with [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)**
+- **With [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)**
   ![demo2](https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517)
 
 ## Features
@@ -45,23 +46,24 @@ Toggle comments with line / block / textobject support.
 - Case insensitive comment detection
 - Relaxed block detection
 - Precise edit tracking (via TextEdits)
+- Multi line comment string uncomment — detects and removes multiple line comment strings (e.g. Rust `//`, `///`, `//!`)
 
 ## Comparison
 
-| Feature              | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                                        | [Neovim built-in](https://neovim.io/doc/user/lua.html#vim._comment) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)      | [vim-commentary](https://github.com/tpope/vim-commentary) |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
-| **Edit model**       | **TextEdits** — edits as range+text objects<br>• sortable<br>• hookable (`pre_commit_edits`)<br>• synced via `set_text` or `lockmarks+set_lines` | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• Vim `setline()`              |
-| **Line comment**     | ✅                                                                                                                                               | ✅                                                                  | ✅                                                            | ✅                                                            | ✅                                                        |
-| **Block comment**    | ✅                                                                                                                                               | ❌                                                                  | ✅                                                            | ❌                                                            | ❌                                                        |
-| **Dot-repeat**       | ✅                                                                                                                                               | ✅                                                                  | ✅                                                            | ✅                                                            | ✅                                                        |
-| **Count**            | ✅                                                                                                                                               | ✅                                                                  | ✅                                                            | ✅                                                            | ✅                                                        |
-| **Indent algorithm** | **VSCode-style** — min visible col<br>• handles mixed tab/space<br>• aligns markers<br>• blank lines opt-out                                     | Simple — min whitespace prefix<br>• no visible col align            | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• no mixed tab/space        | Minimal — `^\s*\zs`<br>• optional startofline             |
-| **Keep cursor**      | **Precise tracking** — adjust per TextEdit<br>• row/col shifts<br>• multi-line inserts                                                           | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                            | ❌                                                        |
-| **Invert per line**  | ✅                                                                                                                                               | ❌                                                                  | ❌                                                            | ❌                                                            | ❌                                                        |
-| **Line textobject**  | ✅                                                                                                                                               | ✅                                                                  | ❌                                                            | ✅                                                            | ✅                                                        |
-| **Block textobject** | ✅                                                                                                                                               | ❌                                                                  | ❌                                                            | ❌                                                            | ❌                                                        |
-| **Textobject auto**  | ✅                                                                                                                                               | ❌                                                                  | ❌                                                            | ❌                                                            | ❌                                                        |
-| **gcu**              | ✅                                                                                                                                               | ❌                                                                  | ❌                                                            | ❌                                                            | ✅                                                        |
+| Feature              | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                   | [Neovim built-in](https://neovim.io/doc/user/lua.html#vim._comment) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)       | [vim-commentary](https://github.com/tpope/vim-commentary) |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------- |
+| **Edit model**       | **TextEdits** — edits as range+text objects<br>• changes commit via `nvim_buf_set_text` or `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)  | Direct line replacement<br>• Vim `setline()`              |
+| **Line comment**     | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                             | ✅                                                        |
+| **Block comment**    | ✅                                                                                                                          | ❌                                                                  | ✅                                                            | ❌                                                             | ❌                                                        |
+| **Dot-repeat**       | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                             | ✅                                                        |
+| **Count**            | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                             | ✅                                                        |
+| **Indent algorithm** | **VSCode-style** — min visible col<br>• handle mixed tab/space                                                              | Simple — min whitespace prefix<br>• not handle mixed tab/space      | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• not handle mixed tab/space | Minimal — `^\s*\zs`<br>• optional startofline             |
+| **Keep cursor**      | **Precise tracking** — adjust per TextEdit<br>• row/col shifts<br>• multi-line inserts                                      | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                             | ❌                                                        |
+| **Invert per line**  | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                             | ❌                                                        |
+| **Line textobject**  | ✅                                                                                                                          | ✅                                                                  | ❌                                                            | ✅                                                             | ✅                                                        |
+| **Block textobject** | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                             | ❌                                                        |
+| **Textobject auto**  | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                             | ❌                                                        |
+| **gcu**              | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                             | ✅                                                        |
 
 ## Requirements
 
@@ -343,6 +345,10 @@ vim.g.celeste_comment_disable = true
   entire selected lines are block-commented rather than inserting comment
   markers per column. For column-wise comment operations, consider using
   a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
+
+## Future work
+
+- Integrated with Neovim's builtin multicursor.
 
 ## Acknowledgments
 
