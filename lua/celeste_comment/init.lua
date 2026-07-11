@@ -84,7 +84,7 @@ M.FBK2BLOCK = {
 ---@field lcs_pos Celeste.Comment.Range3
 ---@field rcs_pos Celeste.Comment.Range3
 
----@class Celeste.Comment.Hooks.PreSyncEdits.Ctx
+---@class Celeste.Comment.Hooks.PreCommitEdits.Ctx
 ---@field cursor          vim.Pos
 ---@field range           Celeste.Comment.Range4
 ---@field edits           Celeste.Comment.TextEdits
@@ -103,7 +103,7 @@ M.FBK2BLOCK = {
 ---@field tree?       vim.treesitter.LanguageTree
 
 ---@class Celeste.Comment.Hooks
----@field pre_sync_edits?    fun(ctx:Celeste.Comment.Hooks.PreSyncEdits.Ctx)
+---@field pre_commit_edits?  fun(ctx:Celeste.Comment.Hooks.PreCommitEdits.Ctx)
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
@@ -175,7 +175,7 @@ H.config = {
   },
 
   hooks = {
-    pre_sync_edits          = nil,
+    pre_commit_edits        = nil,
     cms_conf_resolver       = nil
   }
 }
@@ -974,7 +974,7 @@ end
 ---@param lines?       string[]
 ---@param edits        Celeste.Comment.TextEdits
 ---@param use_set_text boolean?
-function H.sync_edits(buf, range, lines, edits, use_set_text)
+function H.commit_edits(buf, range, lines, edits, use_set_text)
   if #edits == 0 then return end
 
   H.sort_edits(edits)
@@ -1065,7 +1065,7 @@ function H.togglex(cfg, ctype, lines, csi, range, motion, cursor, opts)
   end
   assert(edits, "unexpected error, nil edits")
 
-  ---@type Celeste.Comment.Hooks.PreSyncEdits.Ctx
+  ---@type Celeste.Comment.Hooks.PreCommitEdits.Ctx
   local ctx = {
     cursor = cursor,
     cfg = cfg,
@@ -1076,9 +1076,9 @@ function H.togglex(cfg, ctype, lines, csi, range, motion, cursor, opts)
     csi = csi,
     lines = lines,
   }
-  if vim.is_callable(cfg.hooks.pre_sync_edits) then cfg.hooks.pre_sync_edits(ctx) end
+  if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
-  H.sync_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
+  H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
 
   H.compute_cursor_state(cfg.keep_cursor and H.cursor_state or nil, ctx.edits)
 
@@ -1503,7 +1503,7 @@ function M.setup(config)
     vim.validate("mappings." .. k, v, "string", true, "string")
   end
   vim.validate("hooks", config.hooks, "table", true, "table")
-  vim.validate("pre_sync_edits", config.hooks.pre_sync_edits, "callable", true, "callable")
+  vim.validate("pre_commit_edits", config.hooks.pre_commit_edits, "callable", true, "callable")
 
   H.config = config
 

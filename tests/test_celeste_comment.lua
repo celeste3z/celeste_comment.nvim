@@ -621,7 +621,7 @@ T["edits"]["sort"] = function()
   eq(edits[4].range[2], 3)
 end
 
-T["edits"]["sort and sync"] = function()
+T["edits"]["sort and commit"] = function()
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "ab", "cd", "ef" })
 
@@ -633,7 +633,7 @@ T["edits"]["sort and sync"] = function()
   edits.need_sort = true
   edits.any_multi = true
 
-  H.sync_edits(buf, nil, nil, edits, false)
+  H.commit_edits(buf, nil, nil, edits, false)
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   eq(lines[1], "Zab")
@@ -1167,7 +1167,7 @@ T["ignore_empty_lines"]["works with set_text"] = function()
     vim.b.celeste_comment_config = {
       ignore_empty_lines = "indent",
       hooks = {
-        pre_sync_edits = function(ctx) ctx.o_use_set_text = true end,
+        pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
       },
     }
   end)
@@ -1791,9 +1791,9 @@ T["blockwise"]["gbgb on python docstring"] = function()
 end
 
 T["blockwise"]["empty selection and use set_text"] = function()
-  child.lua([[
-    vim.b.celeste_comment_config = {hooks = {pre_sync_edits = function(ctx) ctx.o_use_set_text = true end}}
-  ]])
+  child.lua_func(function()
+    vim.b.celeste_comment_config = { hooks = { pre_commit_edits = function(ctx) ctx.o_use_set_text = true end } }
+  end)
   child.bo.filetype = "cpp"
   set_lines({ "begin", "", "", "", "", "", "end" })
   set_cursor(2, 1)
@@ -2636,16 +2636,16 @@ T["keep_cursor"]["gbiw restore cursor"] = function()
   eq(get_cursor(), { 1, 10 })
 end
 
--- PreSyncEdits tests ─────────────────────────────────────────────────────────
+-- PreCommitEdits tests ───────────────────────────────────────────────────────
 
-T["pre_sync_edits"] = new_set()
+T["pre_commit_edits"] = new_set()
 
-T["pre_sync_edits"]["multi_line edit with pre_sync_edits restores cursor"] = function()
+T["pre_commit_edits"]["multi_line edit with pre_commit_edits restores cursor"] = function()
   child.bo.filetype = "cpp"
   child.lua_func(function()
     vim.b.celeste_comment_config = {
       hooks = {
-        pre_sync_edits = function(ctx)
+        pre_commit_edits = function(ctx)
           if ctx.ctype ~= 2 then return end
           local lines = vim.api.nvim_buf_get_lines(0, ctx.range[1], ctx.range[3] + 1, false)
           local e = ctx.edits
@@ -2668,13 +2668,14 @@ T["pre_sync_edits"]["multi_line edit with pre_sync_edits restores cursor"] = fun
   feed("gb", "2j")
   eq(get_cursor(), { 2, 2 })
 end
-T["pre_sync_edits"]["multi_line edit keep_cursor=false does not restore cursor"] = function()
+
+T["pre_commit_edits"]["multi_line edit keep_cursor=false does not restore cursor"] = function()
   child.bo.filetype = "cpp"
   child.lua_func(function()
     vim.b.celeste_comment_config = {
       keep_cursor = false,
       hooks = {
-        pre_sync_edits = function(ctx)
+        pre_commit_edits = function(ctx)
           if ctx.ctype ~= 2 then return end
           local lines = vim.api.nvim_buf_get_lines(0, ctx.range[1], ctx.range[3] + 1, false)
           local e = ctx.edits
@@ -2692,12 +2693,12 @@ T["pre_sync_edits"]["multi_line edit keep_cursor=false does not restore cursor"]
   eq(get_cursor(), { 1, 0 })
 end
 
-T["pre_sync_edits"]["pre_sync_edits above/below lines"] = function()
+T["pre_commit_edits"]["pre_commit_edits above/below lines"] = function()
   child.bo.filetype = "cpp"
   child.lua_func(function()
     vim.b.celeste_comment_config = {
       hooks = {
-        pre_sync_edits = function(ctx)
+        pre_commit_edits = function(ctx)
           if ctx.ctype ~= 2 then return end
           local lines = ctx.lines
           local l1, ln = lines[1], lines[#lines]
@@ -2716,12 +2717,12 @@ T["pre_sync_edits"]["pre_sync_edits above/below lines"] = function()
   eq(get_lines(), { "  /*", "  void f() {", "    int a;", "  }", "  */" })
 end
 
-T["pre_sync_edits"]["pre_sync_edits edge: last line selection"] = function()
+T["pre_commit_edits"]["pre_commit_edits edge: last line selection"] = function()
   child.bo.filetype = "cpp"
   child.lua_func(function()
     vim.b.celeste_comment_config = {
       hooks = {
-        pre_sync_edits = function(ctx)
+        pre_commit_edits = function(ctx)
           if ctx.ctype ~= 2 then return end
           local lines = ctx.lines
           local e = ctx.edits
@@ -2739,11 +2740,11 @@ T["pre_sync_edits"]["pre_sync_edits edge: last line selection"] = function()
   eq(get_lines(), { "line1", "/*", "line2", "*/" })
 end
 
-T["pre_sync_edits"]["out of range fallback to set lines"] = function()
+T["pre_commit_edits"]["out of range fallback to set lines"] = function()
   child.lua_func(function()
     vim.b.celeste_comment_config = {
       hooks = {
-        pre_sync_edits = function(ctx)
+        pre_commit_edits = function(ctx)
           ctx.edits[#ctx.edits + 1] = {
             range = { 2, 0, 2, 3 },
             text = { "ccc" },
