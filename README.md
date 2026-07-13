@@ -41,14 +41,20 @@
 
 ## Showcase
 
-- Line/Block comment toggle
-  ![demo1](https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a)
+<div align="center">
+<img src="https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a" alt="Line/Block comment toggle">
+<p><em>Line/Block comment toggle</em></p>
+</div>
 
-- With [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)
-  ![demo2](https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517)
+<div align="center">
+<img src="https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517" alt="With multicursor.nvim">
+<p><em>With <a href="https://github.com/jake-stewart/multicursor.nvim">multicursor.nvim</a></em></p>
+</div>
 
-- Cursor sticky + Dot-repeat
-  ![demo3](https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813)
+<div align="center">
+<img src="https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813" alt="Cursor sticky and Dot-repeat">
+<p><em>Cursor sticky + Dot-repeat</em></p>
+</div>
 
 ## Comparison
 
