@@ -881,15 +881,22 @@ function H.block_comment_info(lines, csi, scol, ecol, motion, range, cfg)
   local l1 = lines[1]
   local ln = lines[n]
 
+  -- TODO: should we normalize range at get_selection_range?
+  local shrunk = vim.list_slice(range)
+  if motion ~= "char" then
+    shrunk[2] = 0
+    shrunk[4] = #ln
+  end
+
   if cfg and cfg.block_relaxed_detect then
-    local shrunk = H.shrink_region(lines, range)
-    if not shrunk then return end
+    local t = H.shrink_region(lines, shrunk)
+    if not t then return end
+    shrunk = t
     local fi = shrunk[1] - range[1] + 1
     n = shrunk[3] - shrunk[1] + 1
     l1 = lines[fi]
     ln = lines[fi + n - 1]
     scol, ecol = shrunk[2], shrunk[4]
-    range = shrunk
   end
 
   local slcs, elcs, srcs, ercs
@@ -920,7 +927,7 @@ function H.block_comment_info(lines, csi, scol, ecol, motion, range, cfg)
     ercs = ec
   end
 
-  return { lcs_pos = { range[1], slcs - 1, elcs - 1 }, rcs_pos = { range[1] + n - 1, srcs - 1, ercs - 1 } }
+  return { lcs_pos = { shrunk[1], slcs - 1, elcs - 1 }, rcs_pos = { shrunk[1] + n - 1, srcs - 1, ercs - 1 } }
 end
 
 ---@param lines  string[]

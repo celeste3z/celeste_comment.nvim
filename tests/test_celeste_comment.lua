@@ -574,6 +574,21 @@ T["base"]["block_comment_info"] = function()
 
   -- Non-relaxed should still fail when leading blank
   eq(f({ "", "  /* hello */" }, "/* ", " */", 0, 11, "line"), nil)
+
+  -- Relaxed: multi-line block comment, linewise ec=0 (line motion)
+  info = f({ "  --[[ xxx", "  yyy ]] " }, "--[[ ", " ]]", 0, 0, "line", true)
+  eq(info.lcs_pos, { 0, 2, 6 })
+  eq(info.rcs_pos, { 1, 5, 7 })
+
+  -- Relaxed: block motion, multi-line (same as line)
+  info = f({ "  --[[ xxx", "  yyy ]] " }, "--[[ ", " ]]", 0, 0, "block", true)
+  eq(info.lcs_pos, { 0, 2, 6 })
+  eq(info.rcs_pos, { 1, 5, 7 })
+
+  -- Relaxed: three-line block comment (line motion)
+  info = f({ "  --[[ xxx", "  yyy", "  zzz ]] " }, "--[[ ", " ]]", 0, 0, "line", true)
+  eq(info.lcs_pos, { 0, 2, 6 })
+  eq(info.rcs_pos, { 2, 5, 7 })
 end
 
 T["base"]["resolve"] = function()
@@ -1896,6 +1911,43 @@ T["block_relaxed_detect"]["works"] = function()
     "                         \t\t\t",
   })
   eq(get_cursor(), { 9, 7 })
+end
+
+T["block_relaxed_detect"]["bugfix for gbip"] = function()
+  child.bo.filetype = "lua"
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.b.celeste_comment_config = { block_relaxed_detect = true }
+  set_lines({
+    "function test()",
+    "",
+    '  map("n", ".", "xxx", {})',
+    '  map("n", ".", "yyy", {})',
+    "",
+    "end",
+  })
+  set_cursor(3, 3)
+  feed("gbip")
+  eq(get_cursor(), { 3, 8 })
+  eq(get_lines(), {
+    "function test()",
+    "",
+    '  --[[ map("n", ".", "xxx", {})',
+    '  map("n", ".", "yyy", {}) ]]',
+    "",
+    "end",
+  })
+
+  feed(".")
+  eq(get_cursor(), { 3, 3 })
+  eq(get_lines(), {
+    "function test()",
+    "",
+    '  map("n", ".", "xxx", {})',
+    '  map("n", ".", "yyy", {})',
+    "",
+    "end",
+  })
 end
 
 -- textobject tests ───────────────────────────────────────────────────────────
