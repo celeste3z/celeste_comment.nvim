@@ -94,7 +94,6 @@ require("celeste_comment").setup({})
   -- Restore cursor position after commenting. Saves the cursor position
   -- before the operator runs, then computes the new position based on
   -- the edits (adjusting row/col for insertions and deletions).
-  -- NOTE: Does not work during dot-repeat (`.`), this is current Neovim limitation.
   keep_cursor            = true,
 
   -- Insert space between comment marker and text. When `true`, a single
@@ -325,9 +324,6 @@ vim.g.celeste_comment_disable = true
 - **Header comment**
 
 ## Limitations
-
-- **`keep_cursor` during dot-repeat** — Does not work with `.`; this is
-  current Neovim limitation.
 
 - **Auto-detect textobject accuracy** — `textobject_auto()` first checks
   whether the current line contains a line comment. In languages like Lua

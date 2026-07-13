@@ -1559,6 +1559,11 @@ function M.setup(config)
     '<cmd>lua require("celeste_comment").textobject_auto()<cr>',
     { desc = "Auto line/block textobject" }
   )
+
+  map("n", ".", function()
+    H.track_cursor_state()
+    return "."
+  end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
 end
 
 -- test only

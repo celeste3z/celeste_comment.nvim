@@ -2636,6 +2636,55 @@ T["keep_cursor"]["gbiw restore cursor"] = function()
   eq(get_cursor(), { 1, 10 })
 end
 
+T["keep_cursor"]["dot-repeat works"] = function()
+  child.bo.tabstop = 2
+  child.b.celeste_comment_block_commentstring = "!@#%s#@!"
+  set_lines({
+    "  hello",
+    "  world",
+  })
+  set_cursor(1, 4)
+  feed("gcc")
+  eq(get_cursor(), { 1, 6 })
+  eq(get_lines(), {
+    "  # hello",
+    "  world",
+  })
+  feed(".")
+  eq(get_cursor(), { 1, 4 })
+  eq(get_lines(), {
+    "  hello",
+    "  world",
+  })
+  set_cursor(2, 5)
+  feed(".")
+  eq(get_cursor(), { 2, 7 })
+  eq(get_lines(), {
+    "  hello",
+    "  # world",
+  })
+  feed(".")
+  eq(get_cursor(), { 2, 5 })
+  eq(get_lines(), {
+    "  hello",
+    "  world",
+  })
+
+  set_cursor(1, 5)
+  feed("gbip")
+  eq(get_cursor(), { 1, 9 })
+  eq(get_lines(), {
+    "  !@# hello",
+    "  world #@!",
+  })
+  feed(".")
+  eq(get_cursor(), { 1, 5 })
+  eq(get_lines(), {
+    "  hello",
+    "  world",
+  })
+end
+
 -- PreCommitEdits tests ───────────────────────────────────────────────────────
 
 T["pre_commit_edits"] = new_set()
