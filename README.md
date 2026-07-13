@@ -1,37 +1,28 @@
-# celeste_comment.nvim
+<h1 align="center">celeste_comment.nvim</h1>
+<p align="center"><sup>VSCode-style commenting plugin with support for line/block comment, textobjects, real sticky cursor and more!</sup></p>
 
 <!--toc:start-->
 
-- [celeste_comment.nvim](#celestecommentnvim)
-  - [Features](#features)
-  - [Comparison](#comparison)
-  - [Requirements](#requirements)
-  - [Installation](#installation)
-    - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
-    - [lazy.nvim](#lazynvim)
-  - [Configuration](#configuration)
-    - [Default](#default)
-    - [Buffer-local configuration](#buffer-local-configuration)
-    - [Custom comment strings](#custom-comment-strings)
-  - [Hooks](#hooks)
-    - [`hooks.pre_commit_edits`](#hooksprecommitedits)
-    - [`hooks.cms_conf_resolver`](#hookscmsconfresolver)
-  - [Disabling](#disabling)
-  - [What it doesn't do](#what-it-doesnt-do)
-  - [Limitations](#limitations)
-  - [Future work](#future-work)
-  - [Acknowledgments](#acknowledgments)
-  <!--toc:end-->
-
-Toggle comments with line / block / textobject support.
-
-> **Experimental** — Breaking changes may occur.
-
-- **Nomal usage**
-  ![demo1](https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a)
-
-- **With [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)**
-  ![demo2](https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517)
+- [Features](#features)
+- [Showcase](#showcase)
+- [Comparison](#comparison)
+- [Requirements](#requirements)
+- [Installation](#installation)
+  - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
+  - [lazy.nvim](#lazynvim)
+- [Configuration](#configuration)
+  - [Default](#default)
+  - [Buffer-local configuration](#buffer-local-configuration)
+  - [Custom comment strings](#custom-comment-strings)
+- [Hooks](#hooks)
+  - [`hooks.pre_commit_edits`](#hooksprecommitedits)
+  - [`hooks.cms_conf_resolver`](#hookscmsconfresolver)
+- [Disabling](#disabling)
+- [What it doesn't do](#what-it-doesnt-do)
+- [Limitations](#limitations)
+- [Future work](#future-work)
+- [Acknowledgments](#acknowledgments)
+<!--toc:end-->
 
 ## Features
 
@@ -47,6 +38,17 @@ Toggle comments with line / block / textobject support.
 - Relaxed block detection
 - Precise edit tracking (via TextEdits)
 - Multi line comment string uncomment — detects and removes multiple line comment strings (e.g. Rust `//`, `///`, `//!`)
+
+## Showcase
+
+- Line/Block comment toggle
+  ![demo1](https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a)
+
+- With [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim)
+  ![demo2](https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517)
+
+- Cursor sticky + Dot-repeat
+  ![demo3](https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813)
 
 ## Comparison
 
@@ -70,6 +72,9 @@ Toggle comments with line / block / textobject support.
 - Neovim **>= 0.13**
 
 ## Installation
+
+> [!IMPORTANT]
+> Breaking changes may occur, pinning to a specific version or commit is recommended.
 
 ### vim.pack (Neovim 0.12+)
 
