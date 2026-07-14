@@ -189,31 +189,61 @@ local log_level_to_name = {
 }
 -- stylua: ignore end
 
-local __supported = vim.fn.has("nvim-0.13") == 1
+H.__has_nvim_012 = vim.fn.has("nvim-0.12") == 1
+H.__has_nvim_013 = vim.fn.has("nvim-0.13") == 1
 ---@param silent? boolean
 ---@return boolean
 function H.supported(silent)
-  if not __supported and not silent then
+  if not H.__has_nvim_012 and not silent then
     vim.api.nvim_echo(
-      { { "celeste_comment.nvim", "DiagnosticSignHint" }, { " requires nvim-0.13", "WarningMsg" } },
+      { { "celeste_comment.nvim", "DiagnosticSignHint" }, { " requires nvim-0.12", "WarningMsg" } },
       true,
       {}
     )
   end
-  return __supported
+  return H.__has_nvim_012
+end
+
+---TODO: delete this if we drop support for nvim-0.12
+---@diagnostic disable
+if H.__has_nvim_013 then
+  ---@param buf integer
+  ---@param pos [integer, integer] (lnum, col) tuple
+  ---@return vim.Pos
+  ---@overload fun(win: integer): vim.Pos
+  function H.make_cursor(buf, pos) return vim.pos.cursor(buf, pos) end
+else
+  ---@param buf integer
+  ---@param pos [integer, integer] (lnum, col) tuple
+  ---@return vim.Pos
+  ---@overload fun(win: integer): vim.Pos
+  function H.make_cursor(buf, pos)
+    if pos then
+      if buf == 0 then buf = vim.api.nvim_get_current_buf() end
+    else
+      local win = buf
+      if win == 0 then win = vim.api.nvim_get_current_win() end
+
+      buf = vim.api.nvim_win_get_buf(win)
+      pos = vim.api.nvim_win_get_cursor(win)
+    end
+
+    return vim.pos.cursor(pos, { buf = buf })
+  end
 end
 
 ---@param level vim.log.levels
 ---@return boolean
-function H.should_log(level) return level >= H.config.log_level end
+function H.should_log(level) return level >= H.config.log_level and H.__has_nvim_013 end
 
 ---@param level vim.log.levels
 ---@vararg any
 function H.log(level, ...)
-  if level < H.config.log_level then return end
+  if not H.should_log(level) then return end
   if not H._logger then H._logger = vim.log.new({ name = "celeste_comment", level = H.config.log_level }) end
   if H._logger then H._logger[log_level_to_name[level]](...) end
 end
+---@diagnostic enable
 
 ---@param cfg? Celeste.Comment.Opts
 ---@return Celeste.Comment.Opts
@@ -412,7 +442,7 @@ function H.builtin_cms_conf_resolver(ctx)
 
   local line = vim.fn.getline(ctx.cursor.row + 1)
   local start_col = line:match("^%s*()")
-  if start_col then ctx.cursor = vim.pos.cursor(ctx.cursor.buf, { ctx.cursor.row + 1, start_col - 1 }) end
+  if start_col then ctx.cursor = H.make_cursor(ctx.cursor.buf, { ctx.cursor.row + 1, start_col - 1 }) end
 
   local ltree = H.language_tree_resolve(ctx.cursor)
   local lang = ltree and ltree:lang() or vim.bo[ctx.cursor.buf].filetype
@@ -1352,7 +1382,7 @@ end
 function M.textobject_auto()
   if H.is_disabled() then return end
   local cfg = H.buf_config()
-  local cursor = vim.pos.cursor(0)
+  local cursor = H.make_cursor(0)
   H.select_range((H.compute_x_comment_range(cfg, cursor)))
 end
 
@@ -1362,7 +1392,7 @@ function H.uncomment_auto()
   H.track_cursor_state()
 
   local cfg = H.buf_config()
-  local cursor = vim.pos.cursor(0)
+  local cursor = H.make_cursor(0)
 
   local range, ctype, csi = H.compute_x_comment_range(cfg, cursor)
   if not range or not ctype or not csi then return end
@@ -1384,7 +1414,7 @@ function M.textobject_linewise()
 
   if cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then return M.textobject_auto() end
 
-  local cursor = vim.pos.cursor(0)
+  local cursor = H.make_cursor(0)
 
   local csi = H.resolve(cursor, M.CMT.kLine, cfg)
   if not csi then return end
@@ -1396,7 +1426,7 @@ function M.textobject_blockwise()
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
-  local cursor = vim.pos.cursor(0)
+  local cursor = H.make_cursor(0)
 
   local csi = H.resolve(cursor, M.CMT.kBlock, cfg)
   if not csi then return end
@@ -1409,7 +1439,7 @@ function M.insert_comment(kind)
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
-  local cursor = vim.pos.cursor(0)
+  local cursor = H.make_cursor(0)
   local buf = cursor.buf
 
   local csi = H.resolve(cursor, M.CMT.kLine, cfg)
@@ -1448,7 +1478,7 @@ function H.operator_impl(ctype, motion, opts)
   opts = opts or {}
   local cfg = H.buf_config(opts.cfg)
   -- actually, at the region start position, it may not be the same as `cursor_state`
-  local cursor = vim.pos.cursor(0)
+  local cursor = H.make_cursor(0)
 
   local range = H.get_selection_range(cursor.buf)
   if not range then return end

@@ -75,7 +75,7 @@
 
 ## Requirements
 
-- Neovim **>= 0.13**
+- Neovim **>= 0.12**
 
 ## Installation
 

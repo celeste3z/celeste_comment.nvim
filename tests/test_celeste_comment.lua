@@ -43,6 +43,9 @@ local selection = function(frow, fcol, trow, tcol)
   set_cursor(trow, tcol)
 end
 
+local make_pos = function(buf, row, col) return vim.pos(row, col, { buf = buf }) end
+if vim.fn.has("nvim-0.13") == 1 then make_pos = function(buf, row, col) return vim.pos(buf, row, col) end end
+
 local T = new_set({
   hooks = {
     pre_case = function()
@@ -597,7 +600,7 @@ T["base"]["resolve"] = function()
     local cfg = { insert_space = insert_space ~= false, hooks = {} }
     vim.bo[buf].filetype = ft
     vim.bo[buf].commentstring = cs
-    local csi = H.resolve(vim.pos(buf, 0, 0), ctype, cfg, { 1, 1, 1, 1 })
+    local csi = H.resolve(make_pos(buf, 0, 0), ctype, cfg, { 1, 1, 1, 1 })
     assert(csi)
     return { csi.tlcs, csi.trcs }
   end
@@ -1958,7 +1961,7 @@ T["textobject"]["block_match_pairs"] = function()
   local mp = H.textobject_block_match_pairs
   local c = function(lcs, rcs) return H.make_csi({ { lcs, rcs } }) end
   -- Single pair → 1 result
-  local r = mp({ "/* a */" }, 1, c("/* ", " */"), vim.pos(0, 0, 3))
+  local r = mp({ "/* a */" }, 1, c("/* ", " */"), make_pos(0, 0, 3))
   eq(#r, 1)
   eq(r[1][1], 1)
   eq(r[1][2], 0)
@@ -1966,16 +1969,16 @@ T["textobject"]["block_match_pairs"] = function()
   eq(r[1][4], 6)
 
   -- No pair
-  eq(#mp({ "hello" }, 1, c("/* ", " */"), vim.pos(0, 0, 1)), 0)
+  eq(#mp({ "hello" }, 1, c("/* ", " */"), make_pos(0, 0, 1)), 0)
 
   -- Cursor between two blocks → no pair
-  eq(#mp({ "/* a */ code /* b */" }, 1, c("/* ", " */"), vim.pos(0, 0, 10)), 0)
+  eq(#mp({ "/* a */ code /* b */" }, 1, c("/* ", " */"), make_pos(0, 0, 10)), 0)
 
   -- Orphan rcs
-  eq(#mp({ "hello */ world" }, 1, c("/* ", " */"), vim.pos(0, 0, 1)), 0)
+  eq(#mp({ "hello */ world" }, 1, c("/* ", " */"), make_pos(0, 0, 1)), 0)
 
   -- Three levels, cursor at innermost → 3 pairs, innermost first
-  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), vim.pos(0, 0, 11))
+  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 11))
   eq(#r, 3)
   eq(r[1][2], 10)
   eq(r[1][4], 16) -- innermost: /* c */
@@ -1985,13 +1988,13 @@ T["textobject"]["block_match_pairs"] = function()
   eq(r[3][4], 26) -- outermost: /* a /* b /* c */ d */ e */
 
   -- Three levels, cursor at outermost → 1 pair (outermost only)
-  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), vim.pos(0, 0, 0))
+  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 0))
   eq(#r, 1)
   eq(r[1][2], 0)
   eq(r[1][4], 26)
 
   -- Three levels, cursor in middle → 2 pairs (middle + outer)
-  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), vim.pos(0, 0, 7))
+  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 7))
   eq(#r, 2)
   eq(r[1][2], 5)
   eq(r[1][4], 21) -- middle
@@ -1999,7 +2002,7 @@ T["textobject"]["block_match_pairs"] = function()
   eq(r[2][4], 26) -- outermost
 
   -- Cross-line nested
-  r = mp({ "/* a", "/* b */", "c */" }, 1, c("/* ", " */"), vim.pos(0, 1, 3))
+  r = mp({ "/* a", "/* b */", "c */" }, 1, c("/* ", " */"), make_pos(0, 1, 3))
   eq(#r, 2)
   eq(r[1][1], 2)
   eq(r[1][2], 0)
@@ -2011,7 +2014,7 @@ T["textobject"]["block_match_pairs"] = function()
   eq(r[2][4], 3) -- outermost
 
   -- Lua --[[ ]] style
-  r = mp({ "--[[ a ", "  b ]] " }, 1, c("--[[ ", " ]]"), vim.pos(0, 1, 3))
+  r = mp({ "--[[ a ", "  b ]] " }, 1, c("--[[ ", " ]]"), make_pos(0, 1, 3))
   eq(#r, 1)
   eq(r[1][1], 1)
   eq(r[1][2], 0)
@@ -2334,7 +2337,7 @@ local ts_comment_at_cursor = function(pos)
   if pos then set_cursor(unpack(pos)) end
   return child.lua_func(function()
     local _H = require("celeste_comment")._H
-    local cursor = vim.pos.cursor(0)
+    local cursor = _H.make_cursor(0)
     return _H.textobject_comment_at_cursor(cursor)
   end)
 end
