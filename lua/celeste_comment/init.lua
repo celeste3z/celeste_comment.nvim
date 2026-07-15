@@ -1547,6 +1547,7 @@ function M.setup(config)
   end
   vim.validate("hooks", config.hooks, "table", true, "table")
   vim.validate("pre_commit_edits", config.hooks.pre_commit_edits, "callable", true, "callable")
+  vim.validate("cms_conf_resolver", config.hooks.cms_conf_resolver, "callable", true, "callable")
 
   H.config = config
 

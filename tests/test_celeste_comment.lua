@@ -2761,7 +2761,7 @@ T["pre_commit_edits"]["multi_line edit with pre_commit_edits restores cursor"] =
             range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] },
             text = { lines[#lines], (lines[#lines]:match("^(%s*)") or "") .. "*/" },
           }
-          e.has_multi = true
+          e.any_multi = true
           ctx.o_use_set_text = true
         end,
       },
@@ -2785,7 +2785,7 @@ T["pre_commit_edits"]["multi_line edit keep_cursor=false does not restore cursor
           local e = ctx.edits
           e[1] = { range = { e[1].range[1], 0, e[1].range[1], #lines[1] }, text = { "/*", lines[1] } }
           e[2] = { range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] }, text = { lines[#lines], "*/" } }
-          e.has_multi = true
+          e.any_multi = true
           ctx.o_use_set_text = true
         end,
       },
@@ -2809,7 +2809,7 @@ T["pre_commit_edits"]["pre_commit_edits above/below lines"] = function()
           local e = ctx.edits
           e[1] = { range = { e[1].range[1], 0, e[1].range[1], #l1 }, text = { (l1:match("^(%s*)") or "") .. "/*", l1 } }
           e[2] = { range = { e[2].range[1], 0, e[2].range[1], #ln }, text = { ln, (ln:match("^(%s*)") or "") .. "*/" } }
-          e.has_multi = true
+          e.any_multi = true
           ctx.o_use_set_text = true
         end,
       },
@@ -2832,7 +2832,7 @@ T["pre_commit_edits"]["pre_commit_edits edge: last line selection"] = function()
           local e = ctx.edits
           e[1] = { range = { e[1].range[1], 0, e[1].range[1], #lines[1] }, text = { "/*", lines[1] } }
           e[2] = { range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] }, text = { lines[#lines], "*/" } }
-          e.has_multi = true
+          e.any_multi = true
           ctx.o_use_set_text = true
         end,
       },
