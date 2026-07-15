@@ -100,11 +100,25 @@ require("celeste_comment").setup({})
 
 #### Default
 
-```lua
+````lua
 {
   -- Restore cursor position after commenting. Saves the cursor position
   -- before the operator runs, then computes the new position based on
   -- the edits (adjusting row/col for insertions and deletions).
+  --
+  -- NOTE: Due to current limitations in Neovim, we've set up a default key
+  -- mapping for `.` so that dot-repeat can also respect `keep_cursor`. You
+  -- can disable this by setting `mapping.cursor_sticky_dot` to an empty string.
+  -- Or, if you prefer, you can create your own `cursor_sticky_dot` mapping
+  -- using the code below:
+  --
+  -- ```lua
+  -- vim.keymap.set("n", ".", function()
+  --   require("celeste_comment").track_cursor()
+  --   return "."
+  -- end, { expr = true, desc = "Cursor sticky dot-repeat" })
+  -- ```
+  --
   keep_cursor            = true,
 
   -- Insert space between comment marker and text. When `true`, a single
@@ -170,12 +184,14 @@ require("celeste_comment").setup({})
     comment_line         = "gcc",
     -- Line comment visual selection (x)
     comment_visual       = "gc",
+
     -- Block comment by motion (n, x)
     block                = "gb",
     -- Block comment current line (n)
     block_line           = "gbc",
     -- Block comment visual selection (x)
     block_visual         = "gb",
+
     -- Linewise textobject (o)
     textobject_line      = "gc",
     -- Blockwise textobject (o)
@@ -184,14 +200,19 @@ require("celeste_comment").setup({})
     textobject_auto      = "",
     -- Auto uncomment (n)
     uncomment_auto       = "",
+
     -- Insert comment below (n)
     comment_below        = "",
     -- Insert comment above (n)
     comment_above        = "",
     -- Insert comment at end of line (n)
     comment_eol          = "",
+
     -- Invert comment per line (n, x)
     invert               = "",
+
+    -- Cursor sticky dot-repeat
+    cursor_sticky_dot    = ".",
   },
 
   hooks = {
@@ -201,7 +222,7 @@ require("celeste_comment").setup({})
     cms_conf_resolver    = nil,
   },
 }
-```
+````
 
 Set a mapping to `""` to disable it.
 

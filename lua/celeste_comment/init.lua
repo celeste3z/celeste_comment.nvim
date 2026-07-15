@@ -107,20 +107,21 @@ M.FBK2BLOCK = {
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
----@field comment?          string mode 'n', operator, default 'gc'
----@field comment_line?     string mode 'n', default 'gcc'
----@field comment_visual?   string mode 'x', default 'gc'
----@field block?            string mode 'n', operator, default 'gb'
----@field block_line?       string mode 'n', default 'gbc'
----@field block_visual?     string mode 'x', default 'gb'
----@field textobject_line?  string mode 'o', linewise textobject, like 'gc', default ''
----@field textobject_block? string mode 'o', blockwise textobject, like 'gb', default ''
----@field textobject_auto?  string mode 'o', auto detect textobject, default 'ga'
----@field comment_below?    string mode 'n', comment below, 'gco'
----@field comment_above?    string mode 'n', comment above, 'gcO'
----@field comment_eol?      string mode 'n', comment eol, 'gcA'
----@field uncomment_auto?   string mode 'n', auto detect and uncomment, 'gcu'
----@field invert?           string mode 'nx', invert comment per line, ''
+---@field comment?           string mode 'n', operator, default 'gc'
+---@field comment_line?      string mode 'n', default 'gcc'
+---@field comment_visual?    string mode 'x', default 'gc'
+---@field block?             string mode 'n', operator, default 'gb'
+---@field block_line?        string mode 'n', default 'gbc'
+---@field block_visual?      string mode 'x', default 'gb'
+---@field textobject_line?   string mode 'o', linewise textobject, like 'gc', default ''
+---@field textobject_block?  string mode 'o', blockwise textobject, like 'gb', default ''
+---@field textobject_auto?   string mode 'o', auto detect textobject, default 'ga'
+---@field comment_below?     string mode 'n', comment below, 'gco'
+---@field comment_above?     string mode 'n', comment above, 'gcO'
+---@field comment_eol?       string mode 'n', comment eol, 'gcA'
+---@field uncomment_auto?    string mode 'n', auto detect and uncomment, 'gcu'
+---@field invert?            string mode 'nx', invert comment per line, ''
+---@field cursor_sticky_dot? string mode 'n', default '.'
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor?                boolean default true
@@ -172,6 +173,8 @@ H.config = {
     comment_above           = "",
     comment_eol             = "",
     invert                  = "",
+
+    cursor_sticky_dot       = ".",
   },
 
   hooks = {
@@ -1471,6 +1474,9 @@ function M.insert_comment(kind)
   end
 end
 
+--- Track cursor position
+function M.track_cursor() H.track_cursor_state() end
+
 ---@param ctype  Celeste.Comment.CommentType
 ---@param motion Celeste.Comment.Motion
 ---@param opts?  {invert?: boolean, cfg?:Celeste.Comment.Opts}
@@ -1597,7 +1603,7 @@ function M.setup(config)
     { desc = "Auto line/block textobject" }
   )
 
-  map("n", ".", function()
+  map("n", m.cursor_sticky_dot, function()
     H.track_cursor_state()
     return "."
   end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
