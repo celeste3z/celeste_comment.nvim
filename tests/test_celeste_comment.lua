@@ -44,7 +44,7 @@ local selection = function(frow, fcol, trow, tcol)
 end
 
 local make_pos = function(buf, row, col) return vim.pos(row, col, { buf = buf }) end
-if vim.fn.has("nvim-0.13") == 1 then make_pos = function(buf, row, col) return vim.pos(buf, row, col) end end
+if vim.fn.has("nvim-0.12.2") == 1 then make_pos = function(buf, row, col) return vim.pos(buf, row, col) end end
 
 local T = new_set({
   hooks = {

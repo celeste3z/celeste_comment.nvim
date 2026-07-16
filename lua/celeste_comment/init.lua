@@ -209,29 +209,41 @@ end
 
 ---TODO: delete this if we drop support for nvim-0.12
 ---@diagnostic disable
-if H.__has_nvim_013 then
+do
   ---@param buf integer
-  ---@param pos [integer, integer] (lnum, col) tuple
-  ---@return vim.Pos
-  ---@overload fun(win: integer): vim.Pos
-  function H.make_cursor(buf, pos) return vim.pos.cursor(buf, pos) end
-else
-  ---@param buf integer
-  ---@param pos [integer, integer] (lnum, col) tuple
-  ---@return vim.Pos
-  ---@overload fun(win: integer): vim.Pos
-  function H.make_cursor(buf, pos)
+  ---@param pos? [integer, integer] (lnum, col) tuple
+  ---@return integer, [integer, integer]
+  local function normalize_cursor_args(buf, pos)
     if pos then
       if buf == 0 then buf = vim.api.nvim_get_current_buf() end
     else
       local win = buf
       if win == 0 then win = vim.api.nvim_get_current_win() end
-
       buf = vim.api.nvim_win_get_buf(win)
       pos = vim.api.nvim_win_get_cursor(win)
     end
 
-    return vim.pos.cursor(pos, { buf = buf })
+    return buf, pos
+  end
+
+  if vim.fn.has("nvim-0.12.2") == 1 then
+    ---@param buf integer
+    ---@param pos [integer, integer] (lnum, col) tuple
+    ---@return vim.Pos
+    ---@overload fun(win: integer): vim.Pos
+    function H.make_cursor(buf, pos)
+      buf, pos = normalize_cursor_args(buf, pos)
+      return vim.pos.cursor(buf, pos)
+    end
+  else
+    ---@param buf integer
+    ---@param pos [integer, integer] (lnum, col) tuple
+    ---@return vim.Pos
+    ---@overload fun(win: integer): vim.Pos
+    function H.make_cursor(buf, pos)
+      buf, pos = normalize_cursor_args(buf, pos)
+      return vim.pos.cursor(pos, { buf = buf })
+    end
   end
 end
 
