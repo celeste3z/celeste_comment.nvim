@@ -490,6 +490,46 @@ T["base"]["compute_cursor_state"] = function()
     { range = { 2, 0, 2, 0 }, text = { "# " } }, -- insert on cursor row (orow-1 == 2)
   })
   eq(cs, { 4, 4 })
+
+  -- sentinel insert 1 line before cursor → nrow +1
+  cs = { 2, 0 }
+  f(cs, { { range = { 0, -1, 0, -1 }, text = { "/*" } } })
+  eq(cs, { 3, 0 })
+
+  -- sentinel insert 1 line on cursor row → nrow +1
+  cs = { 1, 0 }
+  f(cs, { { range = { 0, -1, 0, -1 }, text = { "/*" } } })
+  eq(cs, { 2, 0 })
+
+  -- sentinel insert 1 line after cursor → nrow unchanged
+  cs = { 1, 0 }
+  f(cs, { { range = { 2, -1, 2, -1 }, text = { "/*" } } })
+  eq(cs, { 1, 0 })
+
+  -- sentinel insert 2 lines before cursor → nrow +2
+  cs = { 2, 0 }
+  f(cs, { { range = { 0, -1, 0, -1 }, text = { "a", "b" } } })
+  eq(cs, { 4, 0 })
+
+  -- sentinel delete 1 line before cursor → nrow -1
+  cs = { 3, 0 }
+  f(cs, { { range = { 0, -1, 1, -1 }, text = {} } })
+  eq(cs, { 2, 0 })
+
+  -- sentinel delete 1 line on cursor row → nrow -1
+  cs = { 1, 0 }
+  f(cs, { { range = { 0, -1, 1, -1 }, text = {} } })
+  eq(cs, { 1, 0 })
+
+  -- sentinel delete 1 line after cursor → nrow unchanged
+  cs = { 1, 0 }
+  f(cs, { { range = { 2, -1, 3, -1 }, text = {} } })
+  eq(cs, { 1, 0 })
+
+  -- sentinel delete 2 lines before cursor → nrow -2
+  cs = { 4, 0 }
+  f(cs, { { range = { 0, -1, 2, -1 }, text = {} } })
+  eq(cs, { 2, 0 })
 end
 
 T["base"]["block_comment_info"] = function()
@@ -657,6 +697,94 @@ T["edits"]["sort and commit"] = function()
   eq(lines[1], "Zab")
   eq(lines[2], "cdY")
   eq(lines[3], "eXf")
+
+  vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+T["edits"]["commit_edits"] = function()
+  local buf = vim.api.nvim_create_buf(false, true)
+
+  -- 1. any_multi + set_text: multi-element text, expand 1 line to 3
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 0, 0, 0, 5 }, text = { "/*", "hello", "*/" } },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "hello", "*/" })
+
+  -- 2. any_multi + set_text: multi-line range replaced with fewer lines (delete 2 lines)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "a", "b", "c", "d" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 1, 0, 3, 1 }, text = { "x" } },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "a", "x" })
+
+  -- 3. any_multi + set_text: append beyond buffer (max <= range[1])
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 2, 0, 2, 0 }, text = { "cc" } },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "aa", "bb", "cc" })
+
+  -- 4. sentinel: insert 1 line at start
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 0, -1, 0, -1 }, text = { "/*" } },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "aa", "bb" })
+
+  -- 5. sentinel: insert 1 line in middle
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 1, -1, 1, -1 }, text = { "/*" } },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "aa", "/*", "bb" })
+
+  -- 6. sentinel: insert 2 lines at start
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 0, -1, 0, -1 }, text = { "/*", "*/" } },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "*/", "aa" })
+
+  -- 7. sentinel: delete 1 line
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb", "cc" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 1, -1, 2, -1 }, text = {} },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "aa", "cc" })
+
+  -- 8. sentinel: delete 2 lines
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb", "cc" })
+  H.commit_edits(buf, nil, nil, {
+    { range = { 0, -1, 2, -1 }, text = {} },
+    any_multi = true,
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "cc" })
+
+  -- 9. sentinel + need_sort: insert both /* and */ around content
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
+  local edits = {
+    { range = { 2, -1, 2, -1 }, text = { "*/" } },
+    { range = { 0, -1, 0, -1 }, text = { "/*" } },
+  }
+  edits.need_sort = true
+  edits.any_multi = true
+  H.commit_edits(buf, nil, nil, edits, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "aa", "bb", "*/" })
+
+  -- 10. non-any_multi: apply_edits path
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
+  H.commit_edits(buf, { 0, 0, 0, 5 }, { "hello" }, {
+    { range = { 0, 0, 0, 0 }, text = { "# " } },
+  }, false)
+  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "# hello" })
 
   vim.api.nvim_buf_delete(buf, { force = true })
 end

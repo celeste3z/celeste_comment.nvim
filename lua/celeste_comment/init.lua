@@ -1035,7 +1035,9 @@ function H.commit_edits(buf, range, lines, edits, use_set_text)
     local max = vim.api.nvim_buf_line_count(buf)
     for i = #edits, 1, -1 do
       local e = edits[i]
-      if max <= e.range[1] then
+      if e.range[2] == -1 then
+        vim.api.nvim_buf_set_lines(buf, e.range[1], e.range[3], false, e.text)
+      elseif max <= e.range[1] then
         vim.api.nvim_buf_set_lines(buf, max, max, false, e.text)
       else
         vim.api.nvim_buf_set_text(buf, e.range[1], e.range[2], e.range[3], e.range[4], e.text)
@@ -1079,21 +1081,24 @@ function H.compute_cursor_state(cursor_state, edits)
   local ncol, nrow = ocol, orow
   for i = #edits, 1, -1 do
     local e = edits[i]
-    if e.range[1] == orow - 1 then
-      if #e.text > 1 then
-        nrow = nrow + #e.text - 1
-        if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
-      elseif e.range[2] == e.range[4] then
-        if ocol >= e.range[2] then ncol = ncol + #e.text[1] end
+    if e.range[1] <= orow - 1 then
+      if e.range[2] == -1 then
+        nrow = nrow + #e.text - (e.range[3] - e.range[1])
       else
-        if ocol >= e.range[4] then
+        nrow = nrow + #e.text - (e.range[3] - e.range[1] + 1)
+      end
+
+      if e.range[1] == orow - 1 and e.range[2] ~= -1 then
+        if #e.text > 1 then
+          if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
+        elseif e.range[2] == e.range[4] then
+          if ocol >= e.range[2] then ncol = ncol + #e.text[1] end
+        elseif ocol >= e.range[4] then
           ncol = ncol + #e.text[1] - (e.range[4] - e.range[2])
         elseif ocol > e.range[2] then
           ncol = e.range[2]
         end
       end
-    elseif e.range[1] < orow - 1 and #e.text > 1 then
-      nrow = nrow + #e.text - 1
     end
   end
   cursor_state[1], cursor_state[2] = math.max(1, nrow), math.max(0, ncol)
