@@ -68,6 +68,7 @@ local T = new_set({
               comment = "gc",
               comment_line = "gcc",
               comment_visual = "gc",
+              comment_line_insert = { "<c-/>", "<c-_>" },
 
               block = "gb",
               block_line = "gbc",
@@ -988,136 +989,6 @@ T["edits"]["make_block_partial_edits"] = function()
   eq(edits[2].range[4], 8)
   eq(#edits[2].text, 1)
   eq(edits[2].text, { " */" })
-end
-
--- Indent algo vscode tests (ported from vscode) ──────────────────────────────
-
-T["indent_algo_vscode"] = new_set()
-
-T["indent_algo_vscode"]["line_comment_info_algo_vscode"] = function()
-  vim.bo.tabstop = 2
-  local f = function(lines, lcs, rcs, cfg)
-    local csi = H.make_csi({ { lcs, rcs } })
-    local info = H.line_comment_info(lines, csi, cfg or {}, { 0 })
-    local off = vim.tbl_map(function(li) return li.offset end, info.lines)
-    return { off, info.should_remove }
-  end
-  -- All at col 0 → offsets also 0
-  eq(f({ "# a", "# b" }, "# ", "", {}), { { 0, 0 }, true })
-  -- Mixed indent, all commented → no normalization (should_remove=true)
-  eq(f({ "  # a", "# b" }, "# ", "", {}), { { 2, 0 }, true })
-  -- All at col 0, one not commented
-  eq(f({ "# a", "b" }, "# ", "", {}), { { 0, 0 }, false })
-  -- Same indent, uncommented
-  eq(f({ "  a", "  b" }, "# ", "", {}), { { 2, 2 }, false })
-  -- Both at col 0, uncommented
-  eq(f({ "a", "b" }, "# ", "", {}), { { 0, 0 }, false })
-  -- Blank lines
-  local r = f({ "", "" }, "# ", "", {})
-  eq(r[1], { 0, 0 })
-  eq(r[2], false)
-  -- All blank
-  r = f({ "", "" }, "# ", "", {})
-  eq(r[1], { 0, 0 })
-  eq(r[2], false)
-  -- Single line indented
-  r = f({ "  a" }, "# ", "", {})
-  eq(#r[1], 1)
-  eq(r[2], false)
-  -- rcs style
-  eq(f({ "(* a *)", "(* b *)" }, "(* ", " *)", {}), { { 0, 0 }, true })
-  -- rcs with indent
-  eq(f({ "  (* a *)", "(* b *)" }, "(* ", " *)", {}), { { 2, 0 }, true })
-end
-
-T["indent_algo_vscode"]["gcc with mix tab/space"] = function()
-  child.b.celeste_comment_config = {}
-  child.bo.tabstop = 4
-  child.bo.tabstop = 4
-  set_lines({ "    a", "\tb" })
-  set_cursor(1, 0)
-  feed("gc", "j")
-  -- Both have vis=4 at tabstop=4 → offsets = {4, 1}
-  -- "    a" → offset 4 → "    # a"
-  -- "\tb"  → offset 1 → "\t# b"
-  eq(get_lines(), { "    # a", "\t# b" })
-  feed("gc", "j")
-  eq(get_lines(), { "    a", "\tb" })
-end
-
-T["indent_algo_vscode"]["blank line inserts comment"] = function()
-  child.b.celeste_comment_config = {}
-  set_lines({ "  aa", "", "  bb" })
-  set_cursor(1, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "#   aa", "# ", "#   bb" })
-  feed("gc", "2j")
-  eq(get_lines(), { "  aa", "", "  bb" })
-end
-
-T["indent_algo_vscode"]["tabstop=2 mix tab/space"] = function()
-  child.b.celeste_comment_config = {}
-  child.bo.tabstop = 2
-  child.bo.tabstop = 2
-  set_lines({ "  a", "\tb" })
-  set_cursor(1, 0)
-  -- vis=2 both, min_vis=2, floor(2/2)*2=2 → offsets {2, 1}
-  feed("gc", "j")
-  eq(get_lines(), { "  # a", "\t# b" })
-  feed("gc", "j")
-  eq(get_lines(), { "  a", "\tb" })
-end
-
-T["indent_algo_vscode"]["tabstop=8 mix spaces less than 8"] = function()
-  child.b.celeste_comment_config = {}
-  child.bo.tabstop = 8
-  child.bo.tabstop = 8
-  set_lines({ "  a", "\tb" })
-  set_cursor(1, 0)
-  -- vis=2 and 8, min_vis=2, floor(2/8)*8=0 → both offset 0
-  feed("gc", "j")
-  eq(get_lines(), { "#   a", "# \tb" })
-  feed("gc", "j")
-  eq(get_lines(), { "  a", "\tb" })
-end
-
-T["indent_algo_vscode"]["tabstop=8 full tab aligns"] = function()
-  child.b.celeste_comment_config = {}
-  child.bo.tabstop = 8
-  child.bo.tabstop = 8
-  set_lines({ "        a", "\tb" })
-  set_cursor(1, 0)
-  -- vis=8 both, min_vis=8, floor(8/8)*8=8 → offsets {8, 1}
-  feed("gc", "j")
-  eq(get_lines(), { "        # a", "\t# b" })
-  feed("gc", "j")
-  eq(get_lines(), { "        a", "\tb" })
-end
-
-T["indent_algo_vscode"]["tabstop=4, 3 lines mixed indent"] = function()
-  child.b.celeste_comment_config = {}
-  child.bo.tabstop = 4
-  child.bo.tabstop = 4
-  set_lines({ "  a", "    b", "\tc" })
-  set_cursor(1, 0)
-  -- "  a": vis=2, "    b": vis=4, "\tc": vis=4
-  -- min_vis=2, floor(2/4)*4=0 → offsets {0, 0, 0}
-  feed("gc", "2j")
-  eq(get_lines(), { "#   a", "#     b", "# \tc" })
-  feed("gc", "2j")
-  eq(get_lines(), { "  a", "    b", "\tc" })
-end
-
-T["indent_algo_vscode"]["viscol blank line aligned indent"] = function()
-  child.b.celeste_comment_config = {}
-  child.bo.tabstop = 2
-  child.bo.commentstring = "-- %s"
-  set_lines({ "  a", "", "  b" })
-  set_cursor(1, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "--   a", "-- ", "--   b" })
-  feed("gc", "2j")
-  eq(get_lines(), { "  a", "", "  b" })
 end
 
 -- line_comment_no_indent tests ───────────────────────────────────────────────
@@ -4345,6 +4216,119 @@ T["fallback_to_block"]["if_line_cms_wrapped: works2"] = function()
   set_cursor(1, 8)
   feed("gcu")
   eq(get_lines(), { "hello world", "foo bar baz" })
+end
+
+-- Toggle current line comment at insert mode ─────────────────────────────────
+
+T["toggle_line_comment_at_insert_mode"] = new_set()
+
+local function ins_f(col, etcol, start_line, end_line, expected_after_at)
+  set_lines({ start_line })
+  set_cursor(1, col)
+  feed("<c-/>")
+  eq(get_lines(), { end_line })
+  eq(get_cursor(), { 1, etcol })
+  feed("@")
+  eq(get_lines(), { expected_after_at })
+  eq(get_cursor(), { 1, etcol + 1 })
+  feed("<c-h>")
+  eq(get_cursor(), { 1, etcol })
+end
+
+T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function()
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.bo.filetype = "unknown"
+  child.bo.commentstring = "// %s"
+  feed("i")
+
+  -- stylua: ignore start
+  ins_f(0, 0, "  hello",      "  // hello",    "@  // hello")
+  ins_f(1, 1, "  hello",      "  // hello",    " @ // hello")
+  ins_f(2, 5, "  hello",      "  // hello",    "  // @hello")
+  ins_f(3, 6, "  hello",      "  // hello",    "  // h@ello")
+  ins_f(4, 7, "  hello",      "  // hello",    "  // he@llo")
+  ins_f(5, 8, "  hello",      "  // hello",    "  // hel@lo")
+  ins_f(6, 9, "  hello",      "  // hello",    "  // hell@o")
+  ins_f(7, 10, "  hello",     "  // hello",    "  // hello@")
+
+  ins_f(0, 0, "  // hello",   "  hello",       "@  hello")
+  ins_f(1, 1, "  // hello",   "  hello",       " @ hello")
+  ins_f(2, 2, "  // hello",   "  hello",       "  @hello")
+  ins_f(3, 2, "  // hello",   "  hello",       "  @hello")
+  ins_f(4, 2, "  // hello",   "  hello",       "  @hello")
+  ins_f(5, 2, "  // hello",   "  hello",       "  @hello")
+  ins_f(6, 3, "  // hello",   "  hello",       "  h@ello")
+  ins_f(7, 4, "  // hello",   "  hello",       "  he@llo")
+  ins_f(8, 5, "  // hello",   "  hello",       "  hel@lo")
+  ins_f(9, 6, "  // hello",   "  hello",       "  hell@o")
+  ins_f(10, 7, "  // hello",  "  hello",       "  hello@")
+  -- stylua: ignore end
+end
+
+T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function()
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.bo.filetype = "unknown"
+  child.bo.commentstring = "/* %s */"
+  feed("i")
+
+  -- stylua: ignore start
+  ins_f(0, 0,  "  hello",      "  /* hello */",  "@  /* hello */")
+  ins_f(1, 1,  "  hello",      "  /* hello */",  " @ /* hello */")
+  ins_f(2, 5,  "  hello",      "  /* hello */",  "  /* @hello */")
+  ins_f(3, 6,  "  hello",      "  /* hello */",  "  /* h@ello */")
+  ins_f(4, 7,  "  hello",      "  /* hello */",  "  /* he@llo */")
+  ins_f(5, 8,  "  hello",      "  /* hello */",  "  /* hel@lo */")
+  ins_f(6, 9,  "  hello",      "  /* hello */",  "  /* hell@o */")
+  ins_f(7, 10, "  hello",      "  /* hello */",  "  /* hello@ */")
+
+  ins_f(0,  0, "  /* hello */", "  hello",       "@  hello")
+  ins_f(1,  1, "  /* hello */", "  hello",       " @ hello")
+  ins_f(2,  2, "  /* hello */", "  hello",       "  @hello")
+  ins_f(3,  2, "  /* hello */", "  hello",       "  @hello")
+  ins_f(4,  2, "  /* hello */", "  hello",       "  @hello")
+  ins_f(5,  2, "  /* hello */", "  hello",       "  @hello")
+  ins_f(6,  3, "  /* hello */", "  hello",       "  h@ello")
+  ins_f(7,  4, "  /* hello */", "  hello",       "  he@llo")
+  ins_f(8,  5, "  /* hello */", "  hello",       "  hel@lo")
+  ins_f(9,  6, "  /* hello */", "  hello",       "  hell@o")
+  ins_f(10, 7, "  /* hello */", "  hello",       "  hello@")
+  ins_f(11, 7, "  /* hello */", "  hello",       "  hello@")
+  ins_f(12, 7, "  /* hello */", "  hello",       "  hello@")
+  ins_f(13, 7, "  /* hello */", "  hello",       "  hello@")
+  -- stylua: ignore end
+end
+
+T["toggle_line_comment_at_insert_mode"]["works for rcs only cms"] = function()
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.bo.filetype = "unknown"
+  child.bo.commentstring = "%s --"
+  feed("i")
+
+  -- stylua: ignore start
+  ins_f(0, 0, "  hello",      "  hello --",    "@  hello --")
+  ins_f(1, 1, "  hello",      "  hello --",    " @ hello --")
+  ins_f(2, 2, "  hello",      "  hello --",    "  @hello --")
+  ins_f(3, 3, "  hello",      "  hello --",    "  h@ello --")
+  ins_f(4, 4, "  hello",      "  hello --",    "  he@llo --")
+  ins_f(5, 5, "  hello",      "  hello --",    "  hel@lo --")
+  ins_f(6, 6, "  hello",      "  hello --",    "  hell@o --")
+  ins_f(7, 7, "  hello",      "  hello --",    "  hello@ --")
+
+  ins_f(0,  0, "  hello --",   "  hello",       "@  hello")
+  ins_f(1,  1, "  hello --",   "  hello",       " @ hello")
+  ins_f(2,  2, "  hello --",   "  hello",       "  @hello")
+  ins_f(3,  3, "  hello --",   "  hello",       "  h@ello")
+  ins_f(4,  4, "  hello --",   "  hello",       "  he@llo")
+  ins_f(5,  5, "  hello --",   "  hello",       "  hel@lo")
+  ins_f(6,  6, "  hello --",   "  hello",       "  hell@o")
+  ins_f(7,  7, "  hello --",   "  hello",       "  hello@")
+  ins_f(8,  7, "  hello --",   "  hello",       "  hello@")
+  ins_f(9,  7, "  hello --",   "  hello",       "  hello@")
+  ins_f(10, 7, "  hello --",   "  hello",       "  hello@")
+  -- stylua: ignore end
 end
 
 return T

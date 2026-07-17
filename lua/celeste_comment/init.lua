@@ -107,21 +107,22 @@ M.FBK2BLOCK = {
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
----@field comment?           string mode 'n', operator, default 'gc'
----@field comment_line?      string mode 'n', default 'gcc'
----@field comment_visual?    string mode 'x', default 'gc'
----@field block?             string mode 'n', operator, default 'gb'
----@field block_line?        string mode 'n', default 'gbc'
----@field block_visual?      string mode 'x', default 'gb'
----@field textobject_line?   string mode 'o', linewise textobject, like 'gc', default ''
----@field textobject_block?  string mode 'o', blockwise textobject, like 'gb', default ''
----@field textobject_auto?   string mode 'o', auto detect textobject, default 'ga'
----@field comment_below?     string mode 'n', comment below, 'gco'
----@field comment_above?     string mode 'n', comment above, 'gcO'
----@field comment_eol?       string mode 'n', comment eol, 'gcA'
----@field uncomment_auto?    string mode 'n', auto detect and uncomment, 'gcu'
----@field invert?            string mode 'nx', invert comment per line, ''
----@field cursor_sticky_dot? string mode 'n', default '.'
+---@field comment?            string|string[] mode 'n', operator, default 'gc'
+---@field comment_line?       string|string[] mode 'n', default 'gcc'
+---@field comment_visual?     string|string[] mode 'x', default 'gc'
+---@field comment_line_insert string|string[] mode 'i', toggle comment at current line in insert mode, '<C-/>'
+---@field block?              string|string[] mode 'n', operator, default 'gb'
+---@field block_line?         string|string[] mode 'n', default 'gbc'
+---@field block_visual?       string|string[] mode 'x', default 'gb'
+---@field textobject_line?    string|string[] mode 'o', linewise textobject, like 'gc', default ''
+---@field textobject_block?   string|string[] mode 'o', blockwise textobject, like 'gb', default ''
+---@field textobject_auto?    string|string[] mode 'o', auto detect textobject, default 'ga'
+---@field comment_below?      string|string[] mode 'n', comment below, 'gco'
+---@field comment_above?      string|string[] mode 'n', comment above, 'gcO'
+---@field comment_eol?        string|string[] mode 'n', comment eol, 'gcA'
+---@field uncomment_auto?     string|string[] mode 'n', auto detect and uncomment, 'gcu'
+---@field invert?             string|string[] mode 'nx', invert comment per line, ''
+---@field cursor_sticky_dot?  string|string[] mode 'n', default '.'
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor?                boolean default true
@@ -159,6 +160,7 @@ H.config = {
     comment                 = "gc",
     comment_line            = "gcc",
     comment_visual          = "gc",
+    comment_line_insert     = "",
 
     block                   = "gb",
     block_line              = "gbc",
@@ -1073,11 +1075,15 @@ end
 
 ---@param cursor_state? Celeste.Comment.Range2
 ---@param edits Celeste.Comment.TextEdits
-function H.compute_cursor_state(cursor_state, edits)
+---@param lines? string[]
+---@param range? Celeste.Comment.Range4
+function H.compute_cursor_state(cursor_state, edits, lines, range)
   if not cursor_state then return end
 
   local orow = cursor_state[1] -- 1-indexed
   local ocol = cursor_state[2]
+  local eol_pos = lines and range and lines[orow - range[1]] and #lines[orow - range[1]]
+
   local ncol, nrow = ocol, orow
   for i = #edits, 1, -1 do
     local e = edits[i]
@@ -1092,7 +1098,11 @@ function H.compute_cursor_state(cursor_state, edits)
         if #e.text > 1 then
           if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
         elseif e.range[2] == e.range[4] then
-          if ocol >= e.range[2] then ncol = ncol + #e.text[1] end
+          if eol_pos and eol_pos > 0 and ocol >= eol_pos and e.range[2] == eol_pos then
+            -- insert mode EOL, no shift for RHS insert at line end
+          elseif ocol >= e.range[2] then
+            ncol = ncol + #e.text[1]
+          end
         elseif ocol >= e.range[4] then
           ncol = ncol + #e.text[1] - (e.range[4] - e.range[2])
         elseif ocol > e.range[2] then
@@ -1135,9 +1145,9 @@ function H.togglex(cfg, ctype, lines, csi, range, motion, cursor, opts)
   }
   if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
-  H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
+  H.compute_cursor_state(cfg.keep_cursor and H.cursor_state or nil, ctx.edits, lines, range)
 
-  H.compute_cursor_state(cfg.keep_cursor and H.cursor_state or nil, ctx.edits)
+  H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
 
   H.restore_cursor_state(cfg)
 end
@@ -1491,20 +1501,18 @@ function M.insert_comment(kind)
   end
 end
 
---- Track cursor position
-function M.track_cursor() H.track_cursor_state() end
-
----@param ctype  Celeste.Comment.CommentType
+---@param cursor vim.Pos
+---@param range Celeste.Comment.Range4
+---@param ctype Celeste.Comment.CommentType
 ---@param motion Celeste.Comment.Motion
----@param opts?  {invert?: boolean, cfg?:Celeste.Comment.Opts}
-function H.operator_impl(ctype, motion, opts)
+---@param opts {invert?: boolean, track_cursor?:boolean, cfg?: Celeste.Comment.Opts}
+function H.toggle_range(cursor, range, ctype, motion, opts)
+  if H.is_disabled() then return end
   opts = opts or {}
-  local cfg = H.buf_config(opts.cfg)
-  -- actually, at the region start position, it may not be the same as `cursor_state`
-  local cursor = H.make_cursor(0)
 
-  local range = H.get_selection_range(cursor.buf)
-  if not range then return end
+  if opts.track_cursor then H.track_cursor_state() end
+
+  local cfg = H.buf_config(opts.cfg)
 
   local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
@@ -1512,9 +1520,11 @@ function H.operator_impl(ctype, motion, opts)
   local csi, resolved_ctype = H.resolve(cursor, ctype, cfg, range)
   if not csi or not resolved_ctype then return end
 
-  -- TODO: should we always expand selection to line boundaries if fallback to block?
   H.togglex(cfg, resolved_ctype, lines, csi, range, motion, cursor, opts)
 end
+
+--- Track cursor position
+function M.track_cursor() H.track_cursor_state() end
 
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? {suffix?: string, invert?: boolean, cfg?: Celeste.Comment.Opts}
@@ -1525,7 +1535,15 @@ function M.make_operator(ctype, opts)
   local o = { invert = opts.invert, cfg = opts.cfg }
 
   ---@param motion Celeste.Comment.Motion
-  local f = function(motion) H.operator_impl(ctype, motion, o) end
+  local f = function(motion)
+    -- actually, at the region start position, it may not be the same as `cursor_state`
+    local cursor = H.make_cursor(0)
+    local range = H.get_selection_range(cursor.buf)
+    if not range then return end
+
+    -- TODO: should we always expand selection to line boundaries if fallback to block?
+    H.toggle_range(cursor, range, ctype, motion, o)
+  end
 
   return function()
     if H.is_disabled() then return "" end
@@ -1560,7 +1578,7 @@ function M.setup(config)
   vim.validate("cms_confs", config.cms_confs, "table", true, "table")
   vim.validate("log_level", config.log_level, "number", true, "vim.log.levels")
   for k, v in pairs(config.mappings) do
-    vim.validate("mappings." .. k, v, "string", true, "string")
+    vim.validate("mappings." .. k, v, { "string", "table" }, true, "string or string[]")
   end
   vim.validate("hooks", config.hooks, "table", true, "table")
   vim.validate("pre_commit_edits", config.hooks.pre_commit_edits, "callable", true, "callable")
@@ -1571,11 +1589,13 @@ function M.setup(config)
   local m = H.config.mappings --[[@as Celeste.Comment.Opts.Mapping]]
 
   ---@param mode string|string[]
-  ---@param lhs string
+  ---@param lhs string|string[]
   ---@param rhs string|function
   ---@param opts vim.keymap.set.Opts
   local function map(mode, lhs, rhs, opts)
-    if lhs == nil or lhs == "" then return end
+    local t = type(lhs)
+    if t ~= "string" and t ~= "table" then return end
+    if #t == 0 then return end
     vim.keymap.set(mode, lhs, rhs, opts or {})
   end
 
@@ -1625,6 +1645,12 @@ function M.setup(config)
     H.track_cursor_state()
     return "."
   end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
+
+  map("i", m.comment_line_insert, function()
+    local cursor = H.make_cursor(0)
+    local range = { cursor.row, 0, cursor.row, 0 }
+    H.toggle_range(cursor, range, M.CMT.kLine, "line", { track_cursor = true })
+  end, { desc = "Toggle line comment at insert mode" })
 end
 
 -- test only
