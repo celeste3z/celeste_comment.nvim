@@ -147,7 +147,10 @@ M.FBK2BLOCK = {
 ---@field hooks?                      Celeste.Comment.Hooks
 ---@field log_level?                  vim.log.levels default `vim.log.levels.OFF`
 
----@type Celeste.Comment.Range2?
+---@class Celeste.Comment.CursorStateTrack
+---@field cursor vim.Pos
+
+---@type Celeste.Comment.CursorStateTrack?
 H.cursor_state = nil
 
 -- stylua: ignore start
@@ -245,6 +248,21 @@ do
       buf, pos = normalize_cursor_args(buf, pos)
       return vim.pos.cursor(buf, pos)
     end
+
+    ---@param buf integer
+    ---@param row integer 0-indexed
+    ---@param col integer 0-indexed
+    function H.make_pos(buf, row, col) return vim.pos(buf, row, col) end
+
+    if H.__has_nvim_013 then
+      ---@param pos vim.Pos
+      ---@return [integer, integer]
+      function H.pos_to_cursor(pos) return pos:to_cursor() end
+    else
+      ---@param pos vim.Pos
+      ---@return [integer, integer]
+      function H.pos_to_cursor(pos) return { pos:to_cursor() } end
+    end
   else
     ---@param buf integer
     ---@param pos [integer, integer] (lnum, col) tuple
@@ -254,6 +272,15 @@ do
       buf, pos = normalize_cursor_args(buf, pos)
       return vim.pos.cursor(pos, { buf = buf })
     end
+
+    ---@param buf integer
+    ---@param row integer 0-indexed
+    ---@param col integer 0-indexed
+    function H.make_pos(buf, row, col) return vim.pos(row, col, { buf = buf }) end
+
+    ---@param pos vim.Pos
+    ---@return [integer, integer]
+    function H.pos_to_cursor(pos) return { pos:to_cursor() } end
   end
 end
 
@@ -1094,40 +1121,40 @@ function H.get_selection_range(buf)
   return { sr, sc, er, ec }
 end
 
-function H.track_cursor_state() H.cursor_state = vim.api.nvim_win_get_cursor(0) end
+function H.track_cursor_state() H.cursor_state = { cursor = H.make_cursor(0) } end
 
 ---@param cfg Celeste.Comment.Opts
 function H.restore_cursor_state(cfg)
-  if cfg.keep_cursor and H.cursor_state then vim.api.nvim_win_set_cursor(0, H.cursor_state) end
+  if cfg.keep_cursor and H.cursor_state then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(H.cursor_state.cursor)) end
   H.cursor_state = nil
 end
 
----@param cursor_state? Celeste.Comment.Range2
+---@param state? Celeste.Comment.CursorStateTrack
 ---@param edits Celeste.Comment.TextEdits
----@param lines? string[]
----@param range? Celeste.Comment.Range4
-function H.compute_cursor_state(cursor_state, edits, lines, range)
-  if not cursor_state then return end
+---@param lines string[]
+---@param range Celeste.Comment.Range4
+---@param csi  Celeste.Comment.CommentStringInfo
+function H.compute_cursor_state(state, edits, lines, range, csi)
+  if not state then return end
 
-  local orow = cursor_state[1] -- 1-indexed
-  local ocol = cursor_state[2]
-  local eol_pos = lines and range and lines[orow - range[1]] and #lines[orow - range[1]]
-
+  local orow, ocol = state.cursor.row, state.cursor.col
   local ncol, nrow = ocol, orow
+  local eol_pos = #lines[orow - range[1] + 1]
+
   for i = #edits, 1, -1 do
     local e = edits[i]
-    if e.range[1] <= orow - 1 then
+    if e.range[1] <= orow then
       if e.range[2] == -1 then
         nrow = nrow + #e.text - (e.range[3] - e.range[1])
       else
         nrow = nrow + #e.text - (e.range[3] - e.range[1] + 1)
       end
 
-      if e.range[1] == orow - 1 and e.range[2] ~= -1 then
+      if e.range[1] == orow and e.range[2] ~= -1 then
         if #e.text > 1 then
           if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
         elseif e.range[2] == e.range[4] then
-          if eol_pos and eol_pos > 0 and ocol >= eol_pos and e.range[2] == eol_pos then
+          if csi.orcs ~= "" and e.text[1] == csi.orcs and ocol >= eol_pos and e.range[2] == eol_pos then
             -- insert mode EOL, no shift for RHS insert at line end
           elseif ocol >= e.range[2] then
             ncol = ncol + #e.text[1]
@@ -1140,7 +1167,8 @@ function H.compute_cursor_state(cursor_state, edits, lines, range)
       end
     end
   end
-  cursor_state[1], cursor_state[2] = math.max(1, nrow), math.max(0, ncol)
+
+  state.cursor = H.make_pos(state.cursor.buf, math.max(0, nrow), math.max(0, ncol))
 end
 
 ---@param cfg Celeste.Comment.Opts
@@ -1174,7 +1202,7 @@ function H.togglex(cfg, ctype, lines, csi, range, motion, cursor, opts)
   }
   if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
-  H.compute_cursor_state(cfg.keep_cursor and H.cursor_state or nil, ctx.edits, lines, range)
+  H.compute_cursor_state(cfg.keep_cursor and H.cursor_state or nil, ctx.edits, lines, range, ctx.csi)
 
   H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
 
@@ -1623,9 +1651,13 @@ function M.setup(config)
   ---@param opts vim.keymap.set.Opts
   local function map(mode, lhs, rhs, opts)
     local t = type(lhs)
-    if t ~= "string" and t ~= "table" then return end
-    if #t == 0 then return end
-    vim.keymap.set(mode, lhs, rhs, opts or {})
+    if t == "table" then
+      for _, slhs in ipairs(lhs) do
+        map(mode, slhs, rhs, opts)
+      end
+      return
+    end
+    if t == "string" and lhs ~= "" then vim.keymap.set(mode, lhs, rhs, opts or {}) end
   end
 
   -- stylua: ignore start

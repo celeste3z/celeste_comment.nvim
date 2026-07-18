@@ -385,7 +385,13 @@ T["base"]["match_line_comment"] = function()
 end
 
 T["base"]["compute_cursor_state"] = function()
-  local f = H.compute_cursor_state
+  local lines_d = { "x", "x", "x", "x", "x" }
+  local range_d = { 0 }
+  local csi_d = { orcs = "" }
+  local function cr(row, col) return { cursor = make_pos(0, row, col) } end
+  local f = function(cs, edits, lines, range, csi)
+    H.compute_cursor_state(cs, edits, lines or lines_d, range or range_d, csi or csi_d)
+  end
   local cs
 
   -- nil cursor_state
@@ -393,144 +399,172 @@ T["base"]["compute_cursor_state"] = function()
   eq(cs, nil)
 
   -- empty edits
-  cs = { 1, 3 }
+  cs = cr(0, 3)
   f(cs, {})
-  eq(cs, { 1, 3 })
+  eq(cs, cr(0, 3))
 
   -- insertion on same row, cursor after insert point
-  cs = { 1, 3 }
+  cs = cr(0, 3)
   f(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
-  eq(cs, { 1, 5 })
+  eq(cs, cr(0, 5))
 
   -- insertion on same row, cursor at insert point
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
-  eq(cs, { 1, 2 })
+  eq(cs, cr(0, 2))
 
   -- insertion on same row, cursor before insert point
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 0, 3, 0, 3 }, text = { "//" } } })
-  eq(cs, { 1, 0 })
+  eq(cs, cr(0, 0))
 
   -- insertion on different row
-  cs = { 2, 2 }
+  cs = cr(1, 2)
   f(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
-  eq(cs, { 2, 2 })
+  eq(cs, cr(1, 2))
 
   -- deletion, cursor after deleted range
-  cs = { 1, 5 }
+  cs = cr(0, 5)
   f(cs, { { range = { 0, 0, 0, 3 }, text = { "" } } })
-  eq(cs, { 1, 2 })
+  eq(cs, cr(0, 2))
 
   -- deletion, cursor within deleted range → clamped to start
-  cs = { 1, 2 }
+  cs = cr(0, 2)
   f(cs, { { range = { 0, 0, 0, 3 }, text = { "" } } })
-  eq(cs, { 1, 0 })
+  eq(cs, cr(0, 0))
 
   -- deletion, cursor before deleted range
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 0, 3, 0, 5 }, text = { "" } } })
-  eq(cs, { 1, 0 })
+  eq(cs, cr(0, 0))
 
   -- multi-line replacement on same row, cursor after end
-  cs = { 1, 6 }
+  cs = cr(0, 6)
   f(cs, { { range = { 0, 3, 0, 5 }, text = { "longer", "b", "c" } } })
-  eq(cs, { 3, 10 })
+  eq(cs, cr(2, 10))
 
   -- multi-line replacement on same row, cursor inside replaced range
-  cs = { 1, 4 }
+  cs = cr(0, 4)
   f(cs, { { range = { 0, 3, 0, 5 }, text = { "/*", "*/" } } })
-  eq(cs, { 2, 4 })
+  eq(cs, cr(1, 4))
 
   -- multi-line replacement before cursor row
-  cs = { 3, 2 }
+  cs = cr(2, 2)
   f(cs, { { range = { 0, 0, 0, 0 }, text = { "a", "b" } } })
-  eq(cs, { 4, 2 })
+  eq(cs, cr(3, 2))
 
   -- multi-line replacement after cursor row
-  cs = { 1, 2 }
+  cs = cr(0, 2)
   f(cs, { { range = { 3, 0, 3, 0 }, text = { "a", "b" } } })
-  eq(cs, { 1, 2 })
+  eq(cs, cr(0, 2))
 
   -- multiple edits: insert + delete on same row
-  cs = { 1, 5 }
+  cs = cr(0, 5)
   f(cs, {
-    { range = { 0, 3, 0, 3 }, text = { "//" } }, -- insert at col 3
-    { range = { 0, 0, 0, 2 }, text = { "" } }, -- delete cols 0-2
+    { range = { 0, 3, 0, 3 }, text = { "//" } },
+    { range = { 0, 0, 0, 2 }, text = { "" } },
   })
-  eq(cs, { 1, 5 })
+  eq(cs, cr(0, 5))
 
   -- multiple edits: delete + insert on same row (reversed order)
-  cs = { 1, 5 }
+  cs = cr(0, 5)
   f(cs, {
-    { range = { 0, 0, 0, 2 }, text = { "" } }, -- delete cols 0-2 (processed first)
-    { range = { 0, 3, 0, 3 }, text = { "//" } }, -- insert at col 3 (processed second)
+    { range = { 0, 0, 0, 2 }, text = { "" } },
+    { range = { 0, 3, 0, 3 }, text = { "//" } },
   })
-  eq(cs, { 1, 5 })
+  eq(cs, cr(0, 5))
 
   -- multiple edits: two inserts expanding cursor right
-  cs = { 1, 3 }
+  cs = cr(0, 3)
   f(cs, {
-    { range = { 0, 0, 0, 0 }, text = { "# " } }, -- insert 2 chars at col 0
-    { range = { 0, 5, 0, 5 }, text = { " //" } }, -- insert 3 chars at col 5
+    { range = { 0, 0, 0, 0 }, text = { "# " } },
+    { range = { 0, 5, 0, 5 }, text = { " //" } },
   })
-  eq(cs, { 1, 5 })
+  eq(cs, cr(0, 5))
 
   -- multiple edits: two multi-line inserts before cursor, stacking rows
-  cs = { 5, 0 }
+  cs = cr(4, 0)
   f(cs, {
     { range = { 0, 0, 0, 0 }, text = { "a", "b" } },
     { range = { 1, 0, 1, 0 }, text = { "c", "d" } },
   })
-  eq(cs, { 7, 0 })
+  eq(cs, cr(6, 0))
 
   -- multiple edits: insert on same row + multi-line before row
-  cs = { 3, 2 }
+  cs = cr(2, 2)
   f(cs, {
-    { range = { 1, 0, 1, 0 }, text = { "x", "y" } }, -- multi-line before cursor
-    { range = { 2, 0, 2, 0 }, text = { "# " } }, -- insert on cursor row (orow-1 == 2)
+    { range = { 1, 0, 1, 0 }, text = { "x", "y" } },
+    { range = { 2, 0, 2, 0 }, text = { "# " } },
   })
-  eq(cs, { 4, 4 })
+  eq(cs, cr(3, 4))
 
   -- sentinel insert 1 line before cursor → nrow +1
-  cs = { 2, 0 }
+  cs = cr(1, 0)
   f(cs, { { range = { 0, -1, 0, -1 }, text = { "/*" } } })
-  eq(cs, { 3, 0 })
+  eq(cs, cr(2, 0))
 
   -- sentinel insert 1 line on cursor row → nrow +1
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 0, -1, 0, -1 }, text = { "/*" } } })
-  eq(cs, { 2, 0 })
+  eq(cs, cr(1, 0))
 
   -- sentinel insert 1 line after cursor → nrow unchanged
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 2, -1, 2, -1 }, text = { "/*" } } })
-  eq(cs, { 1, 0 })
+  eq(cs, cr(0, 0))
 
   -- sentinel insert 2 lines before cursor → nrow +2
-  cs = { 2, 0 }
+  cs = cr(1, 0)
   f(cs, { { range = { 0, -1, 0, -1 }, text = { "a", "b" } } })
-  eq(cs, { 4, 0 })
+  eq(cs, cr(3, 0))
 
   -- sentinel delete 1 line before cursor → nrow -1
-  cs = { 3, 0 }
+  cs = cr(2, 0)
   f(cs, { { range = { 0, -1, 1, -1 }, text = {} } })
-  eq(cs, { 2, 0 })
+  eq(cs, cr(1, 0))
 
   -- sentinel delete 1 line on cursor row → nrow -1
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 0, -1, 1, -1 }, text = {} } })
-  eq(cs, { 1, 0 })
+  eq(cs, cr(0, 0))
 
   -- sentinel delete 1 line after cursor → nrow unchanged
-  cs = { 1, 0 }
+  cs = cr(0, 0)
   f(cs, { { range = { 2, -1, 3, -1 }, text = {} } })
-  eq(cs, { 1, 0 })
+  eq(cs, cr(0, 0))
 
   -- sentinel delete 2 lines before cursor → nrow -2
-  cs = { 4, 0 }
+  cs = cr(3, 0)
   f(cs, { { range = { 0, -1, 2, -1 }, text = {} } })
-  eq(cs, { 2, 0 })
+  eq(cs, cr(1, 0))
+
+  -- EOL + RHS insert: skip shift
+  cs = cr(0, 7)
+  f(cs, { { range = { 0, 7, 0, 7 }, text = { " */" } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" })
+  eq(cs, cr(0, 7))
+
+  -- EOL + LHS insert: normal shift
+  cs = cr(0, 7)
+  f(cs, { { range = { 0, 7, 0, 7 }, text = { "/* " } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" })
+  eq(cs, cr(0, 10))
+
+  -- EOL + RHS insert with orcs="" (LHS-only): normal shift
+  cs = cr(0, 7)
+  f(cs, { { range = { 0, 7, 0, 7 }, text = { "// " } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = "" })
+  eq(cs, cr(0, 10))
+
+  -- non-EOL + RHS insert: no shift (cursor before insert point)
+  cs = cr(0, 3)
+  f(cs, { { range = { 0, 7, 0, 7 }, text = { " */" } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" })
+  eq(cs, cr(0, 3))
+
+  -- EOL + LHS+RHS: LHS shifts, RHS skips
+  cs = cr(0, 7)
+  f(cs, {
+    { range = { 0, 2, 0, 2 }, text = { "/* " } },
+    { range = { 0, 7, 0, 7 }, text = { " */" } },
+  }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" })
+  eq(cs, cr(0, 10))
 end
 
 T["base"]["block_comment_info"] = function()
@@ -1209,6 +1243,14 @@ T["ignore_empty_lines"]["mixed: works with empty lines"] = function()
   eq(get_lines(), { "  # ", "    # " })
   feed("gck")
   eq(get_lines(), { "  ", "    " })
+
+  -- (3 / 2) * 2 = 2
+  set_cursor(1, 0)
+  set_lines({ "   " })
+  feed("gcc")
+  eq(get_lines(), { "  #  " })
+  feed(".")
+  eq(get_lines(), { "   " })
 end
 
 T["ignore_empty_lines"]["mixed: blank line not participate in indent calc but can be commented"] = function()
@@ -4353,6 +4395,30 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function()
   ins_f(8,  5, "  // hello",   "  hello",       "  hel@lo")
   ins_f(9,  6, "  // hello",   "  hello",       "  hell@o")
   ins_f(10, 7, "  // hello",   "  hello",       "  hello@")
+
+  -- blank lines
+  ins_f(0, 3, "",   "// ",   "// @")
+  ins_f(0, 0, "  ", "  // ", "@  // ")
+  ins_f(1, 1, "  ", "  // ", " @ // ")
+  ins_f(2, 5, "  ", "  // ", "  // @")
+
+  ins_f(0, 0, "// ",   "",   "@")
+  ins_f(1, 0, "// ",   "",   "@")
+  ins_f(2, 0, "// ",   "",   "@")
+  ins_f(0, 0, "  // ", "  ", "@  ")
+  ins_f(1, 1, "  // ", "  ", " @ ")
+  ins_f(2, 2, "  // ", "  ", "  @")
+  ins_f(3, 2, "  // ", "  ", "  @")
+  ins_f(4, 2, "  // ", "  ", "  @")
+  ins_f(5, 2, "  // ", "  ", "  @")
+
+  ins_f(0, 0, "  //  ", "   ", "@   ")
+  ins_f(1, 1, "  //  ", "   ", " @  ")
+  ins_f(2, 2, "  //  ", "   ", "  @ ")
+  ins_f(3, 2, "  //  ", "   ", "  @ ")
+  ins_f(4, 2, "  //  ", "   ", "  @ ")
+  ins_f(5, 2, "  //  ", "   ", "  @ ")
+  ins_f(6, 3, "  //  ", "   ", "   @")
   -- stylua: ignore end
 end
 
@@ -4387,6 +4453,42 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function()
   ins_f(11, 7, "  /* hello */", "  hello",       "  hello@")
   ins_f(12, 7, "  /* hello */", "  hello",       "  hello@")
   ins_f(13, 7, "  /* hello */", "  hello",       "  hello@")
+
+  -- blank lines
+  ins_f(0, 3, "",              "/*  */",        "/* @ */")
+  ins_f(0, 0, "  ", "  /*  */", "@  /*  */")
+  ins_f(1, 1, "  ", "  /*  */", " @ /*  */")
+  ins_f(2, 5, "  ", "  /*  */", "  /* @ */")
+
+  ins_f(0, 0, "/*  */", "", "@")
+  ins_f(1, 0, "/*  */", "", "@")
+  ins_f(2, 0, "/*  */", "", "@")
+  ins_f(3, 0, "/*  */", "", "@")
+  ins_f(4, 0, "/*  */", "", "@")
+  ins_f(5, 0, "/*  */", "", "@")
+  ins_f(6, 0, "/*  */", "", "@")
+
+  ins_f(0, 0, "  /*  */", "  ", "@  ")
+  ins_f(1, 1, "  /*  */", "  ", " @ ")
+  ins_f(2, 2, "  /*  */", "  ", "  @")
+  ins_f(3, 2, "  /*  */", "  ", "  @")
+  ins_f(4, 2, "  /*  */", "  ", "  @")
+  ins_f(5, 2, "  /*  */", "  ", "  @")
+  ins_f(6, 2, "  /*  */", "  ", "  @")
+  ins_f(7, 2, "  /*  */", "  ", "  @")
+  ins_f(8, 2, "  /*  */", "  ", "  @")
+
+  ins_f(0, 0,  "  /*  */  ", "    ", "@    ")
+  ins_f(1, 1,  "  /*  */  ", "    ", " @   ")
+  ins_f(2, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(3, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(4, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(5, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(6, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(7, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(8, 2,  "  /*  */  ", "    ", "  @  ")
+  ins_f(9, 3,  "  /*  */  ", "    ", "   @ ")
+  ins_f(10, 4, "  /*  */  ", "    ", "    @")
   -- stylua: ignore end
 end
 
@@ -4418,6 +4520,24 @@ T["toggle_line_comment_at_insert_mode"]["works for rcs only cms"] = function()
   ins_f(8,  7, "  hello --",   "  hello",       "  hello@")
   ins_f(9,  7, "  hello --",   "  hello",       "  hello@")
   ins_f(10, 7, "  hello --",   "  hello",       "  hello@")
+
+  -- blank lines
+  ins_f(0, 0, "",   " --",   "@ --")
+  ins_f(0, 0, "  ", "   --", "@   --")
+  ins_f(1, 1, "  ", "   --", " @  --")
+  ins_f(2, 2, "  ", "   --", "  @ --")
+
+  ins_f(0, 0, " --", "", "@")
+  ins_f(1, 0, " --", "", "@")
+  ins_f(2, 0, " --", "", "@")
+  ins_f(3, 0, " --", "", "@")
+
+  ins_f(0, 0, "   --", "  ", "@  ")
+  ins_f(1, 1, "   --", "  ", " @ ")
+  ins_f(2, 2, "   --", "  ", "  @")
+  ins_f(3, 2, "   --", "  ", "  @")
+  ins_f(4, 2, "   --", "  ", "  @")
+  ins_f(5, 2, "   --", "  ", "  @")
   -- stylua: ignore end
 end
 
