@@ -910,6 +910,47 @@ T["edits"]["make_block_comment_edits_two_lines"] = function()
   eq(edits[2].text, { " */" })
 end
 
+T["edits"]["make_block_comment_edits_empty_lines"] = function()
+  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
+  local lines = { "  " }
+  local edits = H.make_block_comment_edits(lines, csi, { 0, 0, 0, 0 })
+  assert(edits)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "/*  */  ")
+  eq(#edits, 1)
+  eq(edits[1].range, { 0, 0, 0, 0 })
+  eq(edits[1].text, { "/*  */" })
+
+  lines = { "  " }
+  edits = H.make_block_comment_edits(lines, csi, { 0, 1, 0, 1 })
+  assert(edits)
+  H.apply_edits(lines, edits)
+  eq(lines[1], " /*  */ ")
+  eq(#edits, 1)
+  eq(edits[1].range, { 0, 1, 0, 1 })
+  eq(edits[1].text, { "/*  */" })
+
+  lines = { "  " }
+  edits = H.make_block_comment_edits(lines, csi, { 0, 2, 0, 2 })
+  assert(edits)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "  /*  */")
+  eq(#edits, 1)
+  eq(edits[1].range, { 0, 2, 0, 2 })
+  eq(edits[1].text, { "/*  */" })
+
+  lines = { "  ", "  " }
+  edits = H.make_block_comment_edits(lines, csi, { 0, 0, 1, 0 })
+  assert(edits)
+  H.apply_edits(lines, edits)
+  eq(lines, { "/*   ", "   */" })
+  eq(#edits, 2)
+  eq(edits[1].range, { 0, 0, 0, 0 })
+  eq(edits[1].text, { "/* " })
+  eq(edits[2].range, { 1, 2, 1, 2 })
+  eq(edits[2].text, { " */" })
+end
+
 T["edits"]["make_block_comment_edits_single_line"] = function()
   local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local lines = { "hello" }
@@ -1105,6 +1146,40 @@ T["ignore_empty_lines"]["textobject cursor on comment skips blanks when false"] 
   eq(get_lines(), { "", "# b", "end" })
 end
 
+T["ignore_empty_lines"]["never: works with empty lines"] = function()
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
+  set_lines({ "", "  " })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "# ", "  " })
+  set_cursor(2, 0)
+  feed(".")
+  eq(get_lines(), { "# ", "  # " })
+  feed("gck")
+  eq(get_lines(), { "", "  " })
+  feed(".")
+  eq(get_lines(), { "# ", "#   " })
+end
+
+T["ignore_empty_lines"]["always: works with empty lines"] = function()
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
+  set_lines({ "", "  " })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "# ", "  " })
+  set_cursor(2, 0)
+  feed(".")
+  eq(get_lines(), { "# ", "#   " })
+  feed("gck")
+  eq(get_lines(), { "", "  " })
+  feed(".")
+  eq(get_lines(), { "# ", "#   " })
+end
+
 T["ignore_empty_lines"]["textobject includes blanks when ignore_empty_lines=always"] = function()
   child.b.celeste_comment_config = { ignore_empty_lines = "always" }
   set_lines({ "# aa", " ", "\t\t", "\t ", "# bb", "  \t", "#cc" })
@@ -1121,34 +1196,49 @@ T["ignore_empty_lines"]["textobject trims blanks at edges"] = function()
   eq(get_lines(), { "", "" })
 end
 
-T["ignore_empty_lines"]["blank line not participate in indent calc but can be commented"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+T["ignore_empty_lines"]["mixed: works with empty lines"] = function()
+  child.bo.tabstop = 2
+  child.bo.expandtab = true
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
+  set_lines({ "  ", "    " })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "  # ", "    " })
+  set_cursor(2, 0)
+  feed(".")
+  eq(get_lines(), { "  # ", "    # " })
+  feed("gck")
+  eq(get_lines(), { "  ", "    " })
+end
+
+T["ignore_empty_lines"]["mixed: blank line not participate in indent calc but can be commented"] = function()
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_lines({ "    aa", "", "    bb" })
   set_cursor(1, 0)
   feed("gc", "2j")
   eq(get_lines(), { "    # aa", "    # ", "    # bb" })
   feed("gc", "2j")
-  eq(get_lines(), { "    aa", "", "    bb" })
+  eq(get_lines(), { "    aa", "    ", "    bb" })
 end
 
-T["ignore_empty_lines"]["blank line should be trimmed after uncomment"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+T["ignore_empty_lines"]["mixed: blank line should not be trimmed after uncomment"] = function()
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_lines({ "    # aa", "    # ", "    # bb" })
   set_cursor(2, 0)
   feed("gcc")
-  eq(get_lines(), { "    # aa", "", "    # bb" })
+  eq(get_lines(), { "    # aa", "    ", "    # bb" })
 end
 
-T["ignore_empty_lines"]["textobject select works with ignore_empty_lines=indent"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+T["ignore_empty_lines"]["mixed: extobject select works"] = function()
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_lines({ "    # aa", "    # ", "    # bb" })
   set_cursor(2, 0)
   feed("v", "ga", "d")
   eq(get_lines(), { "" })
 end
 
-T["ignore_empty_lines"]["indent textobject not skip blanks"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+T["ignore_empty_lines"]["mixed: textobject not skip blanks"] = function()
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_lines({ "", "# a", "", "# b", "" })
   set_cursor(2, 2)
   feed("gcgc")
@@ -1171,8 +1261,8 @@ T["ignore_empty_lines"]["indent textobject not skip blanks"] = function()
   eq(get_lines(), { "", "a", "", "b", "" })
 end
 
-T["ignore_empty_lines"]["indent gc2j respects indent from non-blank lines"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+T["ignore_empty_lines"]["mixed: gc2j respects indent from non-blank lines"] = function()
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_lines({ "    a", "", "    b" })
   set_cursor(1, 0)
   feed("gc", "2j")
@@ -1182,7 +1272,7 @@ end
 T["ignore_empty_lines"]["works with set_text"] = function()
   child.lua_func(function()
     vim.b.celeste_comment_config = {
-      ignore_empty_lines = "indent",
+      ignore_empty_lines = "mixed",
       hooks = {
         pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
       },
@@ -2107,7 +2197,7 @@ T["textobject"]["auto_linewise_detect with ignore_empty_lines=always"] = functio
   feed("u")
   eq(get_lines(), { " \t", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_cursor(5, 1)
   feed("vgad")
   eq(get_cursor(), { 5, 1 })
@@ -2267,7 +2357,7 @@ T["textobject"]["gcu respect ignore_empty_lines"] = function()
   eq(get_lines(), { "aaa", "bbb", "ccc", " ", "# eee" })
   eq(get_cursor(), { 2, 0 })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   feed("u")
   set_cursor(2, 1)
   feed("gcu")
@@ -2538,22 +2628,22 @@ T["invert"]["respect ignore_empty_lines"] = function()
   feed("gcI", "2j")
   eq(get_lines(), { "    a", "# ", "    b" })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "indent" }
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
   set_lines({ "    # a", "", "    # b" })
   set_cursor(1, 6)
   feed("gcI", "2j")
   eq(get_lines(), { "    a", "    # ", "    b" })
   eq(get_cursor(), { 1, 4 })
   feed("gcI", "2j")
-  eq(get_lines(), { "    # a", "", "    # b" })
+  eq(get_lines(), { "    # a", "    ", "    # b" })
   eq(get_cursor(), { 1, 6 })
 
   child.b.celeste_comment_config = { ignore_empty_lines = "always" }
   feed("gcI", "2j")
-  eq(get_lines(), { "    a", "", "    b" })
+  eq(get_lines(), { "    a", "    ", "    b" })
   eq(get_cursor(), { 1, 4 })
   feed("gcI", "2j")
-  eq(get_lines(), { "    # a", "", "    # b" })
+  eq(get_lines(), { "    # a", "    ", "    # b" })
   eq(get_cursor(), { 1, 6 })
 end
 
@@ -4243,26 +4333,26 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function()
   feed("i")
 
   -- stylua: ignore start
-  ins_f(0, 0, "  hello",      "  // hello",    "@  // hello")
-  ins_f(1, 1, "  hello",      "  // hello",    " @ // hello")
-  ins_f(2, 5, "  hello",      "  // hello",    "  // @hello")
-  ins_f(3, 6, "  hello",      "  // hello",    "  // h@ello")
-  ins_f(4, 7, "  hello",      "  // hello",    "  // he@llo")
-  ins_f(5, 8, "  hello",      "  // hello",    "  // hel@lo")
-  ins_f(6, 9, "  hello",      "  // hello",    "  // hell@o")
-  ins_f(7, 10, "  hello",     "  // hello",    "  // hello@")
+  ins_f(0, 0,  "  hello",      "  // hello",    "@  // hello")
+  ins_f(1, 1,  "  hello",      "  // hello",    " @ // hello")
+  ins_f(2, 5,  "  hello",      "  // hello",    "  // @hello")
+  ins_f(3, 6,  "  hello",      "  // hello",    "  // h@ello")
+  ins_f(4, 7,  "  hello",      "  // hello",    "  // he@llo")
+  ins_f(5, 8,  "  hello",      "  // hello",    "  // hel@lo")
+  ins_f(6, 9,  "  hello",      "  // hello",    "  // hell@o")
+  ins_f(7, 10, "  hello",      "  // hello",    "  // hello@")
 
-  ins_f(0, 0, "  // hello",   "  hello",       "@  hello")
-  ins_f(1, 1, "  // hello",   "  hello",       " @ hello")
-  ins_f(2, 2, "  // hello",   "  hello",       "  @hello")
-  ins_f(3, 2, "  // hello",   "  hello",       "  @hello")
-  ins_f(4, 2, "  // hello",   "  hello",       "  @hello")
-  ins_f(5, 2, "  // hello",   "  hello",       "  @hello")
-  ins_f(6, 3, "  // hello",   "  hello",       "  h@ello")
-  ins_f(7, 4, "  // hello",   "  hello",       "  he@llo")
-  ins_f(8, 5, "  // hello",   "  hello",       "  hel@lo")
-  ins_f(9, 6, "  // hello",   "  hello",       "  hell@o")
-  ins_f(10, 7, "  // hello",  "  hello",       "  hello@")
+  ins_f(0,  0, "  // hello",   "  hello",       "@  hello")
+  ins_f(1,  1, "  // hello",   "  hello",       " @ hello")
+  ins_f(2,  2, "  // hello",   "  hello",       "  @hello")
+  ins_f(3,  2, "  // hello",   "  hello",       "  @hello")
+  ins_f(4,  2, "  // hello",   "  hello",       "  @hello")
+  ins_f(5,  2, "  // hello",   "  hello",       "  @hello")
+  ins_f(6,  3, "  // hello",   "  hello",       "  h@ello")
+  ins_f(7,  4, "  // hello",   "  hello",       "  he@llo")
+  ins_f(8,  5, "  // hello",   "  hello",       "  hel@lo")
+  ins_f(9,  6, "  // hello",   "  hello",       "  hell@o")
+  ins_f(10, 7, "  // hello",   "  hello",       "  hello@")
   -- stylua: ignore end
 end
 

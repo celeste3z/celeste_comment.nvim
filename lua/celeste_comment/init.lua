@@ -18,13 +18,20 @@ M.CMT = {
 }
 
 ---@enum Celeste.Comment.Opts.IgnoreEmptyLines
+---
+--- Summary:
+--- | Mode  | Toggle blank lines? | Participate in alignment? | Aligned when all-blank? |
+--- |-------|--------------------|--------------------------|------------------------|
+--- | never | yes                | yes                      | yes                    |
+--- | mixed | yes                | no                       | yes                    |
+--- | always| no                 | no                       | no                     |
+---
 M.IGN_EMT = {
   --- Comment/uncomment empty lines. Blank lines participate in
   --- indentation alignment.
   kNever = "never",
   --- Toggle empty lines but exclude them from indentation alignment.
-  --- Also trim a line to blank when uncommenting leaves only whitespace.
-  kIndent = "indent",
+  kMixed = "mixed",
   --- Skip empty lines entirely — they are not toggled nor aligned.
   kAlways = "always",
 }
@@ -67,6 +74,7 @@ M.FBK2BLOCK = {
 ---@field trcs_esc   string                    -- alias of tlrcs_esc[1][2]
 
 ---@class Celeste.Comment.LineCommentInfo.Line
+---@field lead_ws_len integer leading whitespace len
 ---@field offset      integer 0-indexed column where comment marker should be inserted
 ---@field ignore      boolean should thie line be ignored?
 ---@field csi         Celeste.Comment.CommentStringInfo comment string info
@@ -74,7 +82,7 @@ M.FBK2BLOCK = {
 ---@field rcs_pos     Celeste.Comment.Range3? position of rcs
 ---@field commented?  boolean
 ---@field all_blank?  boolean blank line
----@field will_blank? boolean not blank, but will be blank after remove lcs and rcs, current only available with ignore_empty_lines = 'indent'
+---@field will_blank? boolean not blank, but will be blank after remove lcs and rcs, current only available with ignore_empty_lines = kMixed
 
 ---@class Celeste.Comment.LineCommentInfo
 ---@field lines         Celeste.Comment.LineCommentInfo.Line[]
@@ -152,7 +160,7 @@ H.config = {
   block_relaxed_detect      = true,
   textobj_treesitter_detect = false,
   block_textobj_nlines      = 200,
-  ignore_empty_lines        = M.IGN_EMT.kIndent,
+  ignore_empty_lines        = M.IGN_EMT.kMixed,
   fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
   log_level                 = vim.log.levels.OFF,
 
@@ -670,23 +678,36 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
   local only_whitespace_lines = true
   local min_visible_col = math.huge
 
+  ---@param line string
+  ---@param info_line Celeste.Comment.LineCommentInfo.Line
+  local function update_min_visible_col(line, info_line)
+    local cur_visible_col = 0
+    for j = 1, info_line.offset do
+      if cur_visible_col >= min_visible_col then break end
+      cur_visible_col = H.next_visible_column(cur_visible_col, line:byte(j), indent_size)
+    end
+    if cur_visible_col < min_visible_col then min_visible_col = cur_visible_col end
+  end
+
   for i, line in ipairs(lines) do
     local row = range[1] + i - 1
     ---@type Celeste.Comment.LineCommentInfo.Line
-    local info = { offset = 0, ignore = false, csi = csi }
+    local info = { lead_ws_len = 0, offset = 0, ignore = false, csi = csi }
     local ws = line:match("^(%s*)")
     local ws_len = #ws
 
     if ws_len == #line then
       info.ignore = cfg.ignore_empty_lines == M.IGN_EMT.kAlways
       info.offset = cfg.line_comment_no_indent and 0 or #line
+      info.lead_ws_len = ws_len
       info.all_blank = true
     else
       only_whitespace_lines = false
       info.offset = cfg.line_comment_no_indent and 0 or ws_len
+      info.lead_ws_len = ws_len
 
       local match_res =
-        H.match_line_comment(line, row, csi, { check_will_blank = cfg.ignore_empty_lines == M.IGN_EMT.kIndent })
+        H.match_line_comment(line, row, csi, { check_will_blank = cfg.ignore_empty_lines == M.IGN_EMT.kMixed })
       if match_res then
         info.lcs_pos = match_res.lcs_pos
         info.rcs_pos = match_res.rcs_pos
@@ -698,14 +719,7 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
     end
 
     if not info.ignore and not cfg.line_comment_no_indent then
-      if ws_len < #line or cfg.ignore_empty_lines ~= M.IGN_EMT.kIndent then
-        local cur_visible_col = 0
-        for j = 1, info.offset do
-          if cur_visible_col >= min_visible_col then break end
-          cur_visible_col = H.next_visible_column(cur_visible_col, line:byte(j), indent_size)
-        end
-        if cur_visible_col < min_visible_col then min_visible_col = cur_visible_col end
-      end
+      if not info.all_blank or cfg.ignore_empty_lines ~= M.IGN_EMT.kMixed then update_min_visible_col(line, info) end
     end
 
     all_info.lines[#all_info.lines + 1] = info
@@ -714,8 +728,17 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
   -- force add when all non-ignored lines are blank
   if all_info.should_remove and only_whitespace_lines then
     all_info.should_remove = false
-    for _, info in ipairs(all_info.lines) do
+
+    local need_align_indent_for_blank = false
+    if not cfg.line_comment_no_indent and cfg.ignore_empty_lines == M.IGN_EMT.kMixed then
+      assert(min_visible_col == math.huge, "fatal error, min_visible_col != math.huge")
+      need_align_indent_for_blank = true
+    end
+
+    for i, info in ipairs(all_info.lines) do
       info.ignore = false
+
+      if need_align_indent_for_blank then update_min_visible_col(lines[i], info) end
     end
   end
 
@@ -726,7 +749,7 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
       for i, line in ipairs(lines) do
         local info = all_info.lines[i]
         if not info.ignore then
-          if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kIndent then
+          if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed then
             info.offset = min_visible_col
           else
             info.offset = H.find_insert_offset(line, info.offset, min_visible_col, indent_size)
@@ -746,37 +769,37 @@ end
 ---@return Celeste.Comment.TextEdits
 function H.make_comment_edits(line, row, cfg, info)
   local csi = info.csi
-  local edits = {}
-  local offset = cfg.line_comment_no_indent and 0 or info.offset
-  if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kIndent and offset > 0 then
-    edits[#edits + 1] = { range = { row, 0, row, 0 }, text = { string.rep(" ", offset) .. csi.olcs } }
+  local edits = {} ---@type Celeste.Comment.TextEdits
+
+  if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed and info.offset > info.lead_ws_len then
+    edits[#edits + 1] = {
+      range = { row, info.lead_ws_len, row, info.lead_ws_len },
+      text = { string.rep(" ", info.offset - info.lead_ws_len) .. csi.olcs },
+    }
   else
-    edits[#edits + 1] = { range = { row, offset, row, offset }, text = { csi.olcs } }
+    edits[#edits + 1] = { range = { row, info.offset, row, info.offset }, text = { csi.olcs } }
   end
+
   if csi.orcs ~= "" then edits[#edits + 1] = { range = { row, #line, row, #line }, text = { csi.orcs } } end
   return edits
 end
 
 ---@param info  Celeste.Comment.LineCommentInfo.Line
----@param line  string
+---@param _line string
 ---@param cfg?  Celeste.Comment.Opts
 ---@return Celeste.Comment.TextEdits
-function H.make_uncomment_edits(info, line, cfg)
+function H.make_uncomment_edits(info, _line, cfg)
   cfg = cfg or {}
   local edits = {} ---@type Celeste.Comment.TextEdits
-  if info.will_blank and cfg.ignore_empty_lines == M.IGN_EMT.kIndent then
-    -- like nvim builtin comment, trim blankline if ignore_empty_lines == 'indent'
-    edits[#edits + 1] = { range = { info.lcs_pos[1], 0, info.lcs_pos[1], #line }, text = { "" } }
-  else
-    if info.lcs_pos then
-      edits[#edits + 1] =
-        { range = { info.lcs_pos[1], info.lcs_pos[2], info.lcs_pos[1], info.lcs_pos[3] + 1 }, text = { "" } }
-    end
 
-    if info.rcs_pos then
-      edits[#edits + 1] =
-        { range = { info.rcs_pos[1], info.rcs_pos[2], info.rcs_pos[1], info.rcs_pos[3] + 1 }, text = { "" } }
-    end
+  if info.lcs_pos then
+    edits[#edits + 1] =
+      { range = { info.lcs_pos[1], info.lcs_pos[2], info.lcs_pos[1], info.lcs_pos[3] + 1 }, text = { "" } }
+  end
+
+  if info.rcs_pos then
+    edits[#edits + 1] =
+      { range = { info.rcs_pos[1], info.rcs_pos[2], info.rcs_pos[1], info.rcs_pos[3] + 1 }, text = { "" } }
   end
   return edits
 end
@@ -828,7 +851,13 @@ function H.make_block_comment_edits(lines, csi, range)
   local edits = {} ---@type Celeste.Comment.TextEdits
 
   local lcs_col = H.skip_whitespace(l1, 1, #l1, 1) - 1
-  if lcs_col == #l1 then lcs_col = 0 end
+  if lcs_col == #l1 then
+    if range[1] == range[3] and range[2] == range[4] then
+      edits[#edits + 1] = { range = { range[1], range[2], range[1], range[2] }, text = { csi.olcs .. csi.orcs } }
+      return edits
+    end
+    lcs_col = 0
+  end
 
   edits[#edits + 1] = { range = { range[1], lcs_col, range[1], lcs_col }, text = { csi.olcs } }
 
@@ -1562,9 +1591,9 @@ function M.setup(config)
   vim.validate("insert_space", config.insert_space, "boolean", true, "boolean")
   vim.validate("line_comment_no_indent", config.line_comment_no_indent, "boolean", true, "boolean")
   vim.validate("ignore_empty_lines", config.ignore_empty_lines, function(v)
-    if type(v) ~= "string" then return false, ("expected 'never'|'indent'|'always' but got type:%s"):format(type(v)) end
-    return vim.iter({ "never", "indent", "always" }):any(function(z) return z == v end),
-      ("expected 'never'|'indent'|'always' but got %s"):format(v)
+    if type(v) ~= "string" then return false, ("expected 'never'|'mixed'|'always' but got type:%s"):format(type(v)) end
+    return vim.iter({ "never", "mixed", "always" }):any(function(z) return z == v end),
+      ("expected 'never'|'mixed'|'always' but got %s"):format(v)
   end, true, "boolean")
   vim.validate("fallback_to_block", config.fallback_to_block, function(v)
     if type(v) ~= "string" then return false, "expected string" end
@@ -1648,7 +1677,7 @@ function M.setup(config)
 
   map("i", m.comment_line_insert, function()
     local cursor = H.make_cursor(0)
-    local range = { cursor.row, 0, cursor.row, 0 }
+    local range = { cursor.row, cursor.col, cursor.row, cursor.col }
     H.toggle_range(cursor, range, M.CMT.kLine, "line", { track_cursor = true })
   end, { desc = "Toggle line comment at insert mode" })
 end
