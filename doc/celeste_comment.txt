@@ -1,5 +1,5 @@
 *celeste_comment.txt*
-                                 For NVIM v0.12.0    Last change: 2026 July 20
+                                 For NVIM v0.12.0    Last change: 2026 July 19
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
