@@ -109,6 +109,7 @@ local make_line_info = function(opts)
     ignore = opts.ignore or false,
     lcs_pos = opts.lcs_pos,
     rcs_pos = opts.rcs_pos,
+    row = opts.row or 0,
   }
 end
 
@@ -826,7 +827,7 @@ end
 
 T["edits"]["make_comment_edits"] = function()
   local csi = H.make_csi({ { "# ", "" } })
-  local edits = H.make_comment_edits("hello", 0, {}, make_line_info({ offset = 0, csi = csi }))
+  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "hello", {})
   assert(edits)
   eq(apply("hello", edits), "# hello")
   eq(#edits, 1)
@@ -839,7 +840,7 @@ end
 
 T["edits"]["make_comment_edits_with_indent"] = function()
   local csi = H.make_csi({ { "# ", "" } })
-  local edits = H.make_comment_edits("  hello", 0, {}, make_line_info({ offset = 2, csi = csi }))
+  local edits = H.make_comment_edits(make_line_info({ offset = 2, csi = csi }), "  hello", {})
   assert(edits)
   eq(apply("  hello", edits), "  # hello")
   eq(#edits, 1)
@@ -864,7 +865,7 @@ end
 
 T["edits"]["make_comment_edits_with_rcs"] = function()
   local csi = H.make_csi({ { "<!-- ", " -->" } }, { pad = true })
-  local edits = H.make_comment_edits("hello", 0, {}, make_line_info({ offset = 0, csi = csi }))
+  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "hello", {})
   assert(edits)
   eq(apply("hello", edits), "<!-- hello -->")
   eq(#edits, 2)
@@ -898,7 +899,7 @@ end
 
 T["edits"]["make_comment_edits_blank_line"] = function()
   local csi = H.make_csi({ { "# ", "" } })
-  local edits = H.make_comment_edits("", 0, {}, make_line_info({ offset = 0, csi = csi }))
+  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "", {})
   assert(edits)
   eq(apply("", edits), "# ")
   eq(#edits, 1)
@@ -912,7 +913,7 @@ end
 T["edits"]["make_comment_edits_noindent"] = function()
   local csi = H.make_csi({ { "// ", "" } })
   local cfg = { line_comment_no_indent = true }
-  local edits = H.make_comment_edits("  code", 0, cfg, make_line_info({ offset = 0, csi = csi }))
+  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "  code", cfg)
   assert(edits)
   eq(apply("  code", edits), "//   code")
   eq(#edits, 1)
@@ -950,28 +951,46 @@ T["edits"]["make_block_comment_edits_empty_lines"] = function()
   local edits = H.make_block_comment_edits(lines, csi, { 0, 0, 0, 0 })
   assert(edits)
   H.apply_edits(lines, edits)
-  eq(lines[1], "/*  */  ")
-  eq(#edits, 1)
+  eq(lines[1], "/*    */")
+  eq(#edits, 2)
   eq(edits[1].range, { 0, 0, 0, 0 })
-  eq(edits[1].text, { "/*  */" })
+  eq(edits[1].text, { "/* " })
+  eq(edits[2].range, { 0, 2, 0, 2 })
+  eq(edits[2].text, { " */" })
 
   lines = { "  " }
   edits = H.make_block_comment_edits(lines, csi, { 0, 1, 0, 1 })
   assert(edits)
   H.apply_edits(lines, edits)
-  eq(lines[1], " /*  */ ")
-  eq(#edits, 1)
-  eq(edits[1].range, { 0, 1, 0, 1 })
-  eq(edits[1].text, { "/*  */" })
+  eq(lines[1], "/*    */")
+  eq(#edits, 2)
+  eq(edits[1].range, { 0, 0, 0, 0 })
+  eq(edits[1].text, { "/* " })
+  eq(edits[2].range, { 0, 2, 0, 2 })
+  eq(edits[2].text, { " */" })
 
   lines = { "  " }
   edits = H.make_block_comment_edits(lines, csi, { 0, 2, 0, 2 })
   assert(edits)
   H.apply_edits(lines, edits)
-  eq(lines[1], "  /*  */")
-  eq(#edits, 1)
-  eq(edits[1].range, { 0, 2, 0, 2 })
-  eq(edits[1].text, { "/*  */" })
+  eq(lines[1], "/*    */")
+  eq(#edits, 2)
+  eq(edits[1].range, { 0, 0, 0, 0 })
+  eq(edits[1].text, { "/* " })
+  eq(edits[2].range, { 0, 2, 0, 2 })
+  eq(edits[2].text, { " */" })
+
+  -- insmode
+  lines = { "  " }
+  edits = H.make_block_comment_edits(lines, csi, { 0, 0, 0, 0 }, { insmode = true })
+  assert(edits)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "/*  */  ")
+  eq(#edits, 2)
+  eq(edits[1].range, { 0, 0, 0, 0 })
+  eq(edits[1].text, { "/* " })
+  eq(edits[2].range, { 0, 0, 0, 0 })
+  eq(edits[2].text, { " */" })
 
   lines = { "  ", "  " }
   edits = H.make_block_comment_edits(lines, csi, { 0, 0, 1, 0 })
@@ -1049,7 +1068,7 @@ end
 T["edits"]["make_block_partial_edits"] = function()
   local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local lines = { "hello world" }
-  local edits = H.make_block_partial_edits(lines, csi, 3, 7, 0)
+  local edits = H.make_block_partial_edits(lines, csi, { 0, 3, 0, 7 })
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "hel/* lo wo */rld")
@@ -4352,7 +4371,9 @@ end
 
 -- Toggle current line comment at insert mode ─────────────────────────────────
 
-T["toggle_line_comment_at_insert_mode"] = new_set()
+T["toggle_line_comment_at_insert_mode"] = new_set({
+  parametrize = { { "never" }, { "if_line_cms_wrapped" } },
+})
 
 local function ins_f(col, etcol, start_line, end_line, expected_after_at)
   set_lines({ start_line })
@@ -4367,7 +4388,8 @@ local function ins_f(col, etcol, start_line, end_line, expected_after_at)
   eq(get_cursor(), { 1, etcol })
 end
 
-T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function()
+T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function(fallback)
+  child.b.celeste_comment_config = { fallback_to_block = fallback }
   child.bo.tabstop = 2
   child.bo.expandtab = true
   child.bo.filetype = "unknown"
@@ -4422,7 +4444,8 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function()
   -- stylua: ignore end
 end
 
-T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function()
+T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function(fallback)
+  child.b.celeste_comment_config = { fallback_to_block = fallback }
   child.bo.tabstop = 2
   child.bo.expandtab = true
   child.bo.filetype = "unknown"
@@ -4455,9 +4478,9 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function()
   ins_f(13, 7, "  /* hello */", "  hello",       "  hello@")
 
   -- blank lines
-  ins_f(0, 3, "",              "/*  */",        "/* @ */")
-  ins_f(0, 0, "  ", "  /*  */", "@  /*  */")
-  ins_f(1, 1, "  ", "  /*  */", " @ /*  */")
+  ins_f(0, 3, "",   "/*  */",   "/* @ */")
+  ins_f(0, 3, "  ", "/*  */  ", "/* @ */  ")
+  ins_f(1, 4, "  ", " /*  */ ", " /* @ */ ")
   ins_f(2, 5, "  ", "  /*  */", "  /* @ */")
 
   ins_f(0, 0, "/*  */", "", "@")
@@ -4492,7 +4515,8 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function()
   -- stylua: ignore end
 end
 
-T["toggle_line_comment_at_insert_mode"]["works for rcs only cms"] = function()
+T["toggle_line_comment_at_insert_mode"]["works for rcs only cms"] = function(fallback)
+  child.b.celeste_comment_config = { fallback_to_block = fallback }
   child.bo.tabstop = 2
   child.bo.expandtab = true
   child.bo.filetype = "unknown"

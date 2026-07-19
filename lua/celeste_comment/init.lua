@@ -21,10 +21,10 @@ M.CMT = {
 ---
 --- Summary:
 --- | Mode  | Toggle blank lines? | Participate in alignment? | Aligned when all-blank? |
---- |-------|--------------------|--------------------------|------------------------|
---- | never | yes                | yes                      | yes                    |
---- | mixed | yes                | no                       | yes                    |
---- | always| no                 | no                       | no                     |
+--- |-------|---------------------|---------------------------|-------------------------|
+--- | never | yes                 | yes                       | yes                     |
+--- | mixed | yes                 | no                        | yes                     |
+--- | always| no                  | no                        | no                      |
 ---
 M.IGN_EMT = {
   --- Comment/uncomment empty lines. Blank lines participate in
@@ -74,6 +74,7 @@ M.FBK2BLOCK = {
 ---@field trcs_esc   string                    -- alias of tlrcs_esc[1][2]
 
 ---@class Celeste.Comment.LineCommentInfo.Line
+---@field row         integer real row in buffer
 ---@field lead_ws_len integer leading whitespace len
 ---@field offset      integer 0-indexed column where comment marker should be inserted
 ---@field ignore      boolean should thie line be ignored?
@@ -146,6 +147,9 @@ M.FBK2BLOCK = {
 ---@field mappings?                   Celeste.Comment.Opts.Mapping
 ---@field hooks?                      Celeste.Comment.Hooks
 ---@field log_level?                  vim.log.levels default `vim.log.levels.OFF`
+
+---@class Celeste.Comment.ExecutionOpts
+---@field [string] any
 
 ---@class Celeste.Comment.CursorStateTrack
 ---@field cursor vim.Pos
@@ -694,7 +698,7 @@ end
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cfg    Celeste.Comment.Opts
 ---@param range  Celeste.Comment.Range4
----@param opts?  {invert?: boolean}
+---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.LineCommentInfo
 function H.line_comment_info(lines, csi, cfg, range, opts)
   opts = opts or {}
@@ -719,7 +723,7 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
   for i, line in ipairs(lines) do
     local row = range[1] + i - 1
     ---@type Celeste.Comment.LineCommentInfo.Line
-    local info = { lead_ws_len = 0, offset = 0, ignore = false, csi = csi }
+    local info = { lead_ws_len = 0, offset = 0, ignore = false, csi = csi, row = row }
     local ws = line:match("^(%s*)")
     local ws_len = #ws
 
@@ -789,14 +793,23 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
   return all_info
 end
 
----@param line string
----@param row  integer
----@param cfg  Celeste.Comment.Opts
----@param info Celeste.Comment.LineCommentInfo.Line
+---@param info  Celeste.Comment.LineCommentInfo.Line
+---@param line  string
+---@param cfg   Celeste.Comment.Opts
+---@param range? Celeste.Comment.Range4
+---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.make_comment_edits(line, row, cfg, info)
-  local csi = info.csi
+function H.make_comment_edits(info, line, cfg, range, opts)
   local edits = {} ---@type Celeste.Comment.TextEdits
+  local csi = info.csi
+  local row = info.row
+  opts = opts or {}
+
+  if info.all_blank and opts.insmode and csi.wrapped and range and range[1] == range[3] and range[2] == range[4] then
+    edits[#edits + 1] = { range = { row, range[2], row, range[2] }, text = { csi.olcs } }
+    edits[#edits + 1] = { range = { row, range[2], row, range[2] }, text = { csi.orcs } }
+    return edits
+  end
 
   if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed and info.offset > info.lead_ws_len then
     edits[#edits + 1] = {
@@ -812,10 +825,10 @@ function H.make_comment_edits(line, row, cfg, info)
 end
 
 ---@param info  Celeste.Comment.LineCommentInfo.Line
----@param _line string
+---@param line  string
 ---@param cfg?  Celeste.Comment.Opts
 ---@return Celeste.Comment.TextEdits
-function H.make_uncomment_edits(info, _line, cfg)
+function H.make_uncomment_edits(info, line, cfg)
   cfg = cfg or {}
   local edits = {} ---@type Celeste.Comment.TextEdits
 
@@ -831,13 +844,14 @@ function H.make_uncomment_edits(info, _line, cfg)
   return edits
 end
 
----@param lines  string[]
----@param csi    Celeste.Comment.CommentStringInfo
----@param cfg    Celeste.Comment.Opts
----@param range  Celeste.Comment.Range4
----@param opts?  {invert?: boolean}
+---@param lines   string[]
+---@param range   Celeste.Comment.Range4
+---@param _motion Celeste.Comment.Motion
+---@param csi     Celeste.Comment.CommentStringInfo
+---@param cfg     Celeste.Comment.Opts
+---@param opts?   Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.compute_line_edits(lines, csi, cfg, range, opts)
+function H.compute_line_edits(lines, range, _motion, csi, cfg, opts)
   opts = opts or {}
   local all_edits = {} ---@type Celeste.Comment.TextEdits
   local all_info = H.line_comment_info(lines, csi, cfg, range, opts)
@@ -846,7 +860,6 @@ function H.compute_line_edits(lines, csi, cfg, range, opts)
     local info = all_info.lines[i]
     if not info.ignore then
       local edits, should_remove
-      local row = range[1] + i - 1
 
       if not opts.invert then
         should_remove = all_info.should_remove
@@ -857,10 +870,14 @@ function H.compute_line_edits(lines, csi, cfg, range, opts)
       if should_remove then
         edits = H.make_uncomment_edits(info, line, cfg)
       else
-        edits = H.make_comment_edits(line, row, cfg, info)
+        edits = H.make_comment_edits(info, line, cfg, range, opts)
       end
 
-      if edits then vim.list_extend(all_edits, edits) end
+      if edits then
+        vim.list_extend(all_edits, edits)
+        all_edits.need_sort = all_edits.need_sort or edits.need_sort
+        all_edits.any_multi = all_edits.any_multi or edits.any_multi
+      end
     end
   end
 
@@ -870,17 +887,20 @@ end
 ---@param lines string[]
 ---@param csi   Celeste.Comment.CommentStringInfo
 ---@param range Celeste.Comment.Range4
+---@param opts? Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.make_block_comment_edits(lines, csi, range)
+function H.make_block_comment_edits(lines, csi, range, opts)
   local n = #lines
   local l1 = lines[1]
   local ln = lines[n]
   local edits = {} ---@type Celeste.Comment.TextEdits
+  opts = opts or {}
 
   local lcs_col = H.skip_whitespace(l1, 1, #l1, 1) - 1
   if lcs_col == #l1 then
-    if range[1] == range[3] and range[2] == range[4] then
-      edits[#edits + 1] = { range = { range[1], range[2], range[1], range[2] }, text = { csi.olcs .. csi.orcs } }
+    if opts.insmode and range[1] == range[3] and range[2] == range[4] then
+      edits[#edits + 1] = { range = { range[1], range[2], range[1], range[2] }, text = { csi.olcs } }
+      edits[#edits + 1] = { range = { range[1], range[2], range[1], range[2] }, text = { csi.orcs } }
       return edits
     end
     lcs_col = 0
@@ -897,24 +917,22 @@ function H.make_block_comment_edits(lines, csi, range)
   return edits
 end
 
----@param lines     string[]
----@param csi       Celeste.Comment.CommentStringInfo
----@param scol      integer
----@param ecol      integer
----@param start_row integer 0-indexed buffer row of lines[1]
+---@param lines string[]
+---@param csi   Celeste.Comment.CommentStringInfo
+---@param range Celeste.Comment.Range4
+---@param opts? Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.make_block_partial_edits(lines, csi, scol, ecol, start_row)
-  start_row = start_row or 0
+function H.make_block_partial_edits(lines, csi, range, opts)
   local n = #lines
   local edits = {} ---@type Celeste.Comment.TextEdits
 
-  local rcs_col = math.min(ecol + 1, #lines[n])
+  local rcs_col = math.min(range[4] + 1, #lines[n])
 
-  edits[#edits + 1] = { range = { start_row, scol, start_row, scol }, text = { csi.olcs } }
+  edits[#edits + 1] = { range = { range[1], range[2], range[1], range[2] }, text = { csi.olcs } }
   if n == 1 then
-    edits[#edits + 1] = { range = { start_row, rcs_col, start_row, rcs_col }, text = { csi.orcs } }
+    edits[#edits + 1] = { range = { range[1], rcs_col, range[1], rcs_col }, text = { csi.orcs } }
   else
-    edits[#edits + 1] = { range = { start_row + n - 1, rcs_col, start_row + n - 1, rcs_col }, text = { csi.orcs } }
+    edits[#edits + 1] = { range = { range[1] + n - 1, rcs_col, range[1] + n - 1, rcs_col }, text = { csi.orcs } }
   end
 
   return edits
@@ -1034,21 +1052,22 @@ function H.block_comment_info(lines, csi, scol, ecol, motion, range, cfg)
 end
 
 ---@param lines  string[]
----@param csi    Celeste.Comment.CommentStringInfo
 ---@param range  Celeste.Comment.Range4
 ---@param motion Celeste.Comment.Motion
+---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cfg?   Celeste.Comment.Opts
+---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.compute_block_edits(lines, csi, range, motion, cfg)
+function H.compute_block_edits(lines, range, motion, csi, cfg, opts)
   local info = H.block_comment_info(lines, csi, range[2], range[4], motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
 
   if info then
     edits = H.make_block_uncomment_edits(info)
   elseif motion == "char" then
-    edits = H.make_block_partial_edits(lines, csi, range[2], range[4], range[1])
+    edits = H.make_block_partial_edits(lines, csi, range, opts)
   else
-    edits = H.make_block_comment_edits(lines, csi, range)
+    edits = H.make_block_comment_edits(lines, csi, range, opts)
   end
   return edits
 end
@@ -1154,8 +1173,12 @@ function H.compute_cursor_state(state, edits, lines, range, csi)
         if #e.text > 1 then
           if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
         elseif e.range[2] == e.range[4] then
-          if csi.orcs ~= "" and e.text[1] == csi.orcs and ocol >= eol_pos and e.range[2] == eol_pos then
-            -- insert mode EOL, no shift for RHS insert at line end
+          if csi.orcs ~= "" and e.text[1] == csi.orcs and ocol >= e.range[2] then
+            if e.range[2] == eol_pos or ocol == e.range[2] then
+              -- no shift for RHS at EOL or at cursor (insmode)
+            else
+              ncol = ncol + #e.text[1]
+            end
           elseif ocol >= e.range[2] then
             ncol = ncol + #e.text[1]
           end
@@ -1178,14 +1201,14 @@ end
 ---@param range Celeste.Comment.Range4
 ---@param motion Celeste.Comment.Motion
 ---@param cursor vim.Pos
----@param opts? {invert:boolean}
+---@param opts? Celeste.Comment.ExecutionOpts
 function H.togglex(cfg, ctype, lines, csi, range, motion, cursor, opts)
   opts = opts or {}
   local edits ---@type Celeste.Comment.TextEdits
   if ctype == M.CMT.kBlock then
-    edits = H.compute_block_edits(lines, csi, range, motion, cfg)
+    edits = H.compute_block_edits(lines, range, motion, csi, cfg, opts)
   else
-    edits = H.compute_line_edits(lines, csi, cfg, range, opts)
+    edits = H.compute_line_edits(lines, range, motion, csi, cfg, opts)
   end
   assert(edits, "unexpected error, nil edits")
 
@@ -1562,12 +1585,10 @@ end
 ---@param range Celeste.Comment.Range4
 ---@param ctype Celeste.Comment.CommentType
 ---@param motion Celeste.Comment.Motion
----@param opts {invert?: boolean, track_cursor?:boolean, cfg?: Celeste.Comment.Opts}
+---@param opts? Celeste.Comment.ExecutionOpts
 function H.toggle_range(cursor, range, ctype, motion, opts)
   if H.is_disabled() then return end
   opts = opts or {}
-
-  if opts.track_cursor then H.track_cursor_state() end
 
   local cfg = H.buf_config(opts.cfg)
 
@@ -1584,7 +1605,7 @@ end
 function M.track_cursor() H.track_cursor_state() end
 
 ---@param ctype Celeste.Comment.CommentType
----@param opts? {suffix?: string, invert?: boolean, cfg?: Celeste.Comment.Opts}
+---@param opts? Celeste.Comment.ExecutionOpts
 ---@return fun():string
 function M.make_operator(ctype, opts)
   opts = opts or {}
@@ -1708,13 +1729,14 @@ function M.setup(config)
   end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
 
   map("i", m.comment_line_insert, function()
+    H.track_cursor_state()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
-    H.toggle_range(cursor, range, M.CMT.kLine, "line", { track_cursor = true })
+    H.toggle_range(cursor, range, M.CMT.kLine, "line", { insmode = true })
   end, { desc = "Toggle line comment at insert mode" })
 end
 
 -- test only
-M._H = H
 
+M._H = H
 return M
