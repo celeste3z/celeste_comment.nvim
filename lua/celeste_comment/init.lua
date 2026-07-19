@@ -130,24 +130,24 @@ M.ACT = {
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
----@field comment?              string|string[] mode 'n', operator, default 'gc'
----@field comment_line?         string|string[] mode 'n', default 'gcc'
----@field comment_visual?       string|string[] mode 'x', default 'gc'
----@field comment_line_insert   string|string[] mode 'i', toggle comment at current line in insert mode, '<C-/>'
----@field block?                string|string[] mode 'n', operator, default 'gb'
----@field block_line?           string|string[] mode 'n', default 'gbc'
----@field block_visual?         string|string[] mode 'x', default 'gb'
----@field textobject_line?      string|string[] mode 'o', linewise textobject, like 'gc', default ''
----@field textobject_block?     string|string[] mode 'o', blockwise textobject, like 'gb', default ''
----@field textobject_auto?      string|string[] mode 'o', auto detect textobject, default 'ga'
----@field comment_below?        string|string[] mode 'n', comment below, 'gco'
----@field comment_above?        string|string[] mode 'n', comment above, 'gcO'
----@field comment_eol?          string|string[] mode 'n', comment eol, 'gcA'
----@field uncomment_auto?       string|string[] mode 'n', auto detect and uncomment, 'gcu'
----@field invert?               string|string[] mode 'nx', invert comment per line, ''
----@field comment_force_add?    string|string[] mode 'nx', force add line comment, ''
----@field comment_force_remove? string|string[] mode 'nx', force remove line comment, ''
----@field cursor_sticky_dot?    string|string[] mode 'n', default '.'
+---@field line_toggle?           string|string[] mode 'n', operator, default 'gc'
+---@field line_toggle_cur?       string|string[] mode 'n', default 'gcc'
+---@field line_toggle_visual?    string|string[] mode 'x', default 'gc'
+---@field line_toggle_insert     string|string[] mode 'i', toggle comment at current line in insert mode, '<C-/>'
+---@field block_toggle?          string|string[] mode 'n', operator, default 'gb'
+---@field block_toggle_cur?      string|string[] mode 'n', default 'gbc'
+---@field block_toggle_visual?   string|string[] mode 'x', default 'gb'
+---@field line_textobject?       string|string[] mode 'o', linewise textobject, like 'gc', default ''
+---@field block_textobject?      string|string[] mode 'o', blockwise textobject, like 'gb', default ''
+---@field auto_textobject?       string|string[] mode 'o', auto detect textobject, default 'ga'
+---@field line_add_below?        string|string[] mode 'n', comment below, 'gco'
+---@field line_add_above?        string|string[] mode 'n', comment above, 'gcO'
+---@field line_add_eol?          string|string[] mode 'n', comment eol, 'gcA'
+---@field uncomment_auto?        string|string[] mode 'n', auto detect and uncomment, 'gcu'
+---@field line_invert?           string|string[] mode 'nx', invert comment per line, ''
+---@field line_force_add?        string|string[] mode 'nx', force add line comment, ''
+---@field line_force_remove?     string|string[] mode 'nx', force remove line comment, ''
+---@field dot_repeat?            string|string[] mode 'n', default '.'
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor?                boolean default true
@@ -183,33 +183,34 @@ H.config = {
   block_relaxed_detect      = true,
   textobj_treesitter_detect = false,
   block_textobj_nlines      = 200,
-  ignore_empty_lines        = M.IGN_EMT.kMixed,
+  ignore_empty_lines        = M.IGN_EMT.kAlways,
   fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
   log_level                 = vim.log.levels.OFF,
 
   mappings = {
-    comment                 = "gc",
-    comment_line            = "gcc",
-    comment_visual          = "gc",
-    comment_line_insert     = "",
+    line_toggle             = "gc",
+    line_toggle_cur         = "gcc",
+    line_toggle_visual      = "gc",
 
-    block                   = "gb",
-    block_line              = "gbc",
-    block_visual            = "gb",
+    line_toggle_insert      = "",
+    line_add_below          = "",
+    line_add_above          = "",
+    line_add_eol            = "",
+    line_invert             = "",
+    line_force_add          = "",
+    line_force_remove       = "",
 
-    textobject_line         = "gc",
-    textobject_block        = "gb",
-    textobject_auto         = "",
+    block_toggle            = "gb",
+    block_toggle_cur        = "gbc",
+    block_toggle_visual     = "gb",
+
+    line_textobject         = "gc",
+    block_textobject        = "gb",
+    auto_textobject         = "",
+
     uncomment_auto          = "",
 
-    comment_below           = "",
-    comment_above           = "",
-    comment_eol             = "",
-    invert                  = "",
-    comment_force_add       = "",
-    comment_force_remove    = "",
-
-    cursor_sticky_dot       = ".",
+    dot_repeat              = ".",
   },
 
   hooks = {
@@ -1728,58 +1729,58 @@ function M.setup(config)
   end
 
   -- stylua: ignore start
-  local op_line   = H.make_operator(M.CMT.kLine)
-  local op_line_  = H.make_operator(M.CMT.kLine, { suffix = "_" })
-  local op_block  = H.make_operator(M.CMT.kBlock)
-  local op_block_ = H.make_operator(M.CMT.kBlock, { suffix = "_" })
-  local op_invert = H.make_operator(M.CMT.kLine, { action = M.ACT.kInvert })
-  local op_add    = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceAdd })
-  local op_rmv    = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceRemove })
+  local op_toggle           = H.make_operator(M.CMT.kLine)
+  local op_toggle_cur       = H.make_operator(M.CMT.kLine, { suffix = "_" })
+  local op_block_toggle     = H.make_operator(M.CMT.kBlock)
+  local op_block_toggle_cur = H.make_operator(M.CMT.kBlock, { suffix = "_" })
+  local op_invert           = H.make_operator(M.CMT.kLine, { action = M.ACT.kInvert })
+  local op_force_add        = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceAdd })
+  local op_force_rmv        = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceRemove })
 
-  map("n", m.comment,        op_line,   { expr = true, desc = "Comment by motion" })
-  map("n", m.comment_line,   op_line_,  { expr = true, desc = "Comment current line" })
-  map("x", m.comment_visual, op_line,   { expr = true, desc = "Comment selection" })
-  map("n", m.block,          op_block,  { expr = true, desc = "Block comment by motion" })
-  map("n", m.block_line,     op_block_, { expr = true, desc = "Block comment current line" })
-  map("x", m.block_visual,   op_block,  { expr = true, desc = "Block comment selection" })
+  map("n", m.line_toggle,        op_toggle,           { expr = true, desc = "Comment by motion" })
+  map("n", m.line_toggle_cur,    op_toggle_cur,       { expr = true, desc = "Comment current line" })
+  map("x", m.line_toggle_visual, op_toggle,           { expr = true, desc = "Comment selection" })
+  map("n", m.block_toggle,       op_block_toggle,     { expr = true, desc = "Block comment by motion" })
+  map("n", m.block_toggle_cur,   op_block_toggle_cur, { expr = true, desc = "Block comment current line" })
+  map("x", m.block_toggle_visual,op_block_toggle,     { expr = true, desc = "Block comment selection" })
 
-  map("n", m.comment_below,  function() H.insert_comment("below") end, { desc = "Add comment below" })
-  map("n", m.comment_above,  function() H.insert_comment("above") end, { desc = "Add comment above" })
-  map("n", m.comment_eol,    function() H.insert_comment("eol")   end, { desc = "Add comment at end of line" })
-  map("n", m.uncomment_auto, function() H.uncomment_auto()        end, { desc = "Auto detect and uncomment" })
+  map("n", m.line_add_below,  function() H.insert_comment("below") end, { desc = "Add comment below" })
+  map("n", m.line_add_above,  function() H.insert_comment("above") end, { desc = "Add comment above" })
+  map("n", m.line_add_eol,    function() H.insert_comment("eol")   end, { desc = "Add comment at end of line" })
+  map("n", m.uncomment_auto,  function() H.uncomment_auto()        end, { desc = "Auto detect and uncomment" })
 
-  map("n", m.invert, op_invert, { expr = true, desc = "Invert comment by motion" })
-  map("x", m.invert, op_invert, { expr = true, desc = "Invert comment selection" })
+  map("n", m.line_invert, op_invert, { expr = true, desc = "Invert comment by motion" })
+  map("x", m.line_invert, op_invert, { expr = true, desc = "Invert comment selection" })
 
-  map({ "n", "x" }, m.comment_force_add,    op_add, { expr = true, desc = "Force add line comment" })
-  map({ "n", "x" }, m.comment_force_remove, op_rmv, { expr = true, desc = "Force remove line comment" })
+  map({ "n", "x" }, m.line_force_add,    op_force_add, { expr = true, desc = "Force add line comment" })
+  map({ "n", "x" }, m.line_force_remove, op_force_rmv, { expr = true, desc = "Force remove line comment" })
   -- stylua: ignore end
 
   map(
-    m.comment_visual == m.textobject_line and "o" or { "o", "x" },
-    m.textobject_line,
+    m.line_toggle_visual == m.line_textobject and "o" or { "o", "x" },
+    m.line_textobject,
     '<cmd>lua require("celeste_comment").H.textobject_linewise()<cr>',
     { desc = "Linewise comment textobject" }
   )
   map(
-    m.block_visual == m.textobject_block and "o" or { "o", "x" },
-    m.textobject_block,
+    m.block_toggle_visual == m.block_textobject and "o" or { "o", "x" },
+    m.block_textobject,
     '<cmd>lua require("celeste_comment").H.textobject_blockwise()<cr>',
     { desc = "Block comment textobject" }
   )
   map(
     { "o", "x" },
-    m.textobject_auto,
+    m.auto_textobject,
     '<cmd>lua require("celeste_comment").H.textobject_auto()<cr>',
     { desc = "Auto line/block textobject" }
   )
 
-  map("n", m.cursor_sticky_dot, function()
+  map("n", m.dot_repeat, function()
     H.track_cursor_state()
     return "."
   end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
 
-  map("i", m.comment_line_insert, function()
+  map("i", m.line_toggle_insert, function()
     H.track_cursor_state()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
