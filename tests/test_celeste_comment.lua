@@ -83,6 +83,9 @@ local T = new_set({
               comment_above = "gcO",
               comment_eol = "gcA",
               invert = "gcI",
+              comment_force_add = "gC",
+              comment_force_remove = "gU",
+              cursor_sticky_dot = ".",
             },
             hooks = nil,
           })
@@ -93,7 +96,8 @@ local T = new_set({
   },
 })
 
-local H = require("celeste_comment")._H
+local H = require("celeste_comment").H
+local M = require("celeste_comment")
 
 local apply = function(line, edits)
   local lines = { line }
@@ -1083,6 +1087,89 @@ T["edits"]["make_block_partial_edits"] = function()
   eq(edits[2].range[4], 8)
   eq(#edits[2].text, 1)
   eq(edits[2].text, { " */" })
+end
+
+T["edits"]["compute_line_edits_actions"] = function()
+  local ACT = M.ACT
+  local csi = H.make_csi({ { "// ", "" } })
+  local cfg = {}
+
+  -- kToggle: all uncommented → all comment
+  local lines = { "hello", "world" }
+  local edits = H.compute_line_edits(lines, { 0, 0, 1, 5 }, "line", csi, cfg, ACT.kToggle)
+  H.apply_edits(lines, edits)
+  eq(lines, { "// hello", "// world" })
+
+  -- kToggle: all commented → all uncomment
+  lines = { "// hello", "// world" }
+  edits = H.compute_line_edits(lines, { 0, 0, 1, 11 }, "line", csi, cfg, ACT.kToggle)
+  H.apply_edits(lines, edits)
+  eq(lines, { "hello", "world" })
+
+  -- kToggle: mixed → all comment
+  lines = { "hello", "// world" }
+  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kToggle)
+  H.apply_edits(lines, edits)
+  eq(lines, { "// hello", "// // world" })
+
+  -- kInvert: per-line toggle
+  lines = { "hello", "// world" }
+  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kInvert)
+  H.apply_edits(lines, edits)
+  eq(lines, { "// hello", "world" })
+
+  -- kForceAdd: all get comment (already-commented get another layer)
+  lines = { "hello", "// world" }
+  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kForceAdd)
+  H.apply_edits(lines, edits)
+  eq(lines, { "// hello", "// // world" })
+
+  -- kForceRemove: only commented lines get uncommented
+  lines = { "hello", "// world" }
+  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kForceRemove)
+  H.apply_edits(lines, edits)
+  eq(lines, { "hello", "world" })
+end
+
+T["edits"]["compute_block_edits_actions"] = function()
+  local ACT = M.ACT
+  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
+  local cfg = {}
+
+  -- kToggle: no existing block → add
+  local lines = { "hello" }
+  local edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kToggle)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "/* hello */")
+
+  -- kToggle: existing block → remove
+  lines = { "/* hello */" }
+  edits = H.compute_block_edits(lines, { 0, 0, 0, 11 }, "line", csi, cfg, ACT.kToggle)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "hello")
+
+  -- kForceAdd: no existing → add
+  lines = { "hello" }
+  edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kForceAdd)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "/* hello */")
+
+  -- kForceAdd: existing block → add nested
+  lines = { "/* hello */" }
+  edits = H.compute_block_edits(lines, { 0, 0, 0, 11 }, "line", csi, cfg, ACT.kForceAdd)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "/* /* hello */ */")
+
+  -- kForceRemove: existing block → remove
+  lines = { "/* hello */" }
+  edits = H.compute_block_edits(lines, { 0, 0, 0, 11 }, "line", csi, cfg, ACT.kForceRemove)
+  H.apply_edits(lines, edits)
+  eq(lines[1], "hello")
+
+  -- kForceRemove: no block → skip
+  lines = { "hello" }
+  edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kForceRemove)
+  eq(edits, nil)
 end
 
 -- line_comment_no_indent tests ───────────────────────────────────────────────
@@ -2486,7 +2573,7 @@ T["textobject treesitter"] = new_set()
 local ts_comment_at_cursor = function(pos)
   if pos then set_cursor(unpack(pos)) end
   return child.lua_func(function()
-    local _H = require("celeste_comment")._H
+    local _H = require("celeste_comment").H
     local cursor = _H.make_cursor(0)
     return _H.textobject_comment_at_cursor(cursor)
   end)
@@ -2637,75 +2724,6 @@ T["textobject treesitter"]["fallback to text match impl while disable textobj_tr
   child.b.celeste_comment_config = { textobj_treesitter_detect = false }
   feed("gbgb")
   eq(get_lines(), { "// hello world" })
-end
-
--- invert tests ────────────────────────────────────────────────────────────────
-
-T["invert"] = new_set()
-
-T["invert"]["works"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "// a" })
-  set_cursor(1, 3)
-  feed("gcI_")
-  eq(get_lines(), { "a" })
-  eq(get_cursor(), { 1, 0 })
-  feed("gcI_")
-  eq(get_lines(), { "// a" })
-  eq(get_cursor(), { 1, 3 })
-
-  set_lines({ "//a", "b", "//c", "d", "//d" })
-  set_cursor(1, 2)
-  feed("gcI", "4j")
-  eq(get_lines(), { "a", "// b", "c", "// d", "d" })
-  eq(get_cursor(), { 1, 0 })
-  feed("gcI", "4j")
-  eq(get_lines(), { "// a", "b", "// c", "d", "// d" })
-  eq(get_cursor(), { 1, 3 })
-end
-
-T["invert"]["works with special cms"] = function()
-  child.bo.filetype = "unknown"
-  child.b.celeste_comment_config = { fallback_to_block = "never" }
-  child.bo.commentstring = "<!--%s-->"
-  set_lines({ "a", "<!--b-->", " c" })
-  set_cursor(3, 1)
-  feed("gcI", "2k")
-  eq(get_lines(), { "<!-- a -->", "b", "<!--  c -->" })
-  eq(get_cursor(), { 3, 6 })
-
-  child.bo.commentstring = "%s !@#"
-  set_lines({ "aaaa", "bbbb!@#", "ccc" })
-  selection(1, 0, 3, 2)
-  feed("gcI")
-  eq(get_lines(), { "aaaa !@#", "bbbb", "ccc !@#" })
-  eq(get_cursor(), { 3, 2 })
-end
-
-T["invert"]["respect ignore_empty_lines"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ "    # a", "", "    # b" })
-  set_cursor(1, 6)
-  feed("gcI", "2j")
-  eq(get_lines(), { "    a", "# ", "    b" })
-
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "    # a", "", "    # b" })
-  set_cursor(1, 6)
-  feed("gcI", "2j")
-  eq(get_lines(), { "    a", "    # ", "    b" })
-  eq(get_cursor(), { 1, 4 })
-  feed("gcI", "2j")
-  eq(get_lines(), { "    # a", "    ", "    # b" })
-  eq(get_cursor(), { 1, 6 })
-
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  feed("gcI", "2j")
-  eq(get_lines(), { "    a", "    ", "    b" })
-  eq(get_cursor(), { 1, 4 })
-  feed("gcI", "2j")
-  eq(get_lines(), { "    # a", "    ", "    # b" })
-  eq(get_cursor(), { 1, 6 })
 end
 
 -- keep cursor tests ──────────────────────────────────────────────────────────
@@ -3363,7 +3381,7 @@ T["referenced_from_vscode"]["normalize_insertion_point"] = function()
       lines[#lines + 1] = mixed[i]
     end
     local csi = H.make_csi({ { "# ", "" } })
-    local info = H.line_comment_info(lines, csi, cfg or {}, { 0 })
+    local info = H.line_comment_info(lines, csi, cfg or {}, { 0 }, 1)
     local off = vim.tbl_map(function(li) return li.offset end, info.lines)
     eq(off, expected)
   end
@@ -4075,7 +4093,7 @@ T["inline_multi_block"]["vib selects multi-line block precisely"] = function()
   child.bo.filetype = "cpp"
   child.bo.commentstring = "// %s"
   child.lua([[
-    vim.keymap.set("x", "ib", '<Cmd>lua require("celeste_comment").textobject_blockwise()<CR>')
+    vim.keymap.set("x", "ib", '<Cmd>lua require("celeste_comment").H.textobject_blockwise()<CR>')
   ]])
   set_lines({ "pre /* comment starts", "middle line", "ends here */ post" })
   set_cursor(2, 5)
@@ -4181,7 +4199,7 @@ end
 T["multi_line_comment_string"] = new_set()
 
 T["multi_line_comment_string"]["tomake_csi_single_string_backward_compat"] = function()
-  local H2 = require("celeste_comment")._H
+  local H2 = require("celeste_comment").H
   local csi = H2.make_csi({ { "//", "" } })
   eq(type(csi.tlrcs_esc), "table")
   eq(#csi.tlrcs_esc, 1)
@@ -4190,7 +4208,7 @@ T["multi_line_comment_string"]["tomake_csi_single_string_backward_compat"] = fun
 end
 
 T["multi_line_comment_string"]["tomake_csi_multi_token_sorted"] = function()
-  local H2 = require("celeste_comment")._H
+  local H2 = require("celeste_comment").H
   local csi = H2.make_csi({ { "//", "" }, { "///", "" }, { "//!", "" } })
   eq(csi.tlrcs_esc[1][1], vim.pesc("///"))
   eq(csi.tlrcs_esc[2][1], vim.pesc("//!"))
@@ -4563,6 +4581,147 @@ T["toggle_line_comment_at_insert_mode"]["works for rcs only cms"] = function(fal
   ins_f(4, 2, "   --", "  ", "  @")
   ins_f(5, 2, "   --", "  ", "  @")
   -- stylua: ignore end
+end
+
+-- Force add/remove comment ───────────────────────────────────────────────────
+
+T["force_comment"] = new_set()
+
+T["force_comment"]["force add works"] = function()
+  child.bo.commentstring = "// %s"
+  set_lines({ "hello", "// world" })
+  set_cursor(1, 0)
+  feed("gC", "j")
+  eq(get_lines(), { "// hello", "// // world" })
+  eq(get_cursor(), { 1, 3 })
+
+  feed(".")
+  eq(get_lines(), { "// // hello", "// // // world" })
+  eq(get_cursor(), { 1, 6 })
+
+  feed("V", "j", "gC")
+  eq(get_lines(), { "// // // hello", "// // // // world" })
+  eq(get_cursor(), { 2, 9 })
+end
+
+T["force_comment"]["force remove works"] = function()
+  child.bo.commentstring = "// %s"
+  set_lines({ "hello", "// world" })
+  set_cursor(2, 3)
+  feed("gU", "k")
+  eq(get_lines(), { "hello", "world" })
+  eq(get_cursor(), { 2, 0 })
+
+  feed(".")
+  eq(get_lines(), { "hello", "world" })
+  eq(get_cursor(), { 2, 0 })
+
+  set_lines({ "// hello", "  // ", "  ", "    // world" })
+  set_cursor(1, 2)
+  feed("V", "3j", "gU")
+  eq(get_lines(), { "hello", "  ", "  ", "    world" })
+  eq(get_cursor(), { 4, 2 })
+end
+
+T["force_comment"]["respect ignore_empty_lines"] = function()
+  child.bo.tabstop = 2
+  child.bo.commentstring = "// %s"
+
+  -- ForceAdd + always: blank lines skipped
+  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
+  set_lines({ "hello", "  ", "// world" })
+  set_cursor(1, 0)
+  feed("V", "2j", "gC")
+  eq(get_lines(), { "// hello", "  ", "// // world" })
+
+  -- ForceRemove + always: blank lines skipped, commented lines uncommented
+  set_lines({ "// hello", "  ", "// world" })
+  set_cursor(1, 0)
+  feed("V", "2j", "gU")
+  eq(get_lines(), { "hello", "  ", "world" })
+
+  -- ForceAdd + never: blank lines participate in alignment, rounding to tabstop
+  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
+  set_lines({ "   hello", " " })
+  set_cursor(1, 0)
+  feed("V", "j", "gC")
+  eq(get_lines(), { "//    hello", "//  " })
+
+  -- ForceAdd + mixed: blank lines excluded from alignment, min col from content
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
+  set_lines({ "   hello", " " })
+  set_cursor(1, 0)
+  feed("V", "j", "gC")
+  eq(get_lines(), { "  //  hello", "  // " })
+end
+
+-- invert tests ────────────────────────────────────────────────────────────────
+
+T["invert"] = new_set()
+
+T["invert"]["works"] = function()
+  child.bo.filetype = "cpp"
+  set_lines({ "// a" })
+  set_cursor(1, 3)
+  feed("gcI_")
+  eq(get_lines(), { "a" })
+  eq(get_cursor(), { 1, 0 })
+  feed("gcI_")
+  eq(get_lines(), { "// a" })
+  eq(get_cursor(), { 1, 3 })
+
+  set_lines({ "//a", "b", "//c", "d", "//d" })
+  set_cursor(1, 2)
+  feed("gcI", "4j")
+  eq(get_lines(), { "a", "// b", "c", "// d", "d" })
+  eq(get_cursor(), { 1, 0 })
+  feed("gcI", "4j")
+  eq(get_lines(), { "// a", "b", "// c", "d", "// d" })
+  eq(get_cursor(), { 1, 3 })
+end
+
+T["invert"]["works with special cms"] = function()
+  child.bo.filetype = "unknown"
+  child.b.celeste_comment_config = { fallback_to_block = "never" }
+  child.bo.commentstring = "<!--%s-->"
+  set_lines({ "a", "<!--b-->", " c" })
+  set_cursor(3, 1)
+  feed("gcI", "2k")
+  eq(get_lines(), { "<!-- a -->", "b", "<!--  c -->" })
+  eq(get_cursor(), { 3, 6 })
+
+  child.bo.commentstring = "%s !@#"
+  set_lines({ "aaaa", "bbbb!@#", "ccc" })
+  selection(1, 0, 3, 2)
+  feed("gcI")
+  eq(get_lines(), { "aaaa !@#", "bbbb", "ccc !@#" })
+  eq(get_cursor(), { 3, 2 })
+end
+
+T["invert"]["respect ignore_empty_lines"] = function()
+  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
+  set_lines({ "    # a", "", "    # b" })
+  set_cursor(1, 6)
+  feed("gcI", "2j")
+  eq(get_lines(), { "    a", "# ", "    b" })
+
+  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
+  set_lines({ "    # a", "", "    # b" })
+  set_cursor(1, 6)
+  feed("gcI", "2j")
+  eq(get_lines(), { "    a", "    # ", "    b" })
+  eq(get_cursor(), { 1, 4 })
+  feed("gcI", "2j")
+  eq(get_lines(), { "    # a", "    ", "    # b" })
+  eq(get_cursor(), { 1, 6 })
+
+  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
+  feed("gcI", "2j")
+  eq(get_lines(), { "    a", "    ", "    b" })
+  eq(get_cursor(), { 1, 4 })
+  feed("gcI", "2j")
+  eq(get_lines(), { "    # a", "    ", "    # b" })
+  eq(get_cursor(), { 1, 6 })
 end
 
 return T

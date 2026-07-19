@@ -47,6 +47,18 @@ M.FBK2BLOCK = {
   kIfLineCmsWrapped = "if_line_cms_wrapped",
 }
 
+---@enum Celeste.Comment.Action
+M.ACT = {
+  --- Toggle: if all lines commented → uncomment; else → comment.
+  kToggle = 1,
+  --- Invert: per-line toggle, each line independently commented or uncommented.
+  kInvert = 2,
+  --- Force add comment to all lines (already-commented lines get another layer).
+  kForceAdd = 3,
+  --- Force remove comment from lines that have them; skip uncommented lines.
+  kForceRemove = 4,
+}
+
 ---@class Celeste.Comment.TextEdit
 ---@field range Celeste.Comment.Range4
 ---@field text  string[]
@@ -99,9 +111,11 @@ M.FBK2BLOCK = {
 ---@field edits           Celeste.Comment.TextEdits
 ---@field cfg             Celeste.Comment.Opts
 ---@field ctype           Celeste.Comment.CommentType
+---@field action          Celeste.Comment.Action
 ---@field motion          Celeste.Comment.Motion
 ---@field csi             Celeste.Comment.CommentStringInfo
 ---@field lines           string[]
+---@field execution_opts? Celeste.Comment.ExecutionOpts
 ---@field o_use_set_text? boolean o: means output from user
 
 ---@class Celeste.Comment.Hooks.CmsConfResolver.Ctx
@@ -116,22 +130,24 @@ M.FBK2BLOCK = {
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
----@field comment?            string|string[] mode 'n', operator, default 'gc'
----@field comment_line?       string|string[] mode 'n', default 'gcc'
----@field comment_visual?     string|string[] mode 'x', default 'gc'
----@field comment_line_insert string|string[] mode 'i', toggle comment at current line in insert mode, '<C-/>'
----@field block?              string|string[] mode 'n', operator, default 'gb'
----@field block_line?         string|string[] mode 'n', default 'gbc'
----@field block_visual?       string|string[] mode 'x', default 'gb'
----@field textobject_line?    string|string[] mode 'o', linewise textobject, like 'gc', default ''
----@field textobject_block?   string|string[] mode 'o', blockwise textobject, like 'gb', default ''
----@field textobject_auto?    string|string[] mode 'o', auto detect textobject, default 'ga'
----@field comment_below?      string|string[] mode 'n', comment below, 'gco'
----@field comment_above?      string|string[] mode 'n', comment above, 'gcO'
----@field comment_eol?        string|string[] mode 'n', comment eol, 'gcA'
----@field uncomment_auto?     string|string[] mode 'n', auto detect and uncomment, 'gcu'
----@field invert?             string|string[] mode 'nx', invert comment per line, ''
----@field cursor_sticky_dot?  string|string[] mode 'n', default '.'
+---@field comment?              string|string[] mode 'n', operator, default 'gc'
+---@field comment_line?         string|string[] mode 'n', default 'gcc'
+---@field comment_visual?       string|string[] mode 'x', default 'gc'
+---@field comment_line_insert   string|string[] mode 'i', toggle comment at current line in insert mode, '<C-/>'
+---@field block?                string|string[] mode 'n', operator, default 'gb'
+---@field block_line?           string|string[] mode 'n', default 'gbc'
+---@field block_visual?         string|string[] mode 'x', default 'gb'
+---@field textobject_line?      string|string[] mode 'o', linewise textobject, like 'gc', default ''
+---@field textobject_block?     string|string[] mode 'o', blockwise textobject, like 'gb', default ''
+---@field textobject_auto?      string|string[] mode 'o', auto detect textobject, default 'ga'
+---@field comment_below?        string|string[] mode 'n', comment below, 'gco'
+---@field comment_above?        string|string[] mode 'n', comment above, 'gcO'
+---@field comment_eol?          string|string[] mode 'n', comment eol, 'gcA'
+---@field uncomment_auto?       string|string[] mode 'n', auto detect and uncomment, 'gcu'
+---@field invert?               string|string[] mode 'nx', invert comment per line, ''
+---@field comment_force_add?    string|string[] mode 'nx', force add line comment, ''
+---@field comment_force_remove? string|string[] mode 'nx', force remove line comment, ''
+---@field cursor_sticky_dot?    string|string[] mode 'n', default '.'
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor?                boolean default true
@@ -190,6 +206,8 @@ H.config = {
     comment_above           = "",
     comment_eol             = "",
     invert                  = "",
+    comment_force_add       = "",
+    comment_force_remove    = "",
 
     cursor_sticky_dot       = ".",
   },
@@ -698,9 +716,10 @@ end
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cfg    Celeste.Comment.Opts
 ---@param range  Celeste.Comment.Range4
+---@param action Celeste.Comment.Action
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.LineCommentInfo
-function H.line_comment_info(lines, csi, cfg, range, opts)
+function H.line_comment_info(lines, csi, cfg, range, action, opts)
   opts = opts or {}
   range = range or { 0 }
   ---@type Celeste.Comment.LineCommentInfo
@@ -776,7 +795,7 @@ function H.line_comment_info(lines, csi, cfg, range, opts)
   -- align to min visible column
   if not cfg.line_comment_no_indent then
     min_visible_col = min_visible_col == math.huge and 0 or (math.floor(min_visible_col / indent_size) * indent_size)
-    if not all_info.should_remove or opts.invert then
+    if not all_info.should_remove or action == M.ACT.kInvert then
       for i, line in ipairs(lines) do
         local info = all_info.lines[i]
         if not info.ignore then
@@ -844,33 +863,42 @@ function H.make_uncomment_edits(info, line, cfg)
   return edits
 end
 
----@param lines   string[]
----@param range   Celeste.Comment.Range4
----@param _motion Celeste.Comment.Motion
----@param csi     Celeste.Comment.CommentStringInfo
----@param cfg     Celeste.Comment.Opts
----@param opts?   Celeste.Comment.ExecutionOpts
+---@param lines  string[]
+---@param range  Celeste.Comment.Range4
+---@param motion Celeste.Comment.Motion
+---@param csi    Celeste.Comment.CommentStringInfo
+---@param cfg    Celeste.Comment.Opts
+---@param action Celeste.Comment.Action
+---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.compute_line_edits(lines, range, _motion, csi, cfg, opts)
+function H.compute_line_edits(lines, range, motion, csi, cfg, action, opts)
   opts = opts or {}
   local all_edits = {} ---@type Celeste.Comment.TextEdits
-  local all_info = H.line_comment_info(lines, csi, cfg, range, opts)
+  local all_info = H.line_comment_info(lines, csi, cfg, range, action, opts)
 
   for i, line in ipairs(lines) do
     local info = all_info.lines[i]
     if not info.ignore then
-      local edits, should_remove
+      local edits
 
-      if not opts.invert then
-        should_remove = all_info.should_remove
-      else
-        should_remove = info.commented
-      end
-
-      if should_remove then
-        edits = H.make_uncomment_edits(info, line, cfg)
-      else
+      if action == M.ACT.kToggle then
+        if all_info.should_remove then
+          edits = H.make_uncomment_edits(info, line, cfg)
+        else
+          edits = H.make_comment_edits(info, line, cfg, range, opts)
+        end
+      elseif action == M.ACT.kInvert then
+        if info.commented then
+          edits = H.make_uncomment_edits(info, line, cfg)
+        else
+          edits = H.make_comment_edits(info, line, cfg, range, opts)
+        end
+      elseif action == M.ACT.kForceAdd then
         edits = H.make_comment_edits(info, line, cfg, range, opts)
+      else
+        -- kForceRemove
+        assert(action == M.ACT.kForceRemove, "unknown action")
+        if info.commented then edits = H.make_uncomment_edits(info, line, cfg) end
       end
 
       if edits then
@@ -1056,18 +1084,31 @@ end
 ---@param motion Celeste.Comment.Motion
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cfg?   Celeste.Comment.Opts
+---@param action Celeste.Comment.Action
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.compute_block_edits(lines, range, motion, csi, cfg, opts)
+function H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
   local info = H.block_comment_info(lines, csi, range[2], range[4], motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
 
-  if info then
-    edits = H.make_block_uncomment_edits(info)
-  elseif motion == "char" then
-    edits = H.make_block_partial_edits(lines, csi, range, opts)
+  if action == M.ACT.kToggle or action == M.ACT.kInvert then
+    if info then
+      edits = H.make_block_uncomment_edits(info)
+    elseif motion == "char" then
+      edits = H.make_block_partial_edits(lines, csi, range, opts)
+    else
+      edits = H.make_block_comment_edits(lines, csi, range, opts)
+    end
+  elseif action == M.ACT.kForceAdd then
+    if motion == "char" then
+      edits = H.make_block_partial_edits(lines, csi, range, opts)
+    else
+      edits = H.make_block_comment_edits(lines, csi, range, opts)
+    end
   else
-    edits = H.make_block_comment_edits(lines, csi, range, opts)
+    -- kForceRemove
+    assert(action == M.ACT.kForceRemove, "unknown action")
+    if info then edits = H.make_block_uncomment_edits(info) end
   end
   return edits
 end
@@ -1194,34 +1235,37 @@ function H.compute_cursor_state(state, edits, lines, range, csi)
   state.cursor = H.make_pos(state.cursor.buf, math.max(0, nrow), math.max(0, ncol))
 end
 
----@param cfg Celeste.Comment.Opts
----@param ctype Celeste.Comment.CommentType
----@param lines string[]
----@param csi Celeste.Comment.CommentStringInfo
----@param range Celeste.Comment.Range4
+---@param cfg    Celeste.Comment.Opts
+---@param ctype  Celeste.Comment.CommentType
+---@param action Celeste.Comment.Action
+---@param lines  string[]
+---@param csi    Celeste.Comment.CommentStringInfo
+---@param range  Celeste.Comment.Range4
 ---@param motion Celeste.Comment.Motion
 ---@param cursor vim.Pos
----@param opts? Celeste.Comment.ExecutionOpts
-function H.togglex(cfg, ctype, lines, csi, range, motion, cursor, opts)
+---@param opts?  Celeste.Comment.ExecutionOpts
+function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, opts)
   opts = opts or {}
   local edits ---@type Celeste.Comment.TextEdits
   if ctype == M.CMT.kBlock then
-    edits = H.compute_block_edits(lines, range, motion, csi, cfg, opts)
+    edits = H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
   else
-    edits = H.compute_line_edits(lines, range, motion, csi, cfg, opts)
+    edits = H.compute_line_edits(lines, range, motion, csi, cfg, action, opts)
   end
   assert(edits, "unexpected error, nil edits")
 
   ---@type Celeste.Comment.Hooks.PreCommitEdits.Ctx
   local ctx = {
-    cursor = cursor,
     cfg = cfg,
     ctype = ctype,
-    edits = edits,
-    motion = motion,
-    range = range,
-    csi = csi,
+    action = action,
+    cursor = cursor,
     lines = lines,
+    csi = csi,
+    range = range,
+    motion = motion,
+    edits = edits,
+    execution_opts = opts,
   }
   if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
@@ -1489,7 +1533,7 @@ function H.compute_x_comment_range(cfg, cursor)
 end
 
 --- Auto-detect linewise or blockwise textobject
-function M.textobject_auto()
+function H.textobject_auto()
   if H.is_disabled() then return end
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
@@ -1513,16 +1557,16 @@ function H.uncomment_auto()
   local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
-  H.togglex(cfg, ctype, lines, csi, range, ctype == M.CMT.kLine and "line" or "char", cursor)
+  H.make_actionx(cfg, ctype, M.ACT.kToggle, lines, csi, range, ctype == M.CMT.kLine and "line" or "char", cursor)
 end
 
 -- Textobject: select contiguous linewise comment block
-function M.textobject_linewise()
+function H.textobject_linewise()
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
 
-  if cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then return M.textobject_auto() end
+  if cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then return H.textobject_auto() end
 
   local cursor = H.make_cursor(0)
 
@@ -1532,7 +1576,7 @@ function M.textobject_linewise()
 end
 
 ---Textobject: select blockwise comment that surrounds the cursor.
-function M.textobject_blockwise()
+function H.textobject_blockwise()
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
@@ -1545,7 +1589,7 @@ function M.textobject_blockwise()
 end
 
 ---@param kind 'above'|'below'|'eol'
-function M.insert_comment(kind)
+function H.insert_comment(kind)
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
@@ -1582,11 +1626,12 @@ function M.insert_comment(kind)
 end
 
 ---@param cursor vim.Pos
----@param range Celeste.Comment.Range4
----@param ctype Celeste.Comment.CommentType
+---@param range  Celeste.Comment.Range4
+---@param ctype  Celeste.Comment.CommentType
+---@param action Celeste.Comment.Action
 ---@param motion Celeste.Comment.Motion
----@param opts? Celeste.Comment.ExecutionOpts
-function H.toggle_range(cursor, range, ctype, motion, opts)
+---@param opts?  Celeste.Comment.ExecutionOpts
+function H.make_action_range(cursor, range, ctype, action, motion, opts)
   if H.is_disabled() then return end
   opts = opts or {}
 
@@ -1598,7 +1643,7 @@ function H.toggle_range(cursor, range, ctype, motion, opts)
   local csi, resolved_ctype = H.resolve(cursor, ctype, cfg, range)
   if not csi or not resolved_ctype then return end
 
-  H.togglex(cfg, resolved_ctype, lines, csi, range, motion, cursor, opts)
+  H.make_actionx(cfg, resolved_ctype, action, lines, csi, range, motion, cursor, opts)
 end
 
 --- Track cursor position
@@ -1607,10 +1652,11 @@ function M.track_cursor() H.track_cursor_state() end
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.ExecutionOpts
 ---@return fun():string
-function M.make_operator(ctype, opts)
+function H.make_operator(ctype, opts)
   opts = opts or {}
   local s = type(opts.suffix) == "string" and opts.suffix or ""
-  local o = { invert = opts.invert, cfg = opts.cfg }
+  local action = opts.action or M.ACT.kToggle
+  local o = { cfg = opts.cfg }
 
   ---@param motion Celeste.Comment.Motion
   local f = function(motion)
@@ -1620,7 +1666,7 @@ function M.make_operator(ctype, opts)
     if not range then return end
 
     -- TODO: should we always expand selection to line boundaries if fallback to block?
-    H.toggle_range(cursor, range, ctype, motion, o)
+    H.make_action_range(cursor, range, ctype, action, motion, o)
   end
 
   return function()
@@ -1682,11 +1728,13 @@ function M.setup(config)
   end
 
   -- stylua: ignore start
-  local op_line   = M.make_operator(M.CMT.kLine)
-  local op_line_  = M.make_operator(M.CMT.kLine, { suffix = "_" })
-  local op_block  = M.make_operator(M.CMT.kBlock)
-  local op_block_ = M.make_operator(M.CMT.kBlock, { suffix = "_" })
-  local op_invert = M.make_operator(M.CMT.kLine, { invert = true })
+  local op_line   = H.make_operator(M.CMT.kLine)
+  local op_line_  = H.make_operator(M.CMT.kLine, { suffix = "_" })
+  local op_block  = H.make_operator(M.CMT.kBlock)
+  local op_block_ = H.make_operator(M.CMT.kBlock, { suffix = "_" })
+  local op_invert = H.make_operator(M.CMT.kLine, { action = M.ACT.kInvert })
+  local op_add    = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceAdd })
+  local op_rmv    = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceRemove })
 
   map("n", m.comment,        op_line,   { expr = true, desc = "Comment by motion" })
   map("n", m.comment_line,   op_line_,  { expr = true, desc = "Comment current line" })
@@ -1695,31 +1743,34 @@ function M.setup(config)
   map("n", m.block_line,     op_block_, { expr = true, desc = "Block comment current line" })
   map("x", m.block_visual,   op_block,  { expr = true, desc = "Block comment selection" })
 
-  map("n", m.comment_below,  function() M.insert_comment("below") end, { desc = "Add comment below" })
-  map("n", m.comment_above,  function() M.insert_comment("above") end, { desc = "Add comment above" })
-  map("n", m.comment_eol,    function() M.insert_comment("eol")   end, { desc = "Add comment at end of line" })
+  map("n", m.comment_below,  function() H.insert_comment("below") end, { desc = "Add comment below" })
+  map("n", m.comment_above,  function() H.insert_comment("above") end, { desc = "Add comment above" })
+  map("n", m.comment_eol,    function() H.insert_comment("eol")   end, { desc = "Add comment at end of line" })
   map("n", m.uncomment_auto, function() H.uncomment_auto()        end, { desc = "Auto detect and uncomment" })
 
   map("n", m.invert, op_invert, { expr = true, desc = "Invert comment by motion" })
   map("x", m.invert, op_invert, { expr = true, desc = "Invert comment selection" })
+
+  map({ "n", "x" }, m.comment_force_add,    op_add, { expr = true, desc = "Force add line comment" })
+  map({ "n", "x" }, m.comment_force_remove, op_rmv, { expr = true, desc = "Force remove line comment" })
   -- stylua: ignore end
 
   map(
     m.comment_visual == m.textobject_line and "o" or { "o", "x" },
     m.textobject_line,
-    '<cmd>lua require("celeste_comment").textobject_linewise()<cr>',
+    '<cmd>lua require("celeste_comment").H.textobject_linewise()<cr>',
     { desc = "Linewise comment textobject" }
   )
   map(
     m.block_visual == m.textobject_block and "o" or { "o", "x" },
     m.textobject_block,
-    '<cmd>lua require("celeste_comment").textobject_blockwise()<cr>',
+    '<cmd>lua require("celeste_comment").H.textobject_blockwise()<cr>',
     { desc = "Block comment textobject" }
   )
   map(
     { "o", "x" },
     m.textobject_auto,
-    '<cmd>lua require("celeste_comment").textobject_auto()<cr>',
+    '<cmd>lua require("celeste_comment").H.textobject_auto()<cr>',
     { desc = "Auto line/block textobject" }
   )
 
@@ -1732,11 +1783,11 @@ function M.setup(config)
     H.track_cursor_state()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
-    H.toggle_range(cursor, range, M.CMT.kLine, "line", { insmode = true })
+    H.make_action_range(cursor, range, M.CMT.kLine, M.ACT.kToggle, "line", { insmode = true })
   end, { desc = "Toggle line comment at insert mode" })
 end
 
 -- test only
+M.H = H
 
-M._H = H
 return M
