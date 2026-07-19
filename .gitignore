@@ -1,3 +1,7 @@
 .git
 Session.vim
 doc/tags
+scripts/panvimdoc.sh
+scripts/panvimdoc.lua
+scripts/include-files.lua
+scripts/skip-blocks.lua

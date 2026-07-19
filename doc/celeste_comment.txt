@@ -1,0 +1,569 @@
+*celeste_comment.txt*
+                                 For NVIM v0.12.0    Last change: 2026 July 20
+
+==============================================================================
+Table of Contents                          *celeste_comment-table-of-contents*
+
+  - Introduction                                |celeste_comment-introduction|
+  - Features                                        |celeste_comment-features|
+  - Comparison                                    |celeste_comment-comparison|
+  - Requirements                                |celeste_comment-requirements|
+  - Installation                                |celeste_comment-installation|
+  - Configuration                              |celeste_comment-configuration|
+  - API                                                  |celeste_comment-api|
+  - Recipes                                          |celeste_comment-recipes|
+  - Limitations                                  |celeste_comment-limitations|
+  - Acknowledgments                          |celeste_comment-acknowledgments|
+
+INTRODUCTION                                    *celeste_comment-introduction*
+
+celeste_comment.nvim — VSCode-style commenting plugin for Neovim with support
+for line/block comment, textobjects, force add/remove, real cursor tracking and
+more.
+
+`celeste_comment.nvim` provides a comprehensive commenting experience inspired
+by VSCode’s comment implementation. It offers line and block comment toggles,
+textobject selection, force add/remove operations, and precise cursor tracking
+through all edit operations. The plugin uses a **TextEdits** model where every
+operation is defined as range+text pairs. This allows accurate cursor position
+tracking across complex multi-line edits and dot-repeat support.
+
+
+FEATURES                                            *celeste_comment-features*
+
+- Line comment toggle
+- Block comment toggle
+- Linewise / Blockwise / Auto-detect comment textobject
+- Force add / Force remove line comment
+- Invert comment per line
+- VSCode-style indent algorithm
+- Dot-repeatable, count support
+- Real cursor sticky — tracks cursor position through every edit
+- Insert comment above / below / at end of line
+- Insert mode line toggle
+- Action types — Toggle, Invert, Force Add, Force Remove
+- Case insensitive comment detection
+- Relaxed block detection
+- Multi line comment string detection (e.g. Rust `//`, `///`, `//!`)
+- 40+ built-in language comment strings
+- Custom comment string resolver hook
+
+
+COMPARISON                                        *celeste_comment-comparison*
+
+  -------------------------------------------------------------------------------------------------
+  Feature         celeste_comment.nvim   Neovim      Comment.nvim   mini.comment   vim-commentary
+                                         built-in                                  
+  --------------- ---------------------- ----------- -------------- -------------- ----------------
+  Line comment    yes                    yes         yes            yes            yes
+
+  Block comment   yes                    no          yes            no             no
+
+  Force add       yes                    no          no             no             no
+  comment                                                                          
+
+  Force remove    yes                    no          no             no             no
+  comment                                                                          
+
+  Dot-repeat      yes                    yes         yes            yes            yes
+
+  Count           yes                    yes         yes            yes            yes
+
+  Keep cursor     yes                    no          partial        no             no
+
+  Invert per line yes                    no          no             no             no
+
+  Line textobject yes                    yes         no             yes            yes
+
+  Block           yes                    no          no             no             no
+  textobject                                                                       
+
+  Textobject auto yes                    no          no             no             no
+
+  Uncomment auto  yes                    no          no             no             yes
+  -------------------------------------------------------------------------------------------------
+
+REQUIREMENTS                                    *celeste_comment-requirements*
+
+- Neovim **>= 0.12**
+
+
+INSTALLATION                                    *celeste_comment-installation*
+
+
+  [!IMPORTANT] Breaking changes may occur. Pin to a specific version or commit is
+  recommended.
+
+VIM.PACK (NEOVIM 0.12+) ~
+
+>lua
+    vim.pack.add({ src = "https://github.com/celeste3z/celeste_comment.nvim", name = "celeste_comment" })
+    require("celeste_comment").setup({})
+<
+
+
+LAZY.NVIM ~
+
+>lua
+    { "celeste3z/celeste_comment.nvim", opts = {} }
+<
+
+
+CONFIGURATION                                  *celeste_comment-configuration*
+
+
+DEFAULT CONFIG ~
+
+>lua
+    {
+      keep_cursor            = true,  -- Restore cursor position after commenting
+      insert_space           = true,  -- Insert space between comment marker and text
+      line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
+      case_insensitive       = false, -- Match comment markers case-insensitively
+      block_relaxed_detect   = true,  -- Trim whitespace before detecting block tokens
+      block_textobj_nlines   = 200,   -- Max lines to search for block comment pairs
+      ignore_empty_lines     = "always", -- How to handle empty lines (see 6.2)
+      fallback_to_block      = "if_line_cms_wrapped", -- Fallback line→block comment
+      log_level              = vim.log.levels.OFF, -- Log level (nvim-0.13+)
+    
+      mappings = {
+        line_toggle          = "gc",
+        line_toggle_cur      = "gcc",
+        line_toggle_visual   = "gc",
+        line_toggle_insert   = "",
+        block_toggle         = "gb",
+        block_toggle_cur     = "gbc",
+        block_toggle_visual  = "gb",
+        line_textobject      = "gc",
+        block_textobject     = "gb",
+        auto_textobject      = "",
+        uncomment_auto       = "",
+        line_add_below       = "",
+        line_add_above       = "",
+        line_add_eol         = "",
+        line_invert          = "",
+        line_force_add       = "",
+        line_force_remove    = "",
+        dot_repeat           = ".",
+      },
+    
+      hooks = {
+        pre_commit_edits     = nil,
+        cms_conf_resolver    = nil,
+      },
+    }
+<
+
+
+OPTIONS ~
+
+All options except `mappings` can be overridden per buffer via
+`vim.b.celeste_comment_config` (see 6.5).
+
+
+KEEP_CURSOR
+
+Default: `true`. Restores the cursor to its computed position after commenting.
+The plugin tracks the original cursor, adjusts it through each edit operation,
+and restores it. When `false`, the cursor stays where Vim places it after the
+edit.
+
+
+INSERT_SPACE
+
+Default: `true`. Controls whether a space is inserted between the trimmed
+comment marker and the text content. With `commentstring = "// %s"`:
+
+- `true` → `"// hello"`
+- `false` → `"//hello"`
+
+
+LINE_COMMENT_NO_INDENT
+
+Default: `false`. When `true`, the comment marker is placed at column 0 instead
+of preserving the line’s indentation. With line `" hello"`:
+
+- `false` → `"  // hello"` (preserve indent)
+- `true` → `"//   hello"` (column 0)
+
+
+CASE_INSENSITIVE
+
+Default: `false`. When `true`, comment markers are matched case-insensitively.
+This helps with languages like Batch where `@REM` and `@rem` are equivalent.
+With `commentstring = "@REM %s"`:
+
+- `false` → `"@REM"` matches only
+- `true` → `"@REM"`, `"@rem"`, `"@rEm"` all match
+
+
+BLOCK_RELAXED_DETECT
+
+Default: `true`. When `true`, leading and trailing whitespace is trimmed from
+the selection range before matching block comment tokens. With selection `" /*
+hello */ "` (extra spaces around the comment):
+
+- `true` → comment detected, remove succeeds
+- `false` → detection fails (spaces included in range)
+
+
+BLOCK_TEXTOBJ_NLINES
+
+Default: `200`. Maximum number of lines to search in each direction when using
+the block textobject. Only used when no treesitter query is available for the
+buffer.
+
+
+IGNORE_EMPTY_LINES
+
+Default: `"always"`. Controls how blank/whitespace-only lines are handled
+during comment toggle.
+
+  ------------------------------------------------------------------------
+  Value    Toggle blank      Participate in          Aligned when
+           lines?            alignment?              all-blank?
+  -------- ----------------- ----------------------- ---------------------
+  never    yes               yes                     yes
+
+  mixed    yes               no                      yes
+
+  always   no                no                      no
+  ------------------------------------------------------------------------
+With `commentstring = "# %s"` and line `" "` (2 spaces, no content):
+
+- `"never"` → `"  # "` (commented, aligned)
+- `"mixed"` → `"  # "` (commented, excluded from alignment)
+- `"always"` → `"  "` (skipped entirely)
+    VSCode equivalent: `editor.comments.ignoreEmptyLines`.
+- `false` → `"never"` (toggle and align empty lines)
+- `true` → `"always"` (skip empty lines entirely)
+
+
+  [!NOTE] `"mixed"` has no VSCode equivalent — it’s unique to
+  celeste_comment.
+
+FALLBACK_TO_BLOCK
+
+Default: `"if_line_cms_wrapped"`. Controls when the plugin falls back from line
+comment to block comment mode.
+
+- `"never"`: A wrapping comment string (e.g. `<!-- %s -->`) is treated as
+    a line comment. Each line is wrapped individually.
+- `"if_line_cms_wrapped"`: Fallback to block comment when the line comment
+    wraps content.
+    With `commentstring = "<!-- %s -->"` and lines `"aaa"`, `"bbb"`:
+- `"never"` — each line wrapped individually:
+
+>lua
+    <!-- aaa -->
+    <!-- bbb -->
+<
+
+- `"if_line_cms_wrapped"` — entire region wrapped as block:
+
+>lua
+    <!-- aaa
+    bbb -->
+<
+
+
+LOG_LEVEL
+
+Default: `vim.log.levels.OFF`. Only available on nvim-0.13+. Ignored on older
+versions.
+
+
+MAPPINGS ~
+
+Set a mapping to `""` to disable it. Mappings cannot be overridden per buffer
+— they are fixed at `setup()` time. Use buffer-local configuration (see 6.5)
+only for non-mapping options.
+
+  --------------------------------------------------------------------------
+  Field                   Mode   Default   Description
+  ----------------------- ------ --------- ---------------------------------
+  line_toggle             n      gc        Line comment by motion
+
+  line_toggle_cur         n      gcc       Line comment current line
+
+  line_toggle_visual      x      gc        Line comment visual selection
+
+  line_toggle_insert      i      —         Insert mode line toggle
+
+  block_toggle            n      gb        Block comment by motion
+
+  block_toggle_cur        n      gbc       Block comment current line
+
+  block_toggle_visual     x      gb        Block comment visual selection
+
+  line_textobject         o      gc        Linewise comment textobject
+
+  block_textobject        o      gb        Blockwise comment textobject
+
+  auto_textobject         o,x    —         Auto detect textobject
+
+  uncomment_auto          n      —         Auto detect and uncomment
+
+  line_add_below          n      —         Insert comment below
+
+  line_add_above          n      —         Insert comment above
+
+  line_add_eol            n      —         Insert comment at end of line
+
+  line_invert             n,x    —         Invert comment per line
+
+  line_force_add          n,x    —         Force add line comment
+
+  line_force_remove       n,x    —         Force remove line comment
+
+  dot_repeat              n      .         Cursor sticky dot-repeat
+  --------------------------------------------------------------------------
+
+HOOKS ~
+
+Options in the `hooks` table can be overridden per buffer (see 6.5).
+
+
+PRE_COMMIT_EDITS
+
+Called before edits are applied to the buffer. Receives a context table:
+
+>lua
+    ---@class Celeste.Comment.Hooks.PreCommitEdits.Ctx
+    ---@field cursor  vim.Pos
+    ---@field range   Celeste.Comment.Range4
+    ---@field edits   Celeste.Comment.TextEdits
+    ---@field cfg     Celeste.Comment.Opts
+    ---@field ctype   Celeste.Comment.CommentType
+    ---@field action  Celeste.Comment.Action
+    ---@field motion  Celeste.Comment.Motion
+    ---@field csi     Celeste.Comment.CommentStringInfo
+    ---@field lines   string[]
+<
+
+Example — force use `nvim_buf_set_text` instead of `lockmarks +
+nvim_buf_set_lines`:
+
+>lua
+    vim.b.celeste_comment_config = {
+      hooks = {
+        pre_commit_edits = function(ctx)
+          ctx.o_use_set_text = true
+        end,
+      },
+    }
+<
+
+
+CMS_CONF_RESOLVER
+
+Custom comment string resolver. Called to resolve the comment string for a
+given buffer/language. Set `ctx.o_cms_conf` to override:
+
+>lua
+    ---@class Celeste.Comment.Hooks.CmsConfResolver.Ctx
+    ---@field cursor      vim.Pos
+    ---@field range?      Celeste.Comment.Range4
+    ---@field cfg         Celeste.Comment.Opts
+    ---@field o_cms_conf? Celeste.Comment.CommentStringConf
+    ---@field tree?       vim.treesitter.LanguageTree
+<
+
+Example:
+
+>lua
+    vim.b.celeste_comment_config = {
+      hooks = {
+        ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
+        cms_conf_resolver = function(ctx)
+          ctx.o_cms_conf = { nil, "/* %s */" }
+        end
+      }
+    }
+<
+
+
+BUFFER-LOCAL CONFIGURATION ~
+
+Non-mapping options can be overridden per buffer via
+`vim.b.celeste_comment_config`. The buffer config is merged with the global
+config, so you only need to specify the fields you want to override.
+
+>lua
+    vim.b.celeste_comment_config = {
+      keep_cursor = false,
+      insert_space = false,
+    }
+<
+
+Mappings and the mapping infrastructure are fixed at `setup()` time and cannot
+be overridden per buffer.
+
+
+CUSTOM COMMENT STRINGS (CMS_CONFS) ~
+
+The plugin resolves comment strings through a chain of resolvers (high to low
+priority):
+
+1. **hooks.cms_conf_resolver** — Full control, highest priority.
+2. **cms_confs table** — Override per filetype. Supports multi-token line
+comments and dynamic resolvers:
+
+>lua
+    require("celeste_comment").setup({
+      cms_confs = {
+        rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
+        mylang = function(ctx)
+          return { "#%s" }
+        end,
+      },
+    })
+<
+
+1. **cms_confs = false** — Disable built-in table entirely.
+2. **Built-in defaults** — 40+ languages supported.
+3. **Buffer fallback** — Uses `vim.bo.commentstring` and
+`vim.b.celeste_comment_block_commentstring`.
+
+
+API                                                      *celeste_comment-api*
+
+
+M.SETUP(CONFIG) ~
+
+Initialize the plugin with configuration. Must be called once.
+
+>lua
+    require("celeste_comment").setup({ keep_cursor = true })
+<
+
+
+M.TRACK_CURSOR() ~
+
+Tracks cursor position for the next edit operation. Useful in custom mappings.
+
+>lua
+    vim.keymap.set("n", ".", function()
+      require("celeste_comment").track_cursor()
+      return "."
+    end, { expr = true })
+<
+
+
+ACTION ENUM ~
+
+>lua
+    ---@enum Celeste.Comment.Action
+    M.ACT = {
+      kToggle      = 1, -- If all lines commented → uncomment; else → comment
+      kInvert      = 2, -- Per-line toggle, each line independently
+      kForceAdd    = 3, -- Add comment to all lines (already-commented get another layer)
+      kForceRemove = 4, -- Remove comment from lines that have them; skip uncommented
+    }
+<
+
+
+COMMENT TYPE ENUM ~
+
+>lua
+    ---@enum Celeste.Comment.CommentType
+    M.CMT = {
+      kLine  = 1, -- Line comment
+      kBlock = 2, -- Block comment
+    }
+<
+
+
+RECIPES                                              *celeste_comment-recipes*
+
+
+OVERRIDE CMS RESOLUTION ENTIRELY ~
+
+Use `hooks.cms_conf_resolver` to take full control of comment string
+resolution. When set, the built-in resolver chain is bypassed entirely.
+
+>lua
+    require("celeste_comment").setup({
+      hooks = {
+        cms_conf_resolver = function(ctx)
+          -- ctx.cursor, ctx.cfg, ctx.range
+          ctx.o_cms_conf = { "//%s", "/*%s*/" }  -- { line, block }
+        end,
+      },
+    })
+<
+
+Per-buffer override:
+
+>lua
+    vim.b.celeste_comment_config = {
+      hooks = {
+        cms_conf_resolver = function(ctx)
+          ctx.o_cms_conf = { "#%s" }
+        end,
+      },
+    }
+<
+
+
+OVERRIDE COMMENT STRING PER FILETYPE ~
+
+Use `cms_confs` to set comment strings for specific filetypes while keeping the
+built-in table for others.
+
+>lua
+    require("celeste_comment").setup({
+    cms_confs = {
+      toml  = { "#%s" },                   -- line only
+      html  = { nil, "<!--%s-->" },        -- block only
+      python = { "#%s", '"""%s"""' },      -- both
+      rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" }, -- multi-token line
+      mylang = function(ctx)               -- dynamic resolver
+        return { "#%s" }
+      end,
+      },
+    })
+    
+    ### Always use buffer-local `commentstring`
+    Disable the built-in language comment string table and rely solely on
+    `vim.bo.commentstring` (and `vim.b.celeste_comment_block_commentstring`
+    for block comments):
+    ```lua
+    require("celeste_comment").setup({ cms_confs = false })
+<
+
+Per-buffer:
+
+>lua
+    vim.b.celeste_comment_config = { cms_confs = false }
+<
+
+
+LIMITATIONS                                      *celeste_comment-limitations*
+
+- **Auto-detect textobject accuracy** — `auto_textobject` first checks
+    whether the current line contains a line comment. In languages like Lua
+    where `--` is used for both line comments (`--`) and block comments
+    (`--[[ ]]`), a line starting with `--` may be misidentified as a line
+    comment.
+- **Regex-based textobject range** — Pattern matching can produce false
+    positives in certain scenarios. Comment-like tokens inside strings may
+    be mistaken for actual comments.
+- **Visual block mode (<C-v>)** — Selection is treated as linewise;
+    the entire selected lines are block-commented rather than inserting
+    comment markers per column.
+
+
+ACKNOWLEDGMENTS                              *celeste_comment-acknowledgments*
+
+- **VSCode** <https://github.com/microsoft/vscode> — The indent algorithm
+    is ported from VSCode’s comment implementation. Most of its test cases
+    have also been ported to this plugin’s test suite.
+- **mini.comment** <https://github.com/echasnovski/mini.nvim> — Code style
+    and linewise textobject implementation served as a reference.
+- **Comment.nvim** <https://github.com/numToStr/Comment.nvim> — Part of the
+    built-in language comment string table was adapted from Comment.nvim.
+
+Generated by panvimdoc <https://github.com/kdheepak/panvimdoc>
+
+vim:tw=78:ts=8:noet:ft=help:norl:
