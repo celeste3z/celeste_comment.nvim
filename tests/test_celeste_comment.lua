@@ -65,27 +65,27 @@ local T = new_set({
             block_textobj_nlines = 200,
             log_level = vim.log.levels.OFF,
             mappings = {
-              line_toggle             = "gc",
-              line_toggle_cur         = "gcc",
-              line_toggle_visual      = "gc",
-              line_toggle_insert      = { "<c-/>", "<c-_>" },
+              line_toggle = "gc",
+              line_toggle_cur = "gcc",
+              line_toggle_visual = "gc",
+              line_toggle_insert = { "<c-/>", "<c-_>" },
 
-              block_toggle            = "gb",
-              block_toggle_cur        = "gbc",
-              block_toggle_visual     = "gb",
+              block_toggle = "gb",
+              block_toggle_cur = "gbc",
+              block_toggle_visual = "gb",
 
-              line_textobject         = "gc",
-              block_textobject        = "gb",
-              auto_textobject         = "ga",
-              uncomment_auto          = "gcu",
+              line_textobject = "gc",
+              block_textobject = "gb",
+              auto_textobject = "ga",
+              uncomment_auto = "gcu",
 
-              line_add_below          = "gco",
-              line_add_above          = "gcO",
-              line_add_eol            = "gcA",
-              line_invert             = "gcI",
-              line_force_add          = "gC",
-              line_force_remove       = "gU",
-              dot_repeat              = ".",
+              line_add_below = "gco",
+              line_add_above = "gcO",
+              line_add_eol = "gcA",
+              line_invert = "gcI",
+              line_force_add = "gC",
+              line_force_remove = "gU",
+              dot_repeat = ".",
             },
             hooks = nil,
           })
@@ -3305,6 +3305,91 @@ T["markdown"]["gco respects injected language in code block"] = function()
   feed("<Esc>")
   local result = get_lines()
   eq(result[4], "-- ")
+end
+
+T["markdown"]["visual mode works"] = function()
+  child.bo.tabstop = 2
+  child.bo.filetype = "markdown"
+  child.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
+  set_lines({
+    "## head",
+    "aaa",
+    "```lua",
+    "  local x = 1",
+    "  local y = 2",
+    "```",
+    "bbb",
+  })
+  selection(1, 0, 4, 12)
+  feed("gc")
+  eq(get_lines(), {
+    "<!-- ## head",
+    "aaa",
+    "```lua",
+    "  local x = 1 -->",
+    "  local y = 2",
+    "```",
+    "bbb",
+  })
+  eq(get_cursor(), { 4, 12 })
+  feed("gcu")
+  eq(get_lines(), {
+    "## head",
+    "aaa",
+    "```lua",
+    "  local x = 1",
+    "  local y = 2",
+    "```",
+    "bbb",
+  })
+  eq(get_cursor(), { 4, 12 })
+
+  selection(3, 0, 4, 0)
+  feed("gc")
+  eq(get_lines(), {
+    "## head",
+    "aaa",
+    "<!-- ```lua",
+    "  --> local x = 1",
+    "  local y = 2",
+    "```",
+    "bbb",
+  })
+  eq(get_cursor(), { 4, 0 })
+  feed("gcu")
+  eq(get_lines(), {
+    "## head",
+    "aaa",
+    "```lua",
+    "  local x = 1",
+    "  local y = 2",
+    "```",
+    "bbb",
+  })
+
+  selection(4, 0, 5, 12)
+  feed("gc")
+  eq(get_lines(), {
+    "## head",
+    "aaa",
+    "```lua",
+    "--   local x = 1",
+    "--   local y = 2",
+    "```",
+    "bbb",
+  })
+  eq(get_cursor(), { 5, 15 })
+  feed("gcu")
+  eq(get_lines(), {
+    "## head",
+    "aaa",
+    "```lua",
+    "  local x = 1",
+    "  local y = 2",
+    "```",
+    "bbb",
+  })
+  eq(get_cursor(), { 5, 12 })
 end
 
 -- disable tests ───────────────────────────────────────────────────────────────
