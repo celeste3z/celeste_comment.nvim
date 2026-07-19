@@ -1,24 +1,17 @@
 <h1 align="center">celeste_comment.nvim</h1>
-<p align="center"><sup>VSCode-style commenting plugin with support for line/block comment, textobjects, real sticky cursor and more!</sup></p>
+<p align="center">VSCode-style commenting plugin with support for line/block comment, textobjects, real sticky cursor and more!</p>
 
 <!--toc:start-->
 
 - [Features](#features)
-- [Showcase](#showcase)
 - [Comparison](#comparison)
+- [Showcase](#showcase)
 - [Requirements](#requirements)
 - [Installation](#installation)
   - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
   - [lazy.nvim](#lazynvim)
-- [Configuration](#configuration)
-  - [Default](#default)
-  - [Buffer-local configuration](#buffer-local-configuration)
-  - [Custom comment strings](#custom-comment-strings)
-- [Hooks](#hooks)
-  - [`hooks.pre_commit_edits`](#hooksprecommitedits)
-  - [`hooks.cms_conf_resolver`](#hookscmsconfresolver)
-- [Disabling](#disabling)
-- [Recipes](#recipes)
+- [Default Configuration](#default-configuration)
+- [Details](#details)
 - [What it doesn't do](#what-it-doesnt-do)
 - [Limitations](#limitations)
 - [Future work](#future-work)
@@ -42,28 +35,6 @@
 - Precise edit tracking (via TextEdits)
 - Multi line comment string uncomment — detects and removes multiple line comment strings (e.g. Rust `//`, `///`, `//!`)
 
-## Showcase
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/865db27d-c139-41ea-bd5d-3b13fa8c587a" alt="Line/Block comment toggle">
-<p><em>Line/Block comment toggle</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517" alt="With multicursor.nvim">
-<p><em>With <a href="https://github.com/jake-stewart/multicursor.nvim">multicursor.nvim</a></em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813" alt="Cursor sticky and Dot-repeat">
-<p><em>Cursor sticky + Dot-repeat</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/6c7f3b45-0318-4254-b710-adbc21852b6f" alt="Commenting in insert mode with keep cursor">
-<p><em>Commenting in insert mode with keep cursor</em></p>
-</div>
-
 ## Comparison
 
 | Feature                  | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                   | [Neovim built-in](https://neovim.io/doc/user/lua.html#vim._comment) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)            | [vim-commentary](https://github.com/tpope/vim-commentary) |
@@ -82,6 +53,38 @@
 | **Block textobject**     | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Textobject auto**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Uncomment auto**       | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ✅                                                        |
+
+## Showcase
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/c4255b81-926a-4ab7-ac3e-d49b77e980a1" alt="Line/Block comment toggle, textobjects, gcu">
+<p><em>Line/Block comment toggle, textobjects, gcu</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/49812f9f-5f1b-44d7-b52a-e46fdccd322f" alt="Commenting in insert mode with keep cursor">
+<p><em>Commenting in insert mode with keep cursor</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/8cf4583c-7dcc-4794-9c18-3df36d070991" alt="Force add/remove comment and dot-repeat">
+<p><em>Force add/remove comment and dot-repeat</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/557ef444-96ee-4352-9d60-759b97153e89" alt="Invert comment status per-line">
+<p><em>Invert comment status per-line</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813" alt="Cursor sticky and Dot-repeat">
+<p><em>Cursor sticky + Dot-repeat</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517" alt="With multicursor.nvim">
+<p><em>With <a href="https://github.com/jake-stewart/multicursor.nvim">multicursor.nvim</a></em></p>
+</div>
 
 ## Requirements
 
@@ -106,37 +109,14 @@ require("celeste_comment").setup({})
 { "celeste3z/celeste_comment.nvim", opts = {} }
 ```
 
-## Configuration
+## Default Configuration
 
-#### Default
-
-````lua
+```lua
 {
-  -- Restore cursor position after commenting. Saves the cursor position
-  -- before the operator runs, then computes the new position based on
-  -- the edits (adjusting row/col for insertions and deletions).
-  --
-  -- NOTE: Due to current limitations in Neovim, we've set up a default key
-  -- mapping for `.` so that dot-repeat can also respect `keep_cursor`. You
-  -- can disable this by setting `mapping.dot_repeat` to an empty string.
-  -- Or, if you prefer, you can create your own `dot_repeat` mapping
-  -- using the code below:
-  --
-  -- ```lua
-  -- vim.keymap.set("n", ".", function()
-  --   require("celeste_comment").track_cursor()
-  --   return "."
-  -- end, { expr = true, desc = "Cursor sticky dot-repeat" })
-  -- ```
-  --
+  -- Restore cursor position after commenting.
   keep_cursor            = true,
 
-  -- Insert space between comment marker and text. When `true`, a single
-  -- space is appended after the trimmed comment marker. When `false`, the
-  -- commentstring's original spacing is preserved as-is.
-  -- Example with `commentstring = "//  %s"`:
-  --   `true`  → tlcs="//", olcs="// "   → `// hello`
-  --   `false` → lcs="//  ", olcs="//  " → `//  hello`
+  -- Insert space between comment marker and text.
   insert_space           = true,
 
   -- Place comment at start of line, skip indent alignment
@@ -145,51 +125,16 @@ require("celeste_comment").setup({})
   -- Match comment markers case-insensitively (e.g. `@REM` vs `@rem` vs `@rEm`)
   case_insensitive       = false,
 
-  -- Relaxed block detection: when true, leading and trailing whitespace
-  -- is trimmed from the range before looking for block comment tokens.
-  -- This helps find block comments inside selections that have extra
-  -- whitespace padding. When false, block detection uses the selection
-  -- range as-is.
+  -- Trim whitespace before detecting block tokens.
   block_relaxed_detect   = true,
 
-  -- Maximum number of lines (forward and backward) to search for block
-  -- comment pairs when using the block textobject (`gb` in operator-pending).
-  -- Only relevant when no treesitter query is available for the buffer.
+  -- Max lines to search for block comment pairs (no treesitter fallback).
   block_textobj_nlines   = 200,
 
-  -- Controls how empty lines are handled during comment toggle:
-  -- | Mode   | Toggle blank lines? | Participate in alignment? | Aligned when all-blank? |
-  -- |--------|---------------------|---------------------------|-------------------------|
-  -- | never  | yes                 | yes                       | yes                     |
-  -- | mixed  | yes                 | no                        | yes                     |
-  -- | always | no                  | no                        | no                      |
-  -- +--------+---------------------+---------------------------+-------------------------+
-  --
-  -- VSCode equivalent: `editor.comments.ignoreEmptyLines`
-  --   false → "never"  (toggle and align empty lines)
-  --   true  → "always" (skip empty lines entirely)
-  --
-  -- Note: "mixed" has no VSCode equivalent — it's unique to celeste_comment.
+  -- How to handle empty lines during comment toggle.
   ignore_empty_lines     = "always",
 
-  -- Controls when to fallback from line comment to block comment:
-  -- - "never":              never fallback. A wrapping commentstring
-  --                         (e.g. HTML's `<!-- %s -->`) is treated as
-  --                         a line comment. Each line gets wrapped
-  --                         individually on `gc`.
-  -- - "if_line_cms_wrapped": fallback when the line comment string wraps
-  --                         the content (`<!-- %s -->`), or when no
-  --                         line comment is available at all.
-  --
-  -- Example: buffer with `commentstring = "<!-- %s -->"`, press `gcj`
-  -- on lines `aaa` / `bbb`:
-  --
-  --   "never":              "if_line_cms_wrapped":
-  --   <!-- aaa -->          <!-- aaa
-  --   <!-- bbb -->          bbb -->
-  --
-  -- With `"if_line_cms_wrapped"`, the plugin detects the wrapping nature
-  -- and uses block toggle to wrap the whole region once.
+  -- Fallback to block comment when line comment wraps.
   fallback_to_block      = "if_line_cms_wrapped",
 
   -- Log level (nvim-0.13+). Ignored on older versions.
@@ -202,7 +147,7 @@ require("celeste_comment").setup({})
     line_toggle_cur      = "gcc",
     -- Line comment visual selection (x)
     line_toggle_visual   = "gc",
-    -- Insert mode line toggle (i)
+    -- Insert mode line toggle (i), example `{"<M-/>", "<M-_>"}`
     line_toggle_insert   = "",
 
     -- Block comment by motion (n, x)
@@ -216,23 +161,23 @@ require("celeste_comment").setup({})
     line_textobject      = "gc",
     -- Blockwise textobject (o)
     block_textobject     = "gb",
-    -- Auto textobject (o, x)
+    -- Auto textobject (o, x), example 'ga'
     auto_textobject      = "",
-    -- Auto uncomment (n)
+    -- Auto uncomment (n), example `gcu`
     uncomment_auto       = "",
 
-    -- Insert comment below (n)
+    -- Insert comment below (n), example `gco`
     line_add_below       = "",
-    -- Insert comment above (n)
+    -- Insert comment above (n), example `gcO`
     line_add_above       = "",
-    -- Insert comment at end of line (n)
+    -- Insert comment at end of line (n), example `gcA`
     line_add_eol         = "",
 
-    -- Invert comment per line (n, x)
+    -- Invert comment per line (n, x), example `gcI`
     line_invert          = "",
-    -- Force add line comment (n, x)
+    -- Force add line comment (n, x), example `gCC`
     line_force_add       = "",
-    -- Force remove line comment (n, x)
+    -- Force remove line comment (n, x), example `gCU`
     line_force_remove    = "",
 
     -- Cursor sticky dot-repeat
@@ -246,134 +191,14 @@ require("celeste_comment").setup({})
     cms_conf_resolver    = nil,
   },
 }
-````
-
-Set a mapping to `""` to disable it.
-
-#### Buffer-local configuration
-
-Buffer-local configuration can be set via `vim.b.celeste_comment_config`.
-This allows overriding non-mapping options per buffer:
-
-```lua
--- In an ftplugin or autocmd:
-vim.b.celeste_comment_config = {
-  keep_cursor = false,
-  insert_space = false,
-}
 ```
 
-The buffer config is merged with the global config, so you only need to
-specify the fields you want to override.
+See `:help celeste_comment-configuration` for details.
 
-> [!NOTE]
-> `mappings` cannot be overridden per buffer - they are fixed at `setup()` time.
+## Details
 
-#### Custom comment strings
-
-The plugin resolves comment strings through **a chain of resolvers**
-(high to low priority):
-
-**1. `hooks.cms_conf_resolver`** — Full control, highest priority:
-
-```lua
--- Global
-require("celeste_comment").setup({
-  hooks = {
-    cms_conf_resolver = function(ctx)
-      -- ctx.cursor, ctx.cfg, ctx.range
-      ctx.o_cms_conf = { "//%s", "/*%s*/" }  -- { line, block }
-    end,
-  },
-})
-
--- Per-buffer
-vim.b.celeste_comment_config = {
-  hooks = {
-    cms_conf_resolver = function(ctx)
-      ctx.o_cms_conf = { "#%s" }
-    end,
-  },
-}
-```
-
-**2. `cms_confs` table** — Override per filetype:
-
-```lua
--- Global
-require("celeste_comment").setup({
-  cms_confs = {
-    toml   = { "#%s" },                    -- line only
-    html   = { nil, "<!--%s-->" },         -- block only
-    python = { "#%s", '"""%s"""' },        -- both
-    rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },  -- multi-token line
-    mylang = function(ctx)                 -- dynamic resolver per filetype
-      return { "//%s", "/*%s*/" }
-    end,
-  },
-})
-
--- Per-buffer
-vim.b.celeste_comment_config = {
-  cms_confs = {
-    python = { "#%s" },
-  },
-}
-```
-
-**3. `cms_confs = false`** — Disable the built-in table entirely:
-
-```lua
--- Global
-require("celeste_comment").setup({ cms_confs = false })
-
--- Per-buffer
-vim.b.celeste_comment_config = { cms_confs = false }
-```
-
-**4. Built-in defaults** — 40+ languages supported out of the box.
-
-**5. Buffer fallback** — Uses `vim.bo.commentstring` and
-`vim.b.celeste_comment_block_commentstring` as the last resort:
-
-```lua
-vim.bo.commentstring = "// %s"
-vim.b.celeste_comment_block_commentstring = "/* %s */"
-```
-
-## Hooks
-
-### `hooks.pre_commit_edits`
-
-Called before edits are applied to the buffer:
-
-```lua
----@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
-function(ctx)
-end
-```
-
-### `hooks.cms_conf_resolver`
-
-Called to resolve comment string configuration for a given language/buffer.
-Receives a context table and should set `o_cms_conf`:
-
-```lua
----@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
-function(ctx)
-  ctx.o_cms_conf = { "//%s", "/*%s*/" }
-end
-```
-
-## Disabling
-
-Set `vim.g.celeste_comment_disable` globally or `vim.b.celeste_comment_disable` per buffer to `true` to disable all functionality.
-
-```lua
-vim.g.celeste_comment_disable = true
-```
-
-## Recipes
+See `:help celeste_comment` for the full documentation, including all
+configuration options, mappings, hooks, API reference, and usage examples.
 
 ## What it doesn't do
 

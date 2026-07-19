@@ -26,3 +26,14 @@ test-at-line: tests/test_celeste_comment.lua
 	  -c "lua require('mini.test').setup()" \
 	  -c "lua MiniTest.run_at_location({file='tests/test_celeste_comment.lua', line=$(LINE)})" \
 	  +"qa!"
+
+# Generate vimdoc from doc/celeste_comment.md using panvimdoc
+# Requires: pandoc v3.0.0+, scripts/panvimdoc.sh, scripts/panvimdoc.lua
+.PHONY: doc
+doc:
+	./scripts/panvimdoc.sh \
+	  --project-name celeste_comment \
+	  --input-file doc/celeste_comment.md \
+	  --toc true \
+	  --vim-version "NVIM v0.12.0" \
+	  --scripts-dir scripts

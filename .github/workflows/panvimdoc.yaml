@@ -1,0 +1,34 @@
+name: Update vimdocs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - doc/celeste_comment.md
+      - .github/workflows/panvimdoc.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pandoc
+        run: sudo apt-get install -y pandoc
+      - name: Download panvimdoc scripts
+        run: |
+          mkdir -p scripts
+          wget -O scripts/panvimdoc.sh https://raw.githubusercontent.com/kdheepak/panvimdoc/main/panvimdoc.sh
+          wget -O scripts/panvimdoc.lua https://raw.githubusercontent.com/kdheepak/panvimdoc/main/scripts/panvimdoc.lua
+          wget -O scripts/include-files.lua https://raw.githubusercontent.com/kdheepak/panvimdoc/main/scripts/include-files.lua
+          wget -O scripts/skip-blocks.lua https://raw.githubusercontent.com/kdheepak/panvimdoc/main/scripts/skip-blocks.lua
+          chmod +x scripts/panvimdoc.sh
+      - name: Generate vimdoc
+        run: make doc
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs: update vimdocs"
+          file_pattern: doc/celeste_comment.txt
+          branch: ${{ github.head_ref }}
