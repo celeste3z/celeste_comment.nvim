@@ -1,4 +1,4 @@
----@diagnostic disable: inject-field, param-type-mismatch, need-check-nil
+---@diagnostic disable: inject-field, param-type-mismatch, need-check-nil, cast-local-type
 local MiniTest = require("mini.test")
 local expect = MiniTest.expect
 local eq = expect.equality
@@ -572,11 +572,70 @@ T["base"]["compute_cursor_state"] = function()
   eq(cs, cr(0, 10))
 end
 
+T["base"]["make_csi"] = function()
+  -- single pair, no pad
+  local csi = H.make_csi({ { "//", "" } })
+  eq(#csi.pairs, 1)
+  eq(csi.pairs[1].traw[1], "//")
+  eq(csi.pairs[1].tesc[1], vim.pesc("//"))
+  eq(csi.pairs[1].tout[1], "//")
+  eq(csi.tlcs, "//")
+  eq(csi.olcs, "//")
+
+  -- with pad
+  csi = H.make_csi({ { "//", "" } }, { pad = true })
+  eq(csi.olcs, "// ")
+
+  -- multi pair sorted by length descending
+  csi = H.make_csi({ { "//", "" }, { "///", "" }, { "//!", "" } })
+  eq(#csi.pairs, 3)
+  eq(csi.pairs[1].traw[1], "///")
+  eq(csi.pairs[2].traw[1], "//!")
+  eq(csi.pairs[3].traw[1], "//")
+  eq(csi.pairs[3].tesc[1], vim.pesc("//"))
+
+  -- block pair with pad
+  csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
+  eq(csi.wrapped, true)
+  eq(csi.olcs, "/* ")
+  eq(csi.orcs, " */")
+
+  -- block pair without pad
+  csi = H.make_csi({ { "/*", "*/" } }, { pad = false })
+  eq(csi.olcs, "/*")
+  eq(csi.orcs, "*/")
+  eq(csi.wrapped, true)
+
+  -- case insensitive
+  csi = H.make_csi({ { "@REM", "" } }, { ci = true })
+  eq(#csi.pairs, 1)
+  eq(csi.pairs[1].tesc[1], "@[rR][eE][mM]")
+
+  -- rcs only
+  csi = H.make_csi({ { "", " #" } })
+  eq(#csi.pairs, 1)
+  eq(csi.tlcs, "")
+  eq(csi.trcs, "#")
+  eq(csi.wrapped, false)
+
+  -- raw strings preserved when no pad
+  csi = H.make_csi({ { "/* ", " */" } })
+  eq(csi.olcs, "/* ")
+  eq(csi.orcs, " */")
+
+  -- empty pair filtered out
+  csi = H.make_csi({ { "//", "" }, { "", "" } })
+  eq(#csi.pairs, 1)
+
+  -- no valid pairs
+  eq(H.make_csi({ { "", "" } }), nil)
+end
+
 T["base"]["block_comment_info"] = function()
   local function f(lines, lcs, rcs, scol, ecol, motion, relaxed)
     local cfg = relaxed and { block_relaxed_detect = true } or nil
-    local range = relaxed and { 0, scol, #lines - 1, ecol } or { 0 }
-    return H.block_comment_info(lines, H.make_csi({ { lcs, rcs } }), scol, ecol, motion, range, cfg)
+    local range = { 0, scol, #lines - 1, ecol }
+    return H.block_comment_info(lines, H.make_csi({ { lcs, rcs } }), motion, range, cfg)
   end
 
   -- Line mode: complete block
@@ -672,6 +731,72 @@ T["base"]["block_comment_info"] = function()
   info = f({ "  --[[ xxx", "  yyy", "  zzz ]] " }, "--[[ ", " ]]", 0, 0, "line", true)
   eq(info.lcs_pos, { 0, 2, 6 })
   eq(info.rcs_pos, { 2, 5, 7 })
+
+  -- Multi-pair: pair 1
+  local csi_mb = H.make_csi({ { "{-", "-}" }, { "{#", "#}" } }, { pad = true })
+  info = H.block_comment_info({ "{- hello -}" }, csi_mb, "line", { 0, 0, 0, 10 }, {})
+  assert(info)
+  eq(info.lcs_pos[2], 0)
+  eq(info.rcs_pos[2], 8)
+  eq(info.rcs_pos[3], 10)
+
+  -- Multi-pair: pair 2
+  info = H.block_comment_info({ "{# hello #}" }, csi_mb, "line", { 0, 0, 0, 10 }, {})
+  assert(info)
+  eq(info.lcs_pos[2], 0)
+  eq(info.rcs_pos[2], 8)
+end
+
+T["base"]["match_block_comment"] = function()
+  local csi = H.make_csi({ { "{-", "-}" }, { "{#", "#}" } }, { pad = true })
+
+  -- single line, line motion, pair 1
+  local info = H.match_block_comment({ "{- hello -}" }, { 0, 0, 0, 9 }, { 0, 0, 0, 9 }, csi, "line")
+  assert(info)
+  eq(info.lcs_pos[2], 0)
+  eq(info.rcs_pos[2], 8)
+
+  -- single line, line motion, pair 2
+  info = H.match_block_comment({ "{# hello #}" }, { 0, 0, 0, 9 }, { 0, 0, 0, 9 }, csi, "line")
+  assert(info)
+  eq(info.lcs_pos[2], 0)
+  eq(info.rcs_pos[2], 8)
+
+  -- multi line: LCS on line 1, RCS on line 2
+  info = H.match_block_comment({ "{- a", "b -}" }, { 0, 0, 1, 4 }, { 0, 0, 1, 4 }, csi, "line")
+  assert(info)
+  eq(info.lcs_pos[1], 0)
+  eq(info.rcs_pos[1], 1)
+
+  -- multi line (n=3): LCS on line 1, RCS on line 3
+  info = H.match_block_comment({ "{- a", "b", "c -}" }, { 0, 0, 2, 4 }, { 0, 0, 2, 4 }, csi, "line")
+  assert(info)
+  eq(info.lcs_pos[1], 0)
+  eq(info.rcs_pos[1], 2)
+
+  -- with leading whitespace
+  info = H.match_block_comment({ "  {- hello -}" }, { 0, 0, 0, 11 }, { 0, 0, 0, 11 }, csi, "line")
+  assert(info)
+  eq(info.lcs_pos[2], 2)
+  eq(info.rcs_pos[2], 10)
+
+  -- char motion
+  local csi2 = H.make_csi({ { "/*", "*/" } }, { pad = true })
+  info = H.match_block_comment({ "/* hello */" }, { 0, 0, 0, 10 }, { 0, 0, 0, 10 }, csi2, "char")
+  assert(info)
+  eq(info.lcs_pos[2], 0)
+
+  -- no match
+  eq(H.match_block_comment({ "hello" }, { 0, 0, 0, 4 }, { 0, 0, 0, 4 }, csi, "line"), nil)
+
+  -- no match (only LCS, no RCS)
+  eq(H.match_block_comment({ "{- hello" }, { 0, 0, 0, 7 }, { 0, 0, 0, 7 }, csi, "line"), nil)
+
+  -- different markers (same prefix, different content)
+  local csi3 = H.make_csi({ { "{-", "-}" }, { "{+", "+}" } }, { pad = true })
+  info = H.match_block_comment({ "{+ hello +}" }, { 0, 0, 0, 9 }, { 0, 0, 0, 9 }, csi3, "line")
+  assert(info)
+  eq(info.lcs_pos[2], 0)
 end
 
 T["base"]["resolve"] = function()
@@ -1031,7 +1156,7 @@ end
 T["edits"]["make_block_uncomment_edits_multi_line"] = function()
   local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local lines = { "/* hello", "world */" }
-  local info = H.block_comment_info(lines, csi, 0, 11, "line", { 0 })
+  local info = H.block_comment_info(lines, csi, "line", { 0, 0, 1, 11 })
   assert(info)
   local edits = H.make_block_uncomment_edits(info)
   assert(edits)
@@ -1052,7 +1177,7 @@ end
 T["edits"]["make_block_uncomment_edits_single_line"] = function()
   local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local lines = { "/* hello */" }
-  local info = H.block_comment_info(lines, csi, 0, 10, "char", { 0 })
+  local info = H.block_comment_info(lines, csi, "char", { 0, 0, 0, 10 })
   assert(info)
   local edits = H.make_block_uncomment_edits(info)
   assert(edits)
@@ -2084,6 +2209,106 @@ T["blockwise"]["empty selection and use set_text"] = function()
   eq(get_lines(), { "begin", "", "", "", "", "", "end" })
 end
 
+T["blockwise"]["multi block cms works"] = function()
+  child.bo.filetype = "unknown"
+  child.b.celeste_comment_block_commentstring = { "{-%s-}", "{+%s+}" }
+
+  -- gbc add (first pair)
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gbc")
+  eq(get_lines(), { "{- hello -}" })
+
+  -- gbc toggle (remove)
+  feed("gbc")
+  eq(get_lines(), { "hello" })
+
+  -- gb2j multi-line block comment
+  set_lines({ "a", "b", "c" })
+  set_cursor(1, 0)
+  feed("gb", "2j")
+  eq(get_lines(), { "{- a", "b", "c -}" })
+
+  -- gbgb textobject toggle on multi-line block
+  set_cursor(1, 3)
+  feed("gbgb")
+  eq(get_lines(), { "a", "b", "c" })
+
+  set_lines({ "{+ a", "b", "c +}" })
+  set_cursor(1, 0)
+  feed("gbgb")
+  eq(get_lines(), { "a", "b", "c" })
+
+  -- gbc using first pair (always the default for adding)
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gbc")
+  eq(get_lines(), { "{- hello -}" })
+
+  -- gbgb toggle on first pair
+  set_cursor(1, 3)
+  feed("gbgb")
+  eq(get_lines(), { "hello" })
+
+  -- gbc toggle on second pair marker detects and removes it
+  set_lines({ "{+ hello +}" })
+  set_cursor(1, 3)
+  feed("gbc")
+  eq(get_lines(), { "hello" })
+
+  -- charwise v4lgb inline block comment
+  set_lines({ "before hello after" })
+  set_cursor(1, 7)
+  feed("v", "4l", "gb")
+  eq(get_lines(), { "before {- hello -} after" })
+
+  -- gbgb toggle inline block comment
+  set_cursor(1, 8)
+  feed("gbgb")
+  eq(get_lines(), { "before hello after" })
+
+  -- dgb delete multi-line inline block comment
+  set_lines({ "x {- a", "b -} y" })
+  set_cursor(1, 3)
+  feed("dgb")
+  eq(get_lines(), { "x  y" })
+
+  -- charwise across two lines
+  set_lines({ "a b ", "c d e" })
+  set_cursor(1, 2)
+  feed("v", "j", "2l", "gb")
+  eq(get_lines(), { "a {- b ", "c d e -}" })
+
+  -- two inline blocks, cursor in first
+  set_lines({ "{- a -}  {+ b +}" })
+  set_cursor(1, 2)
+  feed("gbgb")
+  eq(get_lines(), { "a  {+ b +}" })
+
+  -- two inline blocks, cursor in second
+  set_lines({ "{- a -}  {+ b +}" })
+  set_cursor(1, 12)
+  feed("gbgb")
+  eq(get_lines(), { "{- a -}  b" })
+
+  -- nested different markers, cursor in inner
+  set_lines({ "{- a {+ b +} c -}" })
+  set_cursor(1, 8)
+  feed("gbgb")
+  eq(get_lines(), { "{- a b c -}" })
+
+  -- nested, cursor in outer
+  set_cursor(1, 3)
+  feed("gbgb")
+  eq(get_lines(), { "a b c" })
+
+  -- multi-line dgb
+  set_lines({ "  {- a", "  b -}  c" })
+  set_cursor(1, 5)
+  feed("dgb")
+  eq(get_lines(), { "    c" })
+end
+
 -- block_relaxed_detect tests ──────────────────────────────────────────────────
 
 T["block_relaxed_detect"] = new_set({
@@ -2257,6 +2482,48 @@ T["textobject"]["block_match_pairs"] = function()
   eq(r[1][2], 0)
   eq(r[1][3], 2)
   eq(r[1][4], 5)
+end
+
+T["textobject"]["block_match_pairs multi block cms"] = function()
+  local mp = H.textobject_block_match_pairs
+  local csi = H.make_csi({ { "{-", "-}" }, { "{#", "#}" } })
+  local pos = H.make_pos
+
+  -- single line, pair 1
+  local r = mp({ "{- hello -}" }, 1, csi, pos(0, 0, 3))
+  eq(r, { { 1, 0, 1, 10 } })
+
+  -- single line, pair 2
+  r = mp({ "{# hello #}" }, 1, csi, pos(0, 0, 3))
+  eq(r, { { 1, 0, 1, 10 } })
+
+  -- multi line, pair 1 spans two lines
+  r = mp({ "{- a", "b -}" }, 1, csi, pos(0, 1, 1))
+  eq(r, { { 1, 0, 2, 3 } })
+
+  -- two inline blocks on one line, cursor in first
+  r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 2))
+  eq(r, { { 1, 0, 1, 6 } })
+
+  -- two inline blocks on one line, cursor in second
+  r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 14))
+  eq(r, { { 1, 13, 1, 19 } })
+
+  -- nested both markers, cursor in outer pair
+  r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 2))
+  eq(r, { { 1, 0, 1, 16 } })
+
+  -- nested both markers, cursor in inner pair
+  r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 8))
+  eq(r, { { 1, 5, 1, 11 }, { 1, 0, 1, 16 } })
+
+  -- cursor between two blocks, no match
+  r = mp({ "{- a -}  {# b #}" }, 1, csi, pos(0, 0, 7))
+  eq(r, {})
+
+  -- no match
+  r = mp({ "hello" }, 1, csi, pos(0, 0, 1))
+  eq(r, {})
 end
 
 T["textobject"]["line textobject works"] = function()
@@ -4286,19 +4553,19 @@ T["multi_line_comment_string"] = new_set()
 T["multi_line_comment_string"]["tomake_csi_single_string_backward_compat"] = function()
   local H2 = require("celeste_comment").H
   local csi = H2.make_csi({ { "//", "" } })
-  eq(type(csi.tlrcs_esc), "table")
-  eq(#csi.tlrcs_esc, 1)
-  eq(csi.tlrcs_esc[1][1], vim.pesc("//"))
-  eq(csi.tlrcs_esc[1][2], "")
+  eq(type(csi.pairs), "table")
+  eq(#csi.pairs, 1)
+  eq(csi.pairs[1].tesc[1], vim.pesc("//"))
+  eq(csi.pairs[1].tesc[2], "")
 end
 
 T["multi_line_comment_string"]["tomake_csi_multi_token_sorted"] = function()
   local H2 = require("celeste_comment").H
   local csi = H2.make_csi({ { "//", "" }, { "///", "" }, { "//!", "" } })
-  eq(csi.tlrcs_esc[1][1], vim.pesc("///"))
-  eq(csi.tlrcs_esc[2][1], vim.pesc("//!"))
-  eq(csi.tlrcs_esc[3][1], vim.pesc("//"))
-  eq(#csi.tlrcs_esc, 3)
+  eq(csi.pairs[1].tesc[1], vim.pesc("///"))
+  eq(csi.pairs[2].tesc[1], vim.pesc("//!"))
+  eq(csi.pairs[3].tesc[1], vim.pesc("//"))
+  eq(#csi.pairs, 3)
 end
 
 T["multi_line_comment_string"]["gcc_removes_longest_token"] = function()

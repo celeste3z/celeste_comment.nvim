@@ -70,20 +70,23 @@ M.ACT = {
 
 ---@class Celeste.Comment.CommentStringConf
 ---@field [1] (string|string[])?
----@field [2] string?
+---@field [2] (string|string[])?
 
 ---@alias Celeste.Comment.CommentStringConfs {[1]:string, [2]:(Celeste.Comment.CommentStringConf|fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx))}
 
+---@class Celeste.Comment.CommentStringInfo.Pairs
+---@field tesc [string, string]
+---@field traw [string, string]
+---@field tout [string, string]
+
 ---@class Celeste.Comment.CommentStringInfo
----@field ci         boolean                   -- case-insensitive
----@field wrapped    boolean                   -- comment string was wrapped
----@field tlcs       string                    -- vim.trim(lcs)
----@field trcs       string                    -- vim.trim(rcs)
----@field olcs       string                    -- output: pad=true->tlcs+" ", else->lcs
----@field orcs       string                    -- output: pad=true->" "+trcs, else->rcs
----@field tlrcs_esc  {[1]:string,[2]:string}[] -- esc pairs, sorted by lcs length desc
----@field tlcs_esc   string                    -- alias of tlrcs_esc[1][1]
----@field trcs_esc   string                    -- alias of tlrcs_esc[1][2]
+---@field ci         boolean -- case-insensitive
+---@field wrapped    boolean -- comment string was wrapped
+---@field tlcs       string  -- vim.trim(lcs)
+---@field trcs       string  -- vim.trim(rcs)
+---@field olcs       string  -- output: pad=true->tlcs+" ", else->lcs
+---@field orcs       string  -- output: pad=true->" "+trcs, else->rcs
+---@field pairs      Celeste.Comment.CommentStringInfo.Pairs[]
 
 ---@class Celeste.Comment.LineCommentInfo.Line
 ---@field row         integer real row in buffer
@@ -420,39 +423,47 @@ end
 ---@return Celeste.Comment.CommentStringInfo?
 function H.make_csi(pairs, opts)
   opts = opts or {}
-  local tpairs = vim.iter(pairs):map(function(p) return { vim.trim(p[1]), vim.trim(p[2]) } end):totable()
+  local function make_tesc(cs) return opts.ci and H.pattern_ci(vim.pesc(cs)) or vim.pesc(cs) end
 
+  local function make_out_pair(tlcs, trcs, lcs, rcs)
+    local olcs, orcs = lcs, rcs
+    if opts.pad then
+      olcs = tlcs == "" and "" or tlcs .. " "
+      orcs = trcs == "" and "" or " " .. trcs
+    end
+    return olcs, orcs
+  end
+
+  local tpairs = vim.iter(pairs):map(function(p) return { vim.trim(p[1]), vim.trim(p[2]), p[1], p[2] } end):totable()
   table.sort(tpairs, function(a, b)
     local la, lb = a[1], b[1]
     if #la ~= #lb then return #la > #lb end
     return la > lb
   end)
 
-  local tlrcs_esc = {}
-  for _, p in ipairs(tpairs) do
-    if p[1] ~= "" or p[2] ~= "" then
-      local tlcs_esc = opts.ci and H.pattern_ci(vim.pesc(p[1])) or vim.pesc(p[1])
-      local trcs_esc = opts.ci and H.pattern_ci(vim.pesc(p[2])) or vim.pesc(p[2])
-      tlrcs_esc[#tlrcs_esc + 1] = { tlcs_esc, trcs_esc }
-    end
-  end
+  tpairs = vim
+    .iter(tpairs)
+    :filter(function(p) return p[1] ~= "" or p[2] ~= "" end)
+    :map(
+      function(p)
+        return {
+          tesc = { make_tesc(p[1]), make_tesc(p[2]) },
+          traw = { p[1], p[2] },
+          tout = { make_out_pair(p[1], p[2], p[3], p[4]) },
+        }
+      end
+    )
+    :totable()
 
-  if #tlrcs_esc == 0 then return end
+  if #tpairs == 0 then return end
 
-  local olcs, orcs
-  local tplcs, tprcs = vim.trim(pairs[1][1]), vim.trim(pairs[1][2])
-  if opts.pad then
-    olcs = tplcs == "" and "" or (tplcs .. " ")
-    orcs = tprcs == "" and "" or (" " .. tprcs)
-  else
-    olcs, orcs = pairs[1][1], pairs[1][2]
-  end
+  local plcs, prcs = unpack(pairs[1], 1, 2)
+  local tplcs, tprcs = vim.trim(plcs), vim.trim(prcs)
+  local olcs, orcs = make_out_pair(tplcs, tprcs, plcs, prcs)
 
   ---@type Celeste.Comment.CommentStringInfo
   local res = {
-    tlrcs_esc = tlrcs_esc,
-    tlcs_esc = tlrcs_esc[1][1],
-    trcs_esc = tlrcs_esc[1][2],
+    pairs = tpairs,
     tlcs = tplcs,
     trcs = tprcs,
     olcs = olcs,
@@ -469,23 +480,22 @@ end
 ---@param cms_conf Celeste.Comment.CommentStringConf
 function H.normalize_cms_conf(cms_conf)
   assert(type(cms_conf) == "table", "invalid cms_conf, must be a table value")
-  local v_kline = cms_conf[M.CMT.kLine]
-  local t_kline = type(v_kline)
-  if t_kline == "string" then
-    v_kline = { v_kline }
-  elseif t_kline ~= "table" or #v_kline == 0 then
-    v_kline = { "" }
-  else
-    for i, v in ipairs(v_kline) do
-      if type(v) ~= "string" then v_kline[i] = "" end
+  local function norm(v)
+    local t = type(v)
+    if t == "string" then
+      v = { v }
+    elseif t ~= "table" or #v == 0 then
+      v = { "" }
+    else
+      for i, k in ipairs(v) do
+        if type(k) ~= "string" then v[i] = "" end
+      end
     end
+    return v
   end
 
-  local v_kblock = cms_conf[M.CMT.kBlock]
-  local t_kblock = type(v_kblock)
-  if t_kblock ~= "string" then v_kblock = "" end
-  cms_conf[M.CMT.kLine] = v_kline
-  cms_conf[M.CMT.kBlock] = v_kblock
+  cms_conf[M.CMT.kLine] = norm(cms_conf[M.CMT.kLine])
+  cms_conf[M.CMT.kBlock] = norm(cms_conf[M.CMT.kBlock])
 end
 
 ---@param cursor vim.Pos
@@ -517,7 +527,7 @@ function H.builtin_cms_conf_resolver(ctx)
 
   local line = vim.fn.getline(ctx.cursor.row + 1)
   local start_col = line:match("^%s*()")
-  if start_col then ctx.cursor = H.make_cursor(ctx.cursor.buf, { ctx.cursor.row + 1, start_col - 1 }) end
+  if start_col then ctx.cursor = H.make_pos(ctx.cursor.buf, ctx.cursor.row, start_col - 1) end
 
   local ltree = H.language_tree_resolve(ctx.cursor)
   local lang = ltree and ltree:lang() or vim.bo[ctx.cursor.buf].filetype
@@ -571,15 +581,17 @@ function H.make_csi_from_cms_conf(cms_conf, ctype, cfg, silent)
   if not cms then return end
   if type(cms) == "string" and cms == "" then return end
   local pairs = H.comment_string_unwrap(cms)
-  if ctype == M.CMT.kBlock and (pairs[1][1] == "" or pairs[1][2] == "") then
-    if not silent then
-      vim.api.nvim_echo(
-        { { "Invalid ", "WarningMsg" }, { "blockwise commentstring : " }, { ("%s"):format(vim.inspect(pairs)) } },
-        true,
-        {}
-      )
+  if ctype == M.CMT.kBlock then
+    if vim.iter(pairs):any(function(p) return p[1] == "" or p[2] == "" end) then
+      if not silent then
+        vim.api.nvim_echo(
+          { { "Invalid ", "WarningMsg" }, { "blockwise commentstring : " }, { ("%s"):format(vim.inspect(pairs)) } },
+          true,
+          {}
+        )
+      end
+      return
     end
-    return
   end
   return H.make_csi(pairs, { pad = cfg.insert_space, ci = cfg.case_insensitive })
 end
@@ -618,21 +630,23 @@ end
 ---@param opts? {check_only?: boolean, check_will_blank?: boolean}
 ---@return (boolean|Celeste.Comment.MatchLineComment.Result)?
 function H.match_line_comment(line, row, csi, opts)
-  for _, pair in ipairs(csi.tlrcs_esc) do
-    local tlcs_esc, trcs_esc = pair[1], pair[2]
+  for _, p in ipairs(csi.pairs) do
+    local tlcs_esc, trcs_esc = p.tesc[1], p.tesc[2]
     local suffix = #trcs_esc > 0 and "(.-)()" .. trcs_esc .. "()%s*$" or "(.-)%s*$"
     local s, _e, p1, p2, content, p3, p4 = line:find("^%s*()" .. tlcs_esc .. "()" .. suffix)
     if s then
       if opts and opts.check_only then return true end
 
+      local olcs, orcs = p.tout[1], p.tout[2]
+
       local lcs_pos
       if tlcs_esc ~= "" then
-        local matched = H.match_byte(line, p2 - 1, csi.olcs, #csi.tlcs, 1, csi.ci)
+        local matched = H.match_byte(line, p2 - 1, olcs, #p.traw[1], 1, csi.ci)
         lcs_pos = { row, p1 - 1, p2 + matched - 2 }
       end
       local rcs_pos
       if trcs_esc ~= "" and p3 then
-        local matched = H.match_byte(line, p3 - 2, csi.orcs, 0, -1, csi.ci)
+        local matched = H.match_byte(line, p3 - 2, orcs, 0, -1, csi.ci)
         local rcs_start = p3 - matched
         rcs_pos = { row, rcs_start - 1, p4 - 2 }
       end
@@ -1018,66 +1032,91 @@ function H.shrink_region(lines, range)
 end
 
 ---@param lines  string[]
+---@param shrunk Celeste.Comment.Range4
+---@param range  Celeste.Comment.Range4
 ---@param csi    Celeste.Comment.CommentStringInfo
----@param scol   integer
----@param ecol   integer
+---@param motion Celeste.Comment.Motion
+---@return Celeste.Comment.BlockCommentInfo?
+function H.match_block_comment(lines, shrunk, range, csi, motion)
+  local start_row = shrunk[1]
+  local scol, ecol = shrunk[2], shrunk[4]
+  local n = shrunk[3] - start_row + 1
+  local fi = start_row - range[1] + 1
+  local l1 = lines[fi]
+  local ln = lines[fi + n - 1]
+
+  for _, v in ipairs(csi.pairs) do
+    local tlcs_esc, trcs_esc = v.tesc[1], v.tesc[2]
+    local tlcs_len = #v.traw[1]
+    local trcs_len = #v.traw[2]
+    local olcs, orcs = v.tout[1], v.tout[2]
+    local pad_rcs = #orcs - trcs_len
+    local slcs, elcs, srcs, ercs
+    local matched = true
+
+    if motion ~= "char" then
+      local _, e = l1:find("^%s*" .. tlcs_esc)
+      if not e then matched = false end
+      if matched then
+        slcs = e - tlcs_len + 1
+        local mb = H.match_byte(l1, slcs - 1 + tlcs_len, olcs, tlcs_len, 1, csi.ci)
+        elcs = slcs + tlcs_len + mb - 1
+        srcs, ercs = ln:find(trcs_esc .. "%s*$")
+        if not srcs then matched = false end
+      end
+      if matched then
+        ercs = srcs + trcs_len - 1
+        srcs = srcs - math.min(H.match_byte(ln, srcs - pad_rcs - 1, orcs, 0, 1, csi.ci), pad_rcs)
+      end
+    else
+      local m = H.match_byte(l1, scol, olcs, 0, 1, csi.ci)
+      if m < tlcs_len then matched = false end
+      if matched then
+        slcs = scol + 1
+        elcs = scol + m
+        local ec = ecol + 1
+        local srcs_tmp = ec - trcs_len + 1
+        if srcs_tmp < 1 or srcs_tmp > #ln then matched = false end
+        if matched then
+          if H.match_byte(ln, srcs_tmp - 1, v.traw[2], 0, 1, csi.ci) < trcs_len then matched = false end
+        end
+        if matched then
+          if n == 1 and srcs_tmp <= slcs then matched = false end
+        end
+        if matched then
+          srcs = srcs_tmp - math.min(H.match_byte(ln, math.max(srcs_tmp - pad_rcs - 1, 0), orcs, 0, 1, csi.ci), pad_rcs)
+          ercs = ec
+        end
+      end
+    end
+
+    if matched then
+      return { lcs_pos = { start_row, slcs - 1, elcs - 1 }, rcs_pos = { start_row + n - 1, srcs - 1, ercs - 1 } }
+    end
+  end
+end
+
+---@param lines  string[]
+---@param csi    Celeste.Comment.CommentStringInfo
 ---@param motion Celeste.Comment.Motion
 ---@param range  Celeste.Comment.Range4
 ---@param cfg?   Celeste.Comment.Opts
 ---@return Celeste.Comment.BlockCommentInfo?
-function H.block_comment_info(lines, csi, scol, ecol, motion, range, cfg)
-  range = range or { 0 }
-  local n = #lines
-  local l1 = lines[1]
-  local ln = lines[n]
-
+function H.block_comment_info(lines, csi, motion, range, cfg)
   -- TODO: should we normalize range at get_selection_range?
   local shrunk = vim.list_slice(range)
   if motion ~= "char" then
     shrunk[2] = 0
-    shrunk[4] = #ln
+    shrunk[4] = #lines[#lines]
   end
 
   if cfg and cfg.block_relaxed_detect then
     local t = H.shrink_region(lines, shrunk)
     if not t then return end
     shrunk = t
-    local fi = shrunk[1] - range[1] + 1
-    n = shrunk[3] - shrunk[1] + 1
-    l1 = lines[fi]
-    ln = lines[fi + n - 1]
-    scol, ecol = shrunk[2], shrunk[4]
   end
 
-  local slcs, elcs, srcs, ercs
-
-  if motion ~= "char" then
-    local _, e = l1:find("^%s*" .. csi.tlcs_esc)
-    if not e then return end
-    slcs = e - #csi.tlcs + 1
-    elcs = slcs + H.match_byte(l1, slcs - 1, csi.olcs, 0, 1, csi.ci) - 1
-    srcs, ercs = ln:find(csi.trcs_esc .. "%s*$")
-    if not srcs then return end
-    ercs = srcs + #csi.trcs - 1
-    local pad_rcs = #csi.orcs - #csi.trcs
-    srcs = srcs - math.min(H.match_byte(ln, srcs - pad_rcs - 1, csi.orcs, 0, 1, csi.ci), pad_rcs)
-  else
-    local matched = H.match_byte(l1, scol, csi.olcs, 0, 1, csi.ci)
-    if matched < #csi.tlcs then return end
-    slcs = scol + 1
-    elcs = scol + matched
-
-    local ec = ecol + 1
-    local srcs_tmp = ec - #csi.trcs + 1
-    if srcs_tmp < 1 or srcs_tmp > #ln then return end
-    if H.match_byte(ln, srcs_tmp - 1, csi.trcs, 0, 1, csi.ci) < #csi.trcs then return end
-    if n == 1 and srcs_tmp <= slcs then return end
-    local pad_rcs = #csi.orcs - #csi.trcs
-    srcs = srcs_tmp - math.min(H.match_byte(ln, math.max(srcs_tmp - pad_rcs - 1, 0), csi.orcs, 0, 1, csi.ci), pad_rcs)
-    ercs = ec
-  end
-
-  return { lcs_pos = { shrunk[1], slcs - 1, elcs - 1 }, rcs_pos = { shrunk[1] + n - 1, srcs - 1, ercs - 1 } }
+  return H.match_block_comment(lines, shrunk, range, csi, motion)
 end
 
 ---@param lines  string[]
@@ -1089,7 +1128,7 @@ end
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
 function H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
-  local info = H.block_comment_info(lines, csi, range[2], range[4], motion, range, cfg)
+  local info = H.block_comment_info(lines, csi, motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
 
   if action == M.ACT.kToggle or action == M.ACT.kInvert then
@@ -1330,13 +1369,10 @@ end
 ---@param cursor vim.Pos
 ---@return Celeste.Comment.Range4[]
 function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
-  local lcs_esc, rcs_esc = csi.tlcs_esc, csi.trcs_esc
-  local lcs_len, rcs_len = #csi.tlcs, #csi.trcs
   local nlines = #lines
   local cursor_row, cursor_col = cursor.row + 1, cursor.col
-  local lrcs_eq = lcs_esc == rcs_esc
-  local stack = {}
-  local pairs = {}
+  local all_pairs = {}
+  local seen = {}
 
   local function inner(ol, ocs, cl, cce)
     if not (ol <= cursor_row and cursor_row <= cl) then return false end
@@ -1346,47 +1382,67 @@ function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
     return true
   end
 
-  for i = 1, nlines do
-    local line = lines[i]
-    local ln = lbegin - 1 + i
-    local pos = 1
+  for _, v in ipairs(csi.pairs) do
+    local tlcs, trcs = v.traw[1], v.traw[2]
+    if tlcs ~= "" and trcs ~= "" then
+      local lcs_esc, rcs_esc = v.tesc[1], v.tesc[2]
+      local lcs_len, rcs_len = #tlcs, #trcs
+      local lrcs_eq = lcs_esc == rcs_esc
+      local stack = {}
+      local plist = {}
 
-    while pos <= #line do
-      local opos = line:find(lcs_esc, pos)
-      local cpos = lrcs_eq and opos or line:find(rcs_esc, pos)
+      for i = 1, nlines do
+        local line = lines[i]
+        local ln = lbegin - 1 + i
+        local pos = 1
 
-      if not opos and not cpos then break end
+        while pos <= #line do
+          local opos = line:find(lcs_esc, pos)
+          local cpos = lrcs_eq and opos or line:find(rcs_esc, pos)
 
-      if H.should_log(vim.log.levels.TRACE) then
-        H.log(vim.log.levels.TRACE, ("ln:%s opos:%s cpos:%s stack:%s"):format(ln, opos, cpos, vim.inspect(stack)))
-      end
+          if not opos and not cpos then break end
 
-      if lrcs_eq and opos and #stack == 0 then
-        table.insert(stack, { ln, opos - 1, opos + lcs_len - 2 })
-        pos = opos + lcs_len
-      else
-        if lrcs_eq and opos then cpos = opos end
+          if lrcs_eq and opos and #stack == 0 then
+            table.insert(stack, { ln, opos - 1, opos + lcs_len - 2 })
+            pos = opos + lcs_len
+          else
+            if lrcs_eq and opos then cpos = opos end
 
-        if opos and (not cpos or opos < cpos) then
-          table.insert(stack, { ln, opos - 1, opos + lcs_len - 2 })
-          pos = opos + lcs_len
-        elseif cpos and #stack > 0 then
-          local ol, ocs = unpack(table.remove(stack))
-          local cl, cce = ln, cpos + rcs_len - 2
+            if opos and (not cpos or opos < cpos) then
+              table.insert(stack, { ln, opos - 1, opos + lcs_len - 2 })
+              pos = opos + lcs_len
+            elseif cpos and #stack > 0 then
+              local ol, ocs = unpack(table.remove(stack))
+              local cl, cce = ln, cpos + rcs_len - 2
 
-          H.log(vim.log.levels.TRACE, ("open:{%s, %s} close:{%s, %s}"):format(ol, ocs, cl, cce))
-
-          assert(ol <= cl)
-          if inner(ol, ocs, cl, cce) then pairs[#pairs + 1] = { ol, ocs, cl, cce } end
-          pos = cpos + rcs_len
-        else
-          pos = cpos + rcs_len
+              assert(ol <= cl)
+              if inner(ol, ocs, cl, cce) then
+                local key = table.concat({ ol, ocs, cl, cce }, ":")
+                if not seen[key] then
+                  seen[key] = true
+                  plist[#plist + 1] = { ol, ocs, cl, cce }
+                end
+              end
+              pos = cpos + rcs_len
+            else
+              pos = cpos + rcs_len
+            end
+          end
         end
       end
+
+      vim.list_extend(all_pairs, plist)
     end
   end
 
-  return pairs
+  table.sort(all_pairs, function(a, b)
+    local ra, ca = a[3] - a[1], a[4] - a[2]
+    local rb, cb = b[3] - b[1], b[4] - b[2]
+    if ra ~= rb then return ra < rb end
+    return ca < cb
+  end)
+
+  return all_pairs
 end
 
 ---@param cursor vim.Pos
@@ -1445,16 +1501,22 @@ end
 ---@return Celeste.Comment.Range4?
 function H.textobject_block_match_ts(buf, csi, ts_range)
   if not ts_range then return end
-  if #csi.tlcs == 0 or #csi.trcs == 0 then return end
 
   local lines = vim.api.nvim_buf_get_lines(buf, ts_range[1], ts_range[3] + 1, false)
   local first, last = lines[1], lines[#lines]
   if not first or not last then return end
 
-  if H.match_byte(first, ts_range[2], csi.tlcs, 0, 1, csi.ci) ~= #csi.tlcs then return end
-  if H.match_byte(last, ts_range[4] - #csi.trcs + 1, csi.trcs, 0, 1, csi.ci) ~= #csi.trcs then return end
-
-  return ts_range
+  for _, v in ipairs(csi.pairs) do
+    local tlcs, trcs = v.traw[1], v.traw[2]
+    if tlcs ~= "" and trcs ~= "" then
+      if
+        H.match_byte(first, ts_range[2], tlcs, 0, 1, csi.ci) == #tlcs
+        and H.match_byte(last, ts_range[4] - #trcs + 1, trcs, 0, 1, csi.ci) == #trcs
+      then
+        return ts_range
+      end
+    end
+  end
 end
 
 ---@param cfg      Celeste.Comment.Opts
@@ -1507,6 +1569,7 @@ function H.compute_x_comment_range(cfg, cursor)
 
   local lcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kLine, cfg, true)
   local bcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kBlock, cfg, true)
+  -- a little bit hack, but works in most scenarios..
   local bprefix = lcsi ~= nil
     and bcsi ~= nil
     and bcsi.tlcs ~= lcsi.tlcs
