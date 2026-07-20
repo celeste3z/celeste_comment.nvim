@@ -28,6 +28,7 @@ through all edit operations. The plugin uses a `TextEdits` model where every
 operation is defined as range+text pairs. This allows accurate cursor position
 tracking across complex multi-line edits and dot-repeat support.
 
+
 FEATURES                                            *celeste_comment-features*
 
 - Line comment toggle
@@ -47,21 +48,22 @@ FEATURES                                            *celeste_comment-features*
 - 40+ built-in language comment strings
 - Custom comment string resolver hook
 
+
 COMPARISON                                        *celeste_comment-comparison*
 
   -------------------------------------------------------------------------------------------------
   Feature         celeste_comment.nvim   Neovim      Comment.nvim   mini.comment   vim-commentary
-                                         built-in
+                                         built-in                                  
   --------------- ---------------------- ----------- -------------- -------------- ----------------
   Line comment    yes                    yes         yes            yes            yes
 
   Block comment   yes                    no          yes            no             no
 
   Force add       yes                    no          no             no             no
-  comment
+  comment                                                                          
 
   Force remove    yes                    no          no             no             no
-  comment
+  comment                                                                          
 
   Dot-repeat      yes                    yes         yes            yes            yes
 
@@ -74,7 +76,7 @@ COMPARISON                                        *celeste_comment-comparison*
   Line textobject yes                    yes         no             yes            yes
 
   Block           yes                    no          no             no             no
-  textobject
+  textobject                                                                       
 
   Textobject auto yes                    no          no             no             no
 
@@ -85,12 +87,14 @@ REQUIREMENTS                                    *celeste_comment-requirements*
 
 - Neovim `>= 0.12`
 
+
 INSTALLATION                                    *celeste_comment-installation*
 
+
   [!IMPORTANT]
-- Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-- PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-- `Pinning to a specific version or commit is recommended.`
+  - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
+  - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
+  - `Pinning to a specific version or commit is recommended.`
 
 VIM.PACK (NEOVIM 0.12+) ~
 
@@ -105,13 +109,16 @@ VIM.PACK (NEOVIM 0.12+) ~
     require("celeste_comment").setup()
 <
 
+
 LAZY.NVIM ~
 
 >lua
     { "celeste3z/celeste_comment.nvim", lazy = false, opts = {} }
 <
 
+
 CONFIGURATION                                  *celeste_comment-configuration*
+
 
 DEFAULT CONFIG ~
 
@@ -126,7 +133,7 @@ DEFAULT CONFIG ~
       ignore_empty_lines     = "always", -- How to handle empty lines
       fallback_to_block      = "if_line_cms_wrapped", -- Fallback line→block comment
       log_level              = vim.log.levels.OFF, -- Log level (nvim-0.13+)
-
+    
       mappings = {
         line_toggle          = "gc",
         line_toggle_cur      = "gcc",
@@ -147,7 +154,7 @@ DEFAULT CONFIG ~
         line_force_remove    = "",
         dot_repeat           = ".",
       },
-
+    
       hooks = {
         pre_commit_edits     = nil,
         cms_conf_resolver    = nil,
@@ -155,10 +162,12 @@ DEFAULT CONFIG ~
     }
 <
 
+
 OPTIONS ~
 
 All options except `mappings` can be overridden per buffer via
 `vim.b.celeste_comment_config` (see |celeste_comment-configuration|).
+
 
 keep_cursor                               *celeste_comment-config-keep_cursor*
 
@@ -166,6 +175,7 @@ Default: `true`. Restores the cursor to its computed position after commenting.
 The plugin tracks the original cursor, adjusts it through each edit operation,
 and restores it. When `false`, the cursor stays where Vim places it after the
 edit.
+
 
 insert_space                             *celeste_comment-config-insert_space*
 
@@ -175,6 +185,7 @@ comment marker and the text content. With `commentstring = "// %s"`:
 - `true` → `"// hello"`
 - `false` → `"//hello"`
 
+
 line_comment_no_indent         *celeste_comment-config-line_comment_no_indent*
 
 Default: `false`. When `true`, the comment marker is placed at column 0 instead
@@ -182,6 +193,7 @@ of preserving the line’s indentation. With line `" hello"`:
 
 - `false` → `"  // hello"` (preserve indent)
 - `true` → `"//   hello"` (column 0)
+
 
 case_insensitive                     *celeste_comment-config-case_insensitive*
 
@@ -192,6 +204,7 @@ With `commentstring = "@REM %s"`:
 - `false` → `"@REM"` matches only
 - `true` → `"@REM"`, `"@rem"`, `"@rEm"` all match
 
+
 block_relaxed_detect             *celeste_comment-config-block_relaxed_detect*
 
 Default: `true`. When `true`, leading and trailing whitespace is trimmed from
@@ -201,11 +214,13 @@ hello */ "` (extra spaces around the comment):
 - `true` → comment detected, remove succeeds
 - `false` → detection fails (spaces included in range)
 
+
 block_textobj_nlines             *celeste_comment-config-block_textobj_nlines*
 
 Default: `200`. Maximum number of lines to search in each direction when using
 the block textobject. Only used when no treesitter query is available for the
 buffer.
+
 
 ignore_empty_lines                 *celeste_comment-config-ignore_empty_lines*
 
@@ -231,8 +246,9 @@ With `commentstring = "# %s"` and line `" "` (2 spaces, no content):
 - `false` → `"never"` (toggle and align empty lines)
 - `true` → `"always"` (skip empty lines entirely)
 
+
   [!NOTE] `"mixed"` has no VSCode equivalent — it’s unique to
-celeste_comment.
+  celeste_comment.
 
 fallback_to_block                   *celeste_comment-config-fallback_to_block*
 
@@ -258,10 +274,12 @@ comment to block comment mode.
     bbb -->
 <
 
+
 log_level                                   *celeste_comment-config-log_level*
 
 Default: `vim.log.levels.OFF`. Only available on nvim-0.13+. Ignored on older
 versions.
+
 
 MAPPINGS ~
 
@@ -314,6 +332,7 @@ HOOKS ~
 Options in the `hooks` table can be overridden per buffer (see
 |celeste_comment-configuration|).
 
+
 pre_commit_edits                      *celeste_comment-hooks-pre_commit_edits*
 
 Called before edits are applied to the buffer. Receives a context table:
@@ -344,6 +363,7 @@ nvim_buf_set_lines`:
     }
 <
 
+
 cms_conf_resolver                    *celeste_comment-hooks-cms_conf_resolver*
 
 Custom comment string resolver. Called to resolve the comment string for a
@@ -371,6 +391,7 @@ Example:
     }
 <
 
+
 BUFFER-LOCAL CONFIGURATION ~
 
 Non-mapping options can be overridden per buffer via
@@ -386,6 +407,7 @@ config, so you only need to specify the fields you want to override.
 
 Mappings and the mapping infrastructure are fixed at `setup()` time and cannot
 be overridden per buffer.
+
 
 CUSTOM COMMENT STRINGS (CMS_CONFS) ~
 
@@ -412,7 +434,9 @@ comments and dynamic resolvers:
 3. `Buffer fallback` — Uses `vim.bo.commentstring` and
 `vim.b.celeste_comment_block_commentstring`.
 
+
 API                                                      *celeste_comment-api*
+
 
 M.SETUP(CONFIG) ~
 
@@ -421,6 +445,7 @@ Initialize the plugin with configuration. Must be called once.
 >lua
     require("celeste_comment").setup({ keep_cursor = true })
 <
+
 
 M.TRACK_CURSOR() ~
 
@@ -432,6 +457,7 @@ Tracks cursor position for the next edit operation. Useful in custom mappings.
       return "."
     end, { expr = true })
 <
+
 
 ACTION ENUM ~
 
@@ -445,6 +471,7 @@ ACTION ENUM ~
     }
 <
 
+
 COMMENT TYPE ENUM ~
 
 >lua
@@ -455,7 +482,9 @@ COMMENT TYPE ENUM ~
     }
 <
 
+
 RECIPES                                              *celeste_comment-recipes*
+
 
 OVERRIDE CMS RESOLUTION ENTIRELY ~
 
@@ -485,6 +514,7 @@ Per-buffer override:
     }
 <
 
+
 OVERRIDE COMMENT STRING PER FILETYPE ~
 
 Use `cms_confs` to set comment strings for specific filetypes while keeping the
@@ -504,6 +534,7 @@ built-in table for others.
     })
 <
 
+
 ALWAYS USE BUFFER-LOCAL COMMENTSTRING ~
 
 Disable the built-in language comment string table and rely solely on
@@ -519,6 +550,7 @@ Per-buffer:
 >lua
     vim.b.celeste_comment_config = { cms_confs = false }
 <
+
 
 BLOCK COMMENT MARKERS AS STANDALONE LINES ~
 
@@ -578,6 +610,7 @@ To apply globally instead, pass the same `hooks` table to `setup()`:
     })
 <
 
+
 LIMITATIONS                                      *celeste_comment-limitations*
 
 - `Auto-detect textobject accuracy` — `auto_textobject` first checks
@@ -591,6 +624,7 @@ LIMITATIONS                                      *celeste_comment-limitations*
 - `Visual block mode (<C-V>)` — Selection is treated as linewise;
     the entire selected lines are block-commented rather than inserting
     comment markers per column.
+
 
 ACKNOWLEDGMENTS                              *celeste_comment-acknowledgments*
 
