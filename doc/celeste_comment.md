@@ -430,7 +430,7 @@ vim.b.celeste_comment_config = {
 Use `cms_confs` to set comment strings for specific filetypes while keeping
 the built-in table for others.
 
-````lua
+```lua
 require("celeste_comment").setup({
 cms_confs = {
   toml  = { "#%s" },                   -- line only
@@ -442,19 +442,79 @@ cms_confs = {
   end,
   },
 })
+```
 
 ### Always use buffer-local `commentstring`
+
 Disable the built-in language comment string table and rely solely on
 `vim.bo.commentstring` (and `vim.b.celeste_comment_block_commentstring`
 for block comments):
+
 ```lua
 require("celeste_comment").setup({ cms_confs = false })
-````
+```
 
 Per-buffer:
 
 ```lua
 vim.b.celeste_comment_config = { cms_confs = false }
+```
+
+### Block comment markers as standalone lines
+
+By default, `gb` wraps the first and last lines with comment markers inline:
+
+```cpp
+    /* x=x*2;
+    return x; */
+```
+
+To insert markers as separate lines instead (preserving original lines for Git
+tracking), use the `pre_commit_edits` hook:
+
+Buffer-local, combine with `FileType` autocmd to scope this hook to specific filetypes.
+
+```lua
+vim.b.celeste_comment_config = {
+  hooks = {
+    ---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
+    pre_commit_edits = function(ctx)
+      local cmt = require("celeste_comment")
+      if ctx.ctype ~= cmt.CMT.kBlock then return end
+      if ctx.action == cmt.ACT.kForceRemove then return end
+      if ctx.motion ~= "line" then return end
+      if ctx.edits[1] and ctx.edits[1].text[1] == ctx.csi.olcs then
+        local indent = ctx.lines[1]:match("^(%s*)") or ""
+        ctx.edits = {
+          { range = { ctx.range[1], -1, ctx.range[1], -1 }, text = { indent .. ctx.csi.tlcs } },
+          { range = { ctx.range[3] + 1, -1, ctx.range[3] + 1, -1 }, text = { indent .. ctx.csi.trcs } },
+        }
+        ctx.o_use_set_text = true
+      end
+    end,
+  },
+}
+```
+
+Then `gb` on the same selection produces:
+
+```cpp
+    /*
+    x=x*2;
+    return x;
+    */
+```
+
+To apply globally instead, pass the same `hooks` table to `setup()`:
+
+```lua
+require("celeste_comment").setup({
+  hooks = {
+    pre_commit_edits = function(ctx)
+      -- same as above
+    end,
+  },
+})
 ```
 
 ## Limitations

@@ -93,12 +93,15 @@
 ## Installation
 
 > [!IMPORTANT]
-> Breaking changes may occur, pinning to a specific version or commit is recommended.
+>
+> - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` → `0.2.0`).
+> - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
+> - **Pinning to a specific version or commit is recommended.**
 
 ### vim.pack (Neovim 0.12+)
 
 ```lua
-vim.pack.add({ src = "https://github.com/celeste3z/celeste_comment.nvim", name = "celeste_comment" })
+vim.pack.add({ { src = "https://github.com/celeste3z/celeste_comment.nvim", name = "celeste_comment", version = vim.version.range("*") } })
 
 require("celeste_comment").setup({})
 ```
@@ -106,7 +109,7 @@ require("celeste_comment").setup({})
 ### lazy.nvim
 
 ```lua
-{ "celeste3z/celeste_comment.nvim", opts = {} }
+{ "celeste3z/celeste_comment.nvim", lazy = false, opts = {} }
 ```
 
 ## Default Configuration
@@ -128,13 +131,17 @@ require("celeste_comment").setup({})
   -- Trim whitespace before detecting block tokens.
   block_relaxed_detect   = true,
 
-  -- Max lines to search for block comment pairs (no treesitter fallback).
+  -- Max lines to search for block comment pairs.
   block_textobj_nlines   = 200,
 
   -- How to handle empty lines during comment toggle.
+  -- See `:help celeste_comment-configuration` for more details
+  -- Possible values: "never" | "mixed" | "always"
   ignore_empty_lines     = "always",
 
   -- Fallback to block comment when line comment wraps.
+  -- See `:help celeste_comment-configuration` for more details
+  -- Possible values: "never" | "if_line_cms_wrapped"
   fallback_to_block      = "if_line_cms_wrapped",
 
   -- Log level (nvim-0.13+). Ignored on older versions.
@@ -244,3 +251,7 @@ configuration options, mappings, hooks, API reference, and usage examples.
 
 - [**Comment.nvim**](https://github.com/numToStr/Comment.nvim) — Part of
   the built-in language comment string table was adapted from Comment.nvim.
+
+---
+
+<p align="center"><b>Enjoying <a href="https://github.com/celeste3z/celeste_comment.nvim">celeste_comment.nvim</a>? Give it a ⭐!</b></p>
