@@ -96,12 +96,18 @@
 >
 > - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` → `0.2.0`).
 > - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-> - **Pinning to a specific version or commit is recommended.**
+> - `Pinning to a specific version or commit is recommended.`
 
 ### vim.pack (Neovim 0.12+)
 
 ```lua
-vim.pack.add({ { src = "https://github.com/celeste3z/celeste_comment.nvim", name = "celeste_comment", version = vim.version.range("*") } })
+vim.pack.add({
+  {
+    src = "https://github.com/celeste3z/celeste_comment.nvim",
+    name = "celeste_comment",
+    version = vim.version.range("*"),
+  }
+})
 
 require("celeste_comment").setup({})
 ```
@@ -135,12 +141,12 @@ require("celeste_comment").setup({})
   block_textobj_nlines   = 200,
 
   -- How to handle empty lines during comment toggle.
-  -- See `:help celeste_comment-configuration` for more details
+  -- See `:help celeste_comment-config-ignore_empty_lines` for more details
   -- Possible values: "never" | "mixed" | "always"
   ignore_empty_lines     = "always",
 
   -- Fallback to block comment when line comment wraps.
-  -- See `:help celeste_comment-configuration` for more details
+  -- See `:help celeste_comment-config-fallback_to_block` for more details
   -- Possible values: "never" | "if_line_cms_wrapped"
   fallback_to_block      = "if_line_cms_wrapped",
 

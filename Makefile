@@ -35,5 +35,7 @@ doc:
 	  --project-name celeste_comment \
 	  --input-file doc/celeste_comment.md \
 	  --toc true \
+	  --doc-mapping true \
+	  --description "MIT License Copyright (c) 2026 celeste3z" \
 	  --vim-version "NVIM v0.12.0" \
 	  --scripts-dir scripts
