@@ -3396,6 +3396,191 @@ T["treesitter"]["gco/gcO/gcA respect injected languages"] = function()
   feed("<Esc>", "u")
 end
 
+T["treesitter"]["handles mismatch between parser name and filetype"] = function()
+  child.lua_func(function()
+    vim.bo.filetype = "celeste_test_filetype"
+    vim.bo.commentstring = ""
+    vim.treesitter.language.add("c")
+    vim.treesitter.language.register("c", { "celeste_test_filetype" })
+    vim.b.celeste_comment_config = { cms_confs = false }
+  end)
+  eq(child.lua_get([[ vim.treesitter.language.get_filetypes("c") ]]), { "c", "celeste_test_filetype" })
+
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "hello" })
+
+  child.lua_func(function() vim.treesitter.start() end)
+
+  feed(".")
+  eq(get_lines(), { "// hello" })
+  eq(get_cursor(), { 1, 3 })
+  eq(child.bo.commentstring, "")
+end
+
+-- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L592
+T["treesitter"]["respects tree-sitter commentstring metadata : nvim-like builtin resolver"] = function()
+  child.lua_func(function()
+    vim.treesitter.query.set(
+      "vim",
+      "highlights",
+      [[
+        ((list) @_list (#set! @_list bo.commentstring "!! %s"))
+      ]]
+    )
+    vim.bo.tabstop = 2
+    vim.bo.filetype = "vim"
+    vim.treesitter.start()
+    vim.b.celeste_comment_config = { cms_confs = false }
+  end)
+
+  set_lines({
+    "set background=dark",
+    "let mylist = [",
+    [[  \"a",]],
+    [[  \"b",]],
+    [[  \"c",]],
+    "  \\]",
+  })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), {
+    '" set background=dark',
+    "let mylist = [",
+    [[  \"a",]],
+    [[  \"b",]],
+    [[  \"c",]],
+    "  \\]",
+  })
+  eq(get_cursor(), { 1, 2 })
+
+  -- should work with dot-repeat
+  set_cursor(4, 0)
+  feed(".")
+  eq(get_lines(), {
+    '" set background=dark',
+    "let mylist = [",
+    [[  \"a",]],
+    [[  !! \"b",]],
+    [[  \"c",]],
+    "  \\]",
+  })
+  eq(get_cursor(), { 4, 0 })
+end
+
+-- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L630
+T["treesitter"]["only applies the innermost tree-sitter commentstring metadata : nvim-like builtin resolver"] = function()
+  child.lua_func(function()
+    vim.treesitter.query.set(
+      "vim",
+      "highlights",
+      [[
+          ((list) @_list (#gsub! @_list "(.*)" "%1") (#set! bo.commentstring "!! %s"))
+          ((script_file) @_src (#set! @_src bo.commentstring "## %s"))
+      ]]
+    )
+    vim.bo.tabstop = 2
+    vim.bo.filetype = "vim"
+    vim.treesitter.start()
+    vim.b.celeste_comment_config = { cms_confs = false }
+  end)
+
+  set_lines({
+    "set background=dark",
+    "let mylist = [",
+    [[  \"a",]],
+    [[  \"b",]],
+    [[  \"c",]],
+    "  \\]",
+  })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), {
+    "## set background=dark",
+    "let mylist = [",
+    [[  \"a",]],
+    [[  \"b",]],
+    [[  \"c",]],
+    "  \\]",
+  })
+  eq(get_cursor(), { 1, 3 })
+
+  -- should work with dot-repeat
+  set_cursor(4, 0)
+  feed(".")
+  eq(get_lines(), {
+    "## set background=dark",
+    "let mylist = [",
+    [[  \"a",]],
+    [[  !! \"b",]],
+    [[  \"c",]],
+    "  \\]",
+  })
+  eq(get_cursor(), { 4, 0 })
+end
+
+-- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L673
+T["treesitter"]["respects injected tree-sitter commentstring metadata : nvim-like builtin resolver"] = function()
+  child.lua_func(function()
+    vim.treesitter.query.set(
+      "lua",
+      "highlights",
+      [[
+        ((string) @string (#set! @string bo.commentstring "; %s"))
+      ]]
+    )
+    vim.bo.tabstop = 2
+    vim.bo.filetype = "vim"
+    vim.treesitter.start()
+    vim.b.celeste_comment_config = { cms_confs = false }
+  end)
+  set_lines({
+    "set background=dark",
+    "lua << EOF",
+    "print[[",
+    "Inside string",
+    "]]",
+    "EOF",
+  })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), {
+    '" set background=dark',
+    "lua << EOF",
+    "print[[",
+    "Inside string",
+    "]]",
+    "EOF",
+  })
+  eq(get_cursor(), { 1, 2 })
+
+  -- Should work with dot-repeat
+  set_cursor(4, 0)
+  feed(".")
+  eq(get_lines(), {
+    '" set background=dark',
+    "lua << EOF",
+    "print[[",
+    "; Inside string",
+    "]]",
+    "EOF",
+  })
+  eq(get_cursor(), { 4, 2 })
+
+  set_cursor(3, 0)
+  feed(".")
+  eq(get_lines(), {
+    '" set background=dark',
+    "lua << EOF",
+    "-- print[[",
+    "; Inside string",
+    "]]",
+    "EOF",
+  })
+  eq(get_cursor(), { 3, 3 })
+end
+
 -- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L725
 T["treesitter"]["works across combined injections"] = function()
   child.lua_func(function()
@@ -3429,29 +3614,7 @@ T["treesitter"]["works across combined injections"] = function()
     "-- local a = 123",
     'vim.cmd([[" some more text]])',
   })
-end
-
-T["treesitter"]["handles mismatch between parser name and filetype"] = function()
-  child.lua_func(function()
-    vim.bo.filetype = "celeste_test_filetype"
-    vim.bo.commentstring = ""
-    vim.treesitter.language.add("c")
-    vim.treesitter.language.register("c", { "celeste_test_filetype" })
-    vim.b.celeste_comment_config = { cms_confs = false }
-  end)
-  eq(child.lua_get([[ vim.treesitter.language.get_filetypes("c") ]]), { "c", "celeste_test_filetype" })
-
-  set_lines({ "hello" })
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(), { "hello" })
-
-  child.lua_func(function() vim.treesitter.start() end)
-
-  feed(".")
-  eq(get_lines(), { "// hello" })
-  eq(get_cursor(), { 1, 3 })
-  eq(child.bo.commentstring, "")
+  eq(get_cursor(), { 2, 3 })
 end
 
 -- markdown injected language tests ───────────────────────────────────────────

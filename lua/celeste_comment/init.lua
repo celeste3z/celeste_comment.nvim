@@ -377,7 +377,7 @@ H.comment_string_confs = {
   swift = { { "//%s" }, "/*%s*/" },
   tmux = { { "#%s" }, nil },
   toml = { { "#%s" }, nil },
-  tsx = { { "//%s" }, "/*%s*/" },
+  tsx = { { "//%s" }, { "/*%s*/" } },
   typescript = { { "//%s" }, "/*%s*/" },
   vim = { { '"%s' }, nil },
   xml = { nil, "<!--%s-->" },
@@ -498,96 +498,84 @@ function H.normalize_cms_conf(cms_conf)
   cms_conf[M.CMT.kBlock] = norm(cms_conf[M.CMT.kBlock])
 end
 
----@param cursor vim.Pos
----@return vim.treesitter.LanguageTree?
----@return string?
-function H.language_tree_resolve(cursor)
+---Referenced from https://github.com/neovim/neovim/blob/master/runtime/lua/vim/_comment.lua
+---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
+function H.nvim_builtin_like_cms_conf_resolver(ctx)
+  local cursor = ctx.cursor
+  ctx.o_cms_conf = {
+    [M.CMT.kLine] = vim.bo[cursor.buf].commentstring,
+    [M.CMT.kBlock] = vim.b[cursor.buf].celeste_comment_block_commentstring,
+  }
+
   local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
   if not ok or parser == nil then return end
 
+  local caps = vim.treesitter.get_captures_at_pos(cursor.buf, cursor.row, cursor.col)
+  for i = #caps, 1, -1 do
+    local id, metadata = caps[i].id, caps[i].metadata
+    local md_cms = metadata["bo.commentstring"] or metadata[id] and metadata[id]["bo.commentstring"]
+    if md_cms then
+      ctx.o_cms_conf[M.CMT.kLine] = md_cms
+      return
+    end
+  end
+
   ---@type Range4
   local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
-  local dp_tree, dp_cs, dp_level = nil, nil, 0
+  local ts_cs, res_level = nil, 0
 
   ---@param ltree vim.treesitter.LanguageTree
   ---@param level integer
   local function walk(ltree, level)
     if not ltree:contains(range) then return end
     local lang = ltree:lang()
-
-    if lang ~= "comment" then
-      dp_tree = ltree
-
-      local filetypes = vim.treesitter.language.get_filetypes(lang)
-      for _, ft in ipairs(filetypes) do
-        local cs = vim.filetype.get_option(ft, "commentstring")
-        if type(cs) == "string" and cs ~= "" and level > dp_level then
-          dp_cs, dp_level = cs, level
-        end
+    local filetypes = vim.treesitter.language.get_filetypes(lang)
+    for _, ft in ipairs(filetypes) do
+      local cs = vim.filetype.get_option(ft, "commentstring")
+      if type(cs) == "string" and cs ~= "" and level > res_level then
+        ts_cs, res_level = cs, level
       end
+    end
 
-      for _, child_ltree in pairs(ltree:children()) do
-        walk(child_ltree, level + 1)
-      end
+    for _, child_ltree in pairs(ltree:children()) do
+      walk(child_ltree, level + 1)
     end
   end
 
   walk(parser, 1)
 
-  return dp_tree, dp_cs
+  if ts_cs then ctx.o_cms_conf[M.CMT.kLine] = ts_cs end
 end
 
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
-function H.builtin_cms_conf_resolver(ctx)
-  local cursor = ctx.cursor
-
-  ctx.o_cms_conf = {
-    [M.CMT.kLine] = vim.bo[cursor.buf].commentstring,
-    [M.CMT.kBlock] = vim.b[cursor.buf].celeste_comment_block_commentstring,
-  }
-
-  -- adjust to start column
-  do
-    local line = vim.fn.getline(cursor.row + 1)
-    local start_col = line:match("^%s*()")
-    if start_col then cursor = H.make_pos(cursor.buf, cursor.row, start_col - 1) end
-  end
-
-  local ltree, ts_cs = H.language_tree_resolve(cursor)
-  if ts_cs and ts_cs ~= "" then ctx.o_cms_conf[M.CMT.kLine] = ts_cs end
-
-  -- disabled builtin comment string config
+function H.cms_conf_resolver(ctx)
   if ctx.cfg.cms_confs == false then return end
 
-  local filetypes = {}
-  if ltree then
-    local lang = ltree:lang()
-    filetypes = vim.treesitter.language.get_filetypes(lang)
-  end
-  filetypes[#filetypes + 1] = vim.bo[cursor.buf].filetype
+  local cursor = ctx.cursor
 
-  local is_table = type(ctx.cfg.cms_confs) == "table"
-  local function get_cms_conf(ft)
-    if ft == "" then return end
-    local conf = is_table and ctx.cfg.cms_confs[ft] or nil
-    return conf or H.comment_string_confs[ft]
+  local dptree ---@type vim.treesitter.LanguageTree?
+  local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
+  if ok and parser ~= nil then
+    ---@type Range4
+    local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
+    dptree = parser:lang() ~= "comment" and parser or nil
+    parser:for_each_tree(function(_, ltree)
+      if ltree:lang() ~= "comment" and ltree:contains(range) then dptree = ltree end
+    end)
   end
 
-  for _, ft in ipairs(filetypes) do
-    local v = get_cms_conf(ft)
-    if v then
-      if vim.is_callable(v) then
-        ---@cast v fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
-        ctx.tree = ltree
-        return v(ctx)
-      end
+  local lang = dptree and dptree:lang() or vim.bo[cursor.buf].filetype
+  if not lang then return end
 
-      if type(v) == "table" then
-        ctx.o_cms_conf = v
-        return
-      end
-    end
+  local t = (type(ctx.cfg.cms_confs) == "table" and ctx.cfg.cms_confs[lang]) or H.comment_string_confs[lang]
+  if not t then return end
+
+  if vim.is_callable(t) then
+    ---@cast t fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
+    ctx.tree = dptree
+    return t(ctx)
   end
+  ctx.o_cms_conf = t
 end
 
 ---@param cursor vim.Pos
@@ -595,7 +583,7 @@ end
 ---@param range? Celeste.Comment.Range4
 ---@return Celeste.Comment.CommentStringConf?
 function H.make_cms_conf(cursor, cfg, range)
-  local resolvers = { cfg.hooks.cms_conf_resolver or "", H.builtin_cms_conf_resolver }
+  local resolvers = { cfg.hooks.cms_conf_resolver or "", H.cms_conf_resolver, H.nvim_builtin_like_cms_conf_resolver }
 
   for _, resolver in ipairs(resolvers) do
     if vim.is_callable(resolver) then
