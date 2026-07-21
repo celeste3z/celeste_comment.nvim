@@ -11,7 +11,6 @@
   - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
   - [lazy.nvim](#lazynvim)
 - [Default Configuration](#default-configuration)
-- [Details](#details)
 - [What it doesn't do](#what-it-doesnt-do)
 - [Limitations](#limitations)
 - [Future work](#future-work)
@@ -208,10 +207,24 @@ require("celeste_comment").setup({})
 
 See `:help celeste_comment-configuration` for details.
 
-## Details
+> [!TIP]
+> This plugin already has built-in block comment support for most common languages.
+>
+> If your filetype isn't included, the fastest and simplest way to add it is:
+>
+> - Put the code below in your `ftplugin/<filetype>.lua` (see `:help filetype-plugin`)
+> - Use `FileType` autocommand (`:help FileType`)
+>
+> ```lua
+> -- for example
+> vim.b.celeste_comment_block_commentstring = "{-%s-}"
+> ```
+>
+> Line comments are configured via `vim.bo.commentstring` (the standard Neovim option).
+>
+> For advanced comment string resolution, see `:help celeste_comment`.
 
-See `:help celeste_comment` for the full documentation, including all
-configuration options, mappings, hooks, API reference, and usage examples.
+**If you like this plugin, give it a ⭐!**
 
 ## What it doesn't do
 
@@ -257,7 +270,3 @@ configuration options, mappings, hooks, API reference, and usage examples.
 
 - [**Comment.nvim**](https://github.com/numToStr/Comment.nvim) — Part of
   the built-in language comment string table was adapted from Comment.nvim.
-
----
-
-<p align="center"><b>Enjoying <a href="https://github.com/celeste3z/celeste_comment.nvim">celeste_comment.nvim</a>? Give it a ⭐!</b></p>
