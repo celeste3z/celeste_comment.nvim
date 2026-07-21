@@ -3431,6 +3431,29 @@ T["treesitter"]["works across combined injections"] = function()
   })
 end
 
+T["treesitter"]["handles mismatch between parser name and filetype"] = function()
+  child.lua_func(function()
+    vim.bo.filetype = "celeste_test_filetype"
+    vim.bo.commentstring = ""
+    vim.treesitter.language.add("c")
+    vim.treesitter.language.register("c", { "celeste_test_filetype" })
+    vim.b.celeste_comment_config = { cms_confs = false }
+  end)
+  eq(child.lua_get([[ vim.treesitter.language.get_filetypes("c") ]]), { "c", "celeste_test_filetype" })
+
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "hello" })
+
+  child.lua_func(function() vim.treesitter.start() end)
+
+  feed(".")
+  eq(get_lines(), { "// hello" })
+  eq(get_cursor(), { 1, 3 })
+  eq(child.bo.commentstring, "")
+end
+
 -- markdown injected language tests ───────────────────────────────────────────
 
 T["markdown"] = new_set()

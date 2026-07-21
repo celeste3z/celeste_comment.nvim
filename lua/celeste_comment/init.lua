@@ -500,49 +500,94 @@ end
 
 ---@param cursor vim.Pos
 ---@return vim.treesitter.LanguageTree?
+---@return string?
 function H.language_tree_resolve(cursor)
   local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
   if not ok or parser == nil then return end
 
   ---@type Range4
-  local range = { cursor.row, cursor.col, cursor.row, cursor.col }
-  local result = parser
-  parser:for_each_tree(function(_, ltree)
-    if ltree:lang() ~= "comment" and ltree:contains(range) then result = ltree end
-  end)
+  local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
+  local dp_tree, dp_cs, dp_level = nil, nil, 0
 
-  return result
-end
+  ---@param ltree vim.treesitter.LanguageTree
+  ---@param level integer
+  local function walk(ltree, level)
+    if not ltree:contains(range) then return end
+    local lang = ltree:lang()
 
----@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
-function H.buffer_fallback_cms_conf_resolver(ctx)
-  local line_cs = vim.bo[ctx.cursor.buf].commentstring
-  local block_cs = vim.b[ctx.cursor.buf].celeste_comment_block_commentstring
-  if line_cs or block_cs then ctx.o_cms_conf = { line_cs, block_cs } end
+    if lang ~= "comment" then
+      dp_tree = ltree
+
+      local filetypes = vim.treesitter.language.get_filetypes(lang)
+      for _, ft in ipairs(filetypes) do
+        local cs = vim.filetype.get_option(ft, "commentstring")
+        if type(cs) == "string" and cs ~= "" and level > dp_level then
+          dp_cs, dp_level = cs, level
+        end
+      end
+
+      for _, child_ltree in pairs(ltree:children()) do
+        walk(child_ltree, level + 1)
+      end
+    end
+  end
+
+  walk(parser, 1)
+
+  return dp_tree, dp_cs
 end
 
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
 function H.builtin_cms_conf_resolver(ctx)
-  if ctx.cfg.cms_confs == false then return end
+  local cursor = ctx.cursor
 
-  local line = vim.fn.getline(ctx.cursor.row + 1)
-  local start_col = line:match("^%s*()")
-  if start_col then ctx.cursor = H.make_pos(ctx.cursor.buf, ctx.cursor.row, start_col - 1) end
+  ctx.o_cms_conf = {
+    [M.CMT.kLine] = vim.bo[cursor.buf].commentstring,
+    [M.CMT.kBlock] = vim.b[cursor.buf].celeste_comment_block_commentstring,
+  }
 
-  local ltree = H.language_tree_resolve(ctx.cursor)
-  local lang = ltree and ltree:lang() or vim.bo[ctx.cursor.buf].filetype
-  if not lang then return end
-
-  local t = (type(ctx.cfg.cms_confs) == "table" and ctx.cfg.cms_confs[lang]) or H.comment_string_confs[lang]
-  if not t then return end
-
-  if vim.is_callable(t) then
-    ---@cast t fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
-    ctx.tree = ltree
-    return t(ctx)
+  -- adjust to start column
+  do
+    local line = vim.fn.getline(cursor.row + 1)
+    local start_col = line:match("^%s*()")
+    if start_col then cursor = H.make_pos(cursor.buf, cursor.row, start_col - 1) end
   end
 
-  ctx.o_cms_conf = t
+  local ltree, ts_cs = H.language_tree_resolve(cursor)
+  if ts_cs and ts_cs ~= "" then ctx.o_cms_conf[M.CMT.kLine] = ts_cs end
+
+  -- disabled builtin comment string config
+  if ctx.cfg.cms_confs == false then return end
+
+  local filetypes = {}
+  if ltree then
+    local lang = ltree:lang()
+    filetypes = vim.treesitter.language.get_filetypes(lang)
+  end
+  filetypes[#filetypes + 1] = vim.bo[cursor.buf].filetype
+
+  local is_table = type(ctx.cfg.cms_confs) == "table"
+  local function get_cms_conf(ft)
+    if ft == "" then return end
+    local conf = is_table and ctx.cfg.cms_confs[ft] or nil
+    return conf or H.comment_string_confs[ft]
+  end
+
+  for _, ft in ipairs(filetypes) do
+    local v = get_cms_conf(ft)
+    if v then
+      if vim.is_callable(v) then
+        ---@cast v fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
+        ctx.tree = ltree
+        return v(ctx)
+      end
+
+      if type(v) == "table" then
+        ctx.o_cms_conf = v
+        return
+      end
+    end
+  end
 end
 
 ---@param cursor vim.Pos
@@ -550,8 +595,7 @@ end
 ---@param range? Celeste.Comment.Range4
 ---@return Celeste.Comment.CommentStringConf?
 function H.make_cms_conf(cursor, cfg, range)
-  local resolvers =
-    { cfg.hooks.cms_conf_resolver or "", H.builtin_cms_conf_resolver, H.buffer_fallback_cms_conf_resolver }
+  local resolvers = { cfg.hooks.cms_conf_resolver or "", H.builtin_cms_conf_resolver }
 
   for _, resolver in ipairs(resolvers) do
     if vim.is_callable(resolver) then
