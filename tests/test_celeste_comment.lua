@@ -4422,6 +4422,59 @@ T["referenced_from_vscode"]["ignore_empty_lines comments signle line"] = functio
   })
 end
 
+T["referenced_from_vscode"]["commenting code in JSX files"] = function()
+  child.lua_func(function()
+    vim.treesitter.language.add("javascript")
+    vim.bo.filetype = "javascript"
+    vim.treesitter.start()
+  end)
+
+  set_lines({
+    "import React from 'react';",
+    "const Loader = () => (",
+    "  <div>",
+    "    Loading...",
+    "  </div>",
+    ");",
+    "export default Loader;",
+  })
+  set_cursor(1, 0)
+  feed("gc6j")
+  eq(get_lines(), {
+    "// import React from 'react';",
+    "// const Loader = () => (",
+    "//   <div>",
+    "//     Loading...",
+    "//   </div>",
+    "// );",
+    "// export default Loader;",
+  })
+  eq(get_cursor(), { 1, 3 })
+  feed("gcgc")
+  eq(get_lines(), {
+    "import React from 'react';",
+    "const Loader = () => (",
+    "  <div>",
+    "    Loading...",
+    "  </div>",
+    ");",
+    "export default Loader;",
+  })
+  eq(get_cursor(), { 1, 0 })
+
+  set_cursor(4, 0)
+  feed("gcc")
+  eq(get_lines(), {
+    "import React from 'react';",
+    "const Loader = () => (",
+    "  <div>",
+    "    {/* Loading... */}",
+    "  </div>",
+    ");",
+    "export default Loader;",
+  })
+end
+
 -- Referenced from:
 -- https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L811
 -- https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L832

@@ -68,11 +68,17 @@ M.ACT = {
 ---@field any_multi? boolean some edit have multiple lines
 ---@field need_sort? boolean need sort edits
 
+---@class Celeste.Comment.CommentStringConf.Overrides
+---@field [string] (Celeste.Comment.CommentStringConf)
+
 ---@class Celeste.Comment.CommentStringConf
 ---@field [1] (string|string[])?
 ---@field [2] (string|string[])?
+---@field query? string query string
+---@field overrides? Celeste.Comment.CommentStringConf.Overrides
 
----@alias Celeste.Comment.CommentStringConfs {[1]:string, [2]:(Celeste.Comment.CommentStringConf|fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx))}
+---@class Celeste.Comment.CommentStringConfs
+---@field [string] (Celeste.Comment.CommentStringConf|fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx))
 
 ---@class Celeste.Comment.CommentStringInfo.Pairs
 ---@field tesc [string, string]
@@ -335,54 +341,57 @@ end
 
 ---@type Celeste.Comment.CommentStringConfs
 H.comment_string_confs = {
-  bash = { { "#%s" }, nil },
-  bat = { { "@REM%s" }, nil },
-  c = { nil, "/*%s*/" },
+  bat = { "@REM%s", nil },
+  c = { "//%s", "/*%s*/" },
   cmake = { { "#%s" }, "#[[%s]]" },
   cpp = { { "//%s" }, "/*%s*/" },
   css = { nil, "/*%s*/" },
-  dockerfile = { { "#%s" }, nil },
-  editorconfig = { { "#%s" }, nil },
+  d = { "//%s", "/*%s*/" },
   fish = { { "#%s" }, nil },
-  gdb = { { "#%s" }, nil },
-  gitignore = { { "#%s" }, nil },
   go = { { "//%s" }, "/*%s*/" },
   gomod = { { "//%s" }, nil },
-  graphql = { { "#%s" }, nil },
   groovy = { { "//%s" }, "/*%s*/" },
   haskell = { { "--%s" }, "{-%s-}" },
   html = { nil, "<!--%s-->" },
-  ini = { { ";%s" }, nil },
+  ini = { { ";%s", "#%s" }, nil },
   java = { { "//%s" }, "/*%s*/" },
-  javascript = { { "//%s" }, "/*%s*/" },
+  javascript = {
+    "//%s",
+    { "/*%s*/" },
+    query = [[
+      (jsx_element) @element
+      [ (jsx_opening_element) (jsx_closing_element) (jsx_self_closing_element) (jsx_expression) ] @default
+    ]],
+    overrides = { element = { nil, "{/*%s*/}" }, default = { "//%s", { "/*%s*/" } } },
+  },
   json5 = { { "//%s" }, "/*%s*/" },
   jsonc = { { "//%s" }, "/*%s*/" },
   kotlin = { { "//%s" }, "/*%s*/" },
   lisp = { { ";;%s" }, "#|%s|#" },
   lua = { { "--%s", "--[[%s]]" }, "--[[%s]]" },
-  make = { { "#%s" } },
   markdown = { nil, "<!--%s-->" },
   nix = { { "#%s" }, "/*%s*/" },
   nu = { { "#%s" }, nil },
   objc = { { "//%s" }, "/*%s*/" },
   objcpp = { { "//%s" }, "/*%s*/" },
-  perl = { { "#%s" }, nil },
   php = { { "//%s" }, "/*%s*/" },
   python = { { "#%s" }, '"""%s"""' },
-  r = { { "#%s" }, nil },
   rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
   scala = { { "//%s" }, "/*%s*/" },
-  sh = { { "#%s" }, nil },
   sql = { { "--%s" }, "/*%s*/" },
   swift = { { "//%s" }, "/*%s*/" },
-  tmux = { { "#%s" }, nil },
-  toml = { { "#%s" }, nil },
-  tsx = { { "//%s" }, { "/*%s*/" } },
+  tsx = {
+    "//%s",
+    "/*%s*/",
+    query = [[
+      (jsx_element) @element
+      [ (jsx_opening_element) (jsx_closing_element) (jsx_self_closing_element) (jsx_expression) ] @default
+    ]],
+    overrides = { element = { nil, "{/*%s*/}" }, default = { "//%s", "/*%s*/" } },
+  },
   typescript = { { "//%s" }, "/*%s*/" },
-  vim = { { '"%s' }, nil },
   xml = { nil, "<!--%s-->" },
-  yaml = { { "#%s" }, nil },
-  zig = { { "//%s" }, nil },
+  zig = { { "//%s", "///", "//!" }, nil },
 }
 
 ---@return boolean
@@ -547,11 +556,70 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
   if ts_cs then ctx.o_cms_conf[M.CMT.kLine] = ts_cs end
 end
 
+---@param cms_conf Celeste.Comment.CommentStringConf
+---@param cursor vim.Pos
+---@param ltree? vim.treesitter.LanguageTree
+function H.overrides_cms_conf(cms_conf, cursor, ltree)
+  local conf = cms_conf
+  if not ltree then return conf end
+
+  local overrides = cms_conf.overrides
+  if not overrides then return conf end
+
+  if type(cms_conf.query) ~= "string" then
+    ---@type Range4
+    local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
+    local node = ltree:named_node_for_range(range)
+    while node do
+      local t = node:type()
+      local v = overrides[t]
+      if v then
+        conf = v
+        break
+      end
+      node = node:parent()
+    end
+    return conf
+  end
+
+  local ok, query = pcall(vim.treesitter.query.parse, ltree:lang(), cms_conf.query)
+  if not ok or not query then return conf end
+
+  local row, col = cursor.row, cursor.col
+  local root = ltree:trees()[1]:root()
+  local best_name, best_len = nil, math.huge
+
+  for _pattern, matchs, _metadata in query:iter_matches(root, ltree:source()) do
+    for capture_id, nodes in pairs(matchs) do
+      local name = query.captures[capture_id]
+      local v = overrides[name]
+      if v then
+        for _, node in ipairs(nodes) do
+          local sr, sc, er, ec = node:range(false)
+          local len = node:byte_length()
+          if
+            (sr < row or (sr == row and sc < col))
+            and (er > row or (er == row and ec >= col))
+            and (not best_name or len < best_len)
+          then
+            best_name, best_len, conf = name, len, v
+          end
+        end
+      end
+    end
+  end
+
+  return conf
+end
+
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
 function H.cms_conf_resolver(ctx)
   if ctx.cfg.cms_confs == false then return end
 
   local cursor = ctx.cursor
+  local line = vim.fn.getline(cursor.row + 1)
+  local start_col = line:match("^%s*()")
+  if start_col then cursor = H.make_pos(cursor.buf, cursor.row, start_col - 1) end
 
   local dptree ---@type vim.treesitter.LanguageTree?
   local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
@@ -567,15 +635,17 @@ function H.cms_conf_resolver(ctx)
   local lang = dptree and dptree:lang() or vim.bo[cursor.buf].filetype
   if not lang then return end
 
-  local t = (type(ctx.cfg.cms_confs) == "table" and ctx.cfg.cms_confs[lang]) or H.comment_string_confs[lang]
-  if not t then return end
+  local conf = (type(ctx.cfg.cms_confs) == "table" and ctx.cfg.cms_confs[lang]) or H.comment_string_confs[lang]
+  if not conf then return end
 
-  if vim.is_callable(t) then
-    ---@cast t fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
+  if vim.is_callable(conf) then
+    ---@cast conf fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
     ctx.tree = dptree
-    return t(ctx)
+    return conf(ctx)
   end
-  ctx.o_cms_conf = t
+
+  ---@cast conf Celeste.Comment.CommentStringConf
+  ctx.o_cms_conf = H.overrides_cms_conf(conf, cursor, dptree)
 end
 
 ---@param cursor vim.Pos
