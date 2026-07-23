@@ -2309,6 +2309,59 @@ T["blockwise"]["multi block cms works"] = function()
   eq(get_lines(), { "    c" })
 end
 
+T["blockwise"]["overlapping markers with /*/{}"] = function()
+  child.bo.filetype = "unknown"
+  -- overlapping markers: {/* (len3) vs /* (len2), */} (len3) vs */ (len2)
+  child.b.celeste_comment_block_commentstring = { "{/*%s*/}", "/*%s*/" }
+
+  -- gbgb selects the full {/* ... */} (not the inner /* ... */)
+  set_lines({ "x = {/* aaa */}" })
+  set_cursor(1, 7)
+  feed("gbgb")
+  eq(get_lines(), { "x = aaa" })
+
+  -- two inline blocks, cursor in the first ({/* */})
+  set_lines({ "{/* aaa */}  /* bbb */" })
+  set_cursor(1, 4)
+  feed("gbgb")
+  eq(get_lines(), { "aaa  /* bbb */" })
+
+  -- two inline blocks, cursor in the second (/* */)
+  set_lines({ "{/* aaa */}  /* bbb */" })
+  set_cursor(1, 15)
+  feed("gbgb")
+  eq(get_lines(), { "{/* aaa */}  bbb" })
+end
+
+T["blockwise"]["overlapping markers with {{/{{{"] = function()
+  child.bo.filetype = "unknown"
+  child.b.celeste_comment_block_commentstring = { "{{%s}}", "{{{%s}}}" }
+
+  -- gbgb on {{{ a }}} → selects the outer pair (longer opener wins)
+  set_lines({ "{{{ a }}}" })
+  set_cursor(1, 3)
+  feed("gbgb")
+  eq(get_lines(), { "a" })
+
+  -- gbgb on {{ a }} → only the shorter pair matches
+  set_lines({ "{{ a }}" })
+  set_cursor(1, 2)
+  feed("gbgb")
+  eq(get_lines(), { "a" })
+
+  -- two inline blocks, cursor in the first ({{{}}})
+  set_lines({ "{{{ a }}}  {{ b }}" })
+  set_cursor(1, 3)
+  feed("gbgb")
+  eq(get_lines(), { "a  {{ b }}" })
+
+  -- two inline blocks, cursor in the second ({{}})
+  set_lines({ "{{{ a }}}  {{ b }}" })
+  set_cursor(1, 12)
+  feed("gbgb")
+  eq(get_lines(), { "{{{ a }}}  b" })
+end
+
 -- block_relaxed_detect tests ──────────────────────────────────────────────────
 
 T["block_relaxed_detect"] = new_set({
@@ -2491,31 +2544,63 @@ T["textobject"]["block_match_pairs multi block cms"] = function()
 
   -- single line, pair 1
   local r = mp({ "{- hello -}" }, 1, csi, pos(0, 0, 3))
-  eq(r, { { 1, 0, 1, 10 } })
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 10)
 
   -- single line, pair 2
   r = mp({ "{# hello #}" }, 1, csi, pos(0, 0, 3))
-  eq(r, { { 1, 0, 1, 10 } })
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 10)
 
   -- multi line, pair 1 spans two lines
   r = mp({ "{- a", "b -}" }, 1, csi, pos(0, 1, 1))
-  eq(r, { { 1, 0, 2, 3 } })
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 2)
+  eq(r[1][4], 3)
 
   -- two inline blocks on one line, cursor in first
   r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 2))
-  eq(r, { { 1, 0, 1, 6 } })
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 6)
 
   -- two inline blocks on one line, cursor in second
   r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 14))
-  eq(r, { { 1, 13, 1, 19 } })
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 13)
+  eq(r[1][3], 1)
+  eq(r[1][4], 19)
 
   -- nested both markers, cursor in outer pair
   r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 2))
-  eq(r, { { 1, 0, 1, 16 } })
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 16)
 
   -- nested both markers, cursor in inner pair
   r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 8))
-  eq(r, { { 1, 5, 1, 11 }, { 1, 0, 1, 16 } })
+  eq(#r, 2)
+  eq(r[1][1], 1)
+  eq(r[1][2], 5)
+  eq(r[1][3], 1)
+  eq(r[1][4], 11)
+  eq(r[2][1], 1)
+  eq(r[2][2], 0)
+  eq(r[2][3], 1)
+  eq(r[2][4], 16)
 
   -- cursor between two blocks, no match
   r = mp({ "{- a -}  {# b #}" }, 1, csi, pos(0, 0, 7))
@@ -2524,6 +2609,72 @@ T["textobject"]["block_match_pairs multi block cms"] = function()
   -- no match
   r = mp({ "hello" }, 1, csi, pos(0, 0, 1))
   eq(r, {})
+end
+
+T["textobject"]["block_match_pairs overlapping markers"] = function()
+  local mp = H.textobject_block_match_pairs
+  local pos = H.make_pos
+  local csi = H.make_csi({ { "{/*", "*/}" }, { "/*", "*/" } })
+
+  -- Single line, cursor inside → both match, outer first
+  local r = mp({ "{/* aaa */}" }, 1, csi, pos(0, 0, 5))
+  eq(#r, 2)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 10)
+  eq(r[2][1], 1)
+  eq(r[2][2], 1)
+  eq(r[2][3], 1)
+  eq(r[2][4], 9)
+
+  -- Standalone /* */ → only the inner pair matches
+  r = mp({ "/* bbb */" }, 1, csi, pos(0, 0, 5))
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 8)
+
+  -- Two blocks inline, cursor in the second
+  r = mp({ "{/* aaa */}  /* bbb */" }, 1, csi, pos(0, 0, 15))
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 13)
+  eq(r[1][3], 1)
+  eq(r[1][4], 21)
+
+  -- Two blocks inline, cursor in the first → outer first
+  r = mp({ "{/* aaa */}  /* bbb */" }, 1, csi, pos(0, 0, 5))
+  eq(#r, 2)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 1)
+  eq(r[1][4], 10)
+  eq(r[2][1], 1)
+  eq(r[2][2], 1)
+  eq(r[2][3], 1)
+  eq(r[2][4], 9)
+
+  -- Multi-line {/*  */}, cursor on first line → outer first
+  r = mp({ "{/* aaa", "bbb */}" }, 1, csi, pos(0, 0, 5))
+  eq(#r, 2)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 2)
+  eq(r[1][4], 6)
+  eq(r[2][1], 1)
+  eq(r[2][2], 1)
+  eq(r[2][3], 2)
+  eq(r[2][4], 5)
+
+  -- Multi-line standalone /* */ → only inner pair matches
+  r = mp({ "/* bbb", "ccc */" }, 1, csi, pos(0, 1, 3))
+  eq(#r, 1)
+  eq(r[1][1], 1)
+  eq(r[1][2], 0)
+  eq(r[1][3], 2)
+  eq(r[1][4], 5)
 end
 
 T["textobject"]["line textobject works"] = function()
@@ -5334,6 +5485,189 @@ T["invert"]["respect ignore_empty_lines"] = function()
   feed("gcI", "2j")
   eq(get_lines(), { "    # a", "    ", "    # b" })
   eq(get_cursor(), { 1, 6 })
+end
+
+-- Vue files test ─────────────────────────────────────────────────────────────
+
+T["vue"] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua_func(function()
+        vim.treesitter.language.add("vue")
+        vim.treesitter.language.add("html")
+        vim.treesitter.language.add("css")
+        vim.treesitter.language.add("javascript")
+        vim.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
+      end)
+    end,
+  },
+})
+
+T["vue"]["works"] = function()
+  child.bo.filetype = "vue"
+  child.bo.tabstop = 2
+  local lines = {
+    "<template>",
+    "  <!-- template comment -->",
+    "  <div>{{ msg }}</div>",
+    "</template>",
+    "",
+    "<script setup>",
+    "// script single-line comment",
+    "/* script multi-line comment */",
+    "const msg = 'hello'",
+    "</script>",
+    "",
+    "<style scoped>",
+    "/* style comment */",
+    "div { color: red; }",
+    "</style>",
+  }
+  set_lines(lines)
+  child.lua_func(function() vim.treesitter.start() end)
+
+  set_cursor(2, 0)
+  feed("gcc")
+  eq(get_lines(2, 2), { "  template comment" })
+  set_cursor(3, 0)
+  feed(".")
+  eq(get_lines(3, 3), { "  <!-- <div>{{ msg }}</div> -->" })
+
+  set_cursor(7, 0)
+  feed(".")
+  eq(get_lines(7, 7), { "script single-line comment" })
+  set_cursor(8, 0)
+  feed("gbc")
+  eq(get_lines(8, 8), { "script multi-line comment" })
+
+  set_cursor(13, 0)
+  feed(".")
+  eq(get_lines(13, 13), { "style comment" })
+  set_cursor(14, 0)
+  feed("gcc")
+  eq(get_lines(14, 14), { "/* div { color: red; } */" })
+end
+
+-- JSX/TSX files test ─────────────────────────────────────────────────────────
+
+T["jsx/tsx"] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua_func(function()
+        vim.treesitter.language.add("tsx")
+        vim.treesitter.language.add("javascript")
+        vim.treesitter.language.add("markdown")
+        vim.bo.tabstop = 2
+        vim.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
+      end)
+    end,
+  },
+})
+
+T["jsx/tsx"]["works"] = function()
+  local lines = {
+    "export default function App() {",
+    "  return (",
+    '    <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div>",
+    "  );",
+    "}",
+  }
+  set_lines(lines)
+  child.bo.filetype = "tsx"
+  child.lua_func(function() vim.treesitter.start() end)
+
+  local function fl(l, exp_lines, cmd)
+    set_cursor(l, 0)
+    feed(cmd or "gcc")
+    eq(get_lines(l, l), exp_lines)
+    feed(".")
+    eq(get_lines(), lines)
+  end
+
+  local function fs(range, exp_lines, cmd)
+    selection(unpack(range))
+    feed(cmd or "gc")
+    eq(get_lines(range[1], range[3]), exp_lines)
+    feed(cmd and cmd .. cmd or "gcgc")
+    eq(get_lines(), lines)
+  end
+
+  fl(1, { "// export default function App() {" })
+  fl(2, { "  // return (" })
+  fl(3, { '    // <div className="app">' })
+  fl(4, { "      {/* <h1>Hello</h1> */}" })
+  fl(5, { "      {/* <Foo bar={1} /> */}" })
+  fl(6, { "    {/* </div> */}" })
+  fl(7, { "  // );" })
+  fl(8, { "// }" })
+
+  fl(1, { "/* export default function App() { */" }, "gbc")
+  fl(2, { "  /* return ( */" }, "gbc")
+  fl(3, { '    /* <div className="app"> */' }, "gbc")
+  fl(4, { "      {/* <h1>Hello</h1> */}" }, "gbc")
+  fl(5, { "      {/* <Foo bar={1} /> */}" }, "gbc")
+  fl(6, { "    {/* </div> */}" }, "gbc")
+  fl(7, { "  /* ); */" }, "gbc")
+  fl(8, { "/* } */" }, "gbc")
+
+  fs({ 3, 0, 6, 0 }, {
+    '    // <div className="app">',
+    "    //   <h1>Hello</h1>",
+    "    //   <Foo bar={1} />",
+    "    // </div>",
+  })
+
+  fs({ 4, 0, 5, 0 }, {
+    "      {/* <h1>Hello</h1>",
+    "      <Foo bar={1} /> */}",
+  })
+
+  fs({ 3, 0, 6, 9 }, {
+    '/*     <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div> */",
+  }, "gb")
+
+  fs({ 4, 0, 5, 20 }, {
+    "{/*       <h1>Hello</h1>",
+    "      <Foo bar={1} /> */}",
+  }, "gb")
+end
+
+T["jsx/tsx"]["works in markdown"] = function()
+  local lines = {
+    "```tsx",
+    "export default function App() {",
+    "  return (",
+    '    <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div>",
+    "  );",
+    "}",
+    "```",
+  }
+  set_lines(lines)
+  child.bo.filetype = "markdown"
+  child.lua_func(function() vim.treesitter.start() end)
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(1, 1), { "<!-- ```tsx -->" })
+  feed(".")
+  eq(get_lines(1, 1), { "```tsx" })
+  set_cursor(4, 0)
+  feed(".")
+  eq(get_lines(4, 4), { '    // <div className="app">' })
+  feed(".")
+  eq(get_lines(4, 4), { '    <div className="app">' })
+  set_cursor(5, 0)
+  feed(".")
+  eq(get_lines(5, 5), { "      {/* <h1>Hello</h1> */}" })
+  feed(".")
 end
 
 return T

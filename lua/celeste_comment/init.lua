@@ -78,7 +78,7 @@ M.ACTION = {
 ---@field overrides? Celeste.Comment.CommentStringConf.Overrides
 
 ---@class Celeste.Comment.CommentStringConfs
----@field [string] (Celeste.Comment.CommentStringConf|fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx))
+---@field [string] (string|Celeste.Comment.CommentStringConf|fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx))
 
 ---@class Celeste.Comment.CommentStringInfo.Pairs
 ---@field tesc [string, string]
@@ -355,17 +355,10 @@ H.comment_string_confs = {
   html = { nil, "<!--%s-->" },
   ini = { { ";%s", "#%s" }, nil },
   java = { { "//%s" }, "/*%s*/" },
-  javascript = {
-    "//%s",
-    { "/*%s*/" },
-    query = [[
-      (jsx_element) @element
-      [ (jsx_opening_element) (jsx_closing_element) (jsx_self_closing_element) (jsx_expression) ] @default
-    ]],
-    overrides = { element = { nil, "{/*%s*/}" }, default = { "//%s", { "/*%s*/" } } },
-  },
+  javascript = "tsx",
   json5 = { { "//%s" }, "/*%s*/" },
   jsonc = { { "//%s" }, "/*%s*/" },
+  jsx = "tsx",
   kotlin = { { "//%s" }, "/*%s*/" },
   lisp = { { ";;%s" }, "#|%s|#" },
   lua = { { "--%s", "--[[%s]]" }, "--[[%s]]" },
@@ -381,13 +374,18 @@ H.comment_string_confs = {
   sql = { { "--%s" }, "/*%s*/" },
   swift = { { "//%s" }, "/*%s*/" },
   tsx = {
-    "//%s",
-    "/*%s*/",
+    { "//%s", "{/*%s*/}" },
+    { "/*%s*/", "{/*%s*/}" },
     query = [[
       (jsx_element) @element
-      [ (jsx_opening_element) (jsx_closing_element) (jsx_self_closing_element) (jsx_expression) ] @default
+      [
+        (jsx_opening_element)
+        (jsx_closing_element)
+        (jsx_self_closing_element)
+        (jsx_expression)
+      ] @default
     ]],
-    overrides = { element = { nil, "{/*%s*/}" }, default = { "//%s", "/*%s*/" } },
+    overrides = { element = { nil, "{/*%s*/}" }, default = { { "//%s", "{/*%s*/}" }, { "/*%s*/", "{/*%s*/}" } } },
   },
   typescript = { { "//%s" }, "/*%s*/" },
   xml = { nil, "<!--%s-->" },
@@ -447,6 +445,8 @@ function H.make_csi(pairs, opts)
   table.sort(tpairs, function(a, b)
     local la, lb = a[1], b[1]
     if #la ~= #lb then return #la > #lb end
+    local lcra, lcrb = a[2], b[2]
+    if #lcra ~= #lcrb then return #lcra > #lcrb end
     return la > lb
   end)
 
@@ -574,6 +574,10 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
       local t = node:type()
       local v = overrides[t]
       if v then
+        H.log(
+          vim.log.levels.TRACE,
+          ("override type:%s lang:%s cursor:[%s, %s, %s]"):format(t, ltree:lang(), cursor.buf, cursor.row, cursor.col)
+        )
         conf = v
         break
       end
@@ -585,11 +589,20 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
   local ok, query = pcall(vim.treesitter.query.parse, ltree:lang(), cms_conf.query)
   if not ok or not query then return conf end
 
+  if #ltree:trees() == 0 then ltree:parse(false) end
+  local root_tree = ltree:trees()[1]
+  if not root_tree then
+    H.log(
+      vim.log.levels.TRACE,
+      ("root tree nil of lang:%s cursor:[%s, %s, %s]"):format(ltree:lang(), cursor.buf, cursor.row, cursor.col)
+    )
+    return conf
+  end
+
   local row, col = cursor.row, cursor.col
-  local root = ltree:trees()[1]:root()
   local best_name, best_len = nil, math.huge
 
-  for _pattern, matchs, _metadata in query:iter_matches(root, ltree:source()) do
+  for _pattern, matchs, _metadata in query:iter_matches(root_tree:root(), ltree:source()) do
     for capture_id, nodes in pairs(matchs) do
       local name = query.captures[capture_id]
       local v = overrides[name]
@@ -609,6 +622,11 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
     end
   end
 
+  H.log(
+    vim.log.levels.TRACE,
+    ("lang:%s best_name:%s cursor:[%s, %s, %s]"):format(ltree:lang(), best_name, cursor.buf, row, col)
+  )
+
   return conf
 end
 
@@ -626,16 +644,26 @@ function H.cms_conf_resolver(ctx)
   if ok and parser ~= nil then
     ---@type Range4
     local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
-    dptree = parser:lang() ~= "comment" and parser or nil
-    parser:for_each_tree(function(_, ltree)
+    dptree = parser
+    ---@param ltree vim.treesitter.LanguageTree
+    local function walk(ltree)
       if ltree:lang() ~= "comment" and ltree:contains(range) then dptree = ltree end
-    end)
+      for _, child_ltree in pairs(ltree:children()) do
+        walk(child_ltree)
+      end
+    end
+    walk(parser)
+  end
+
+  local conf_getter = function(lang)
+    return (type(ctx.cfg.cms_confs)) == "table" and ctx.cfg.cms_confs[lang] or H.comment_string_confs[lang]
   end
 
   local lang = dptree and dptree:lang() or vim.bo[cursor.buf].filetype
   if not lang then return end
 
-  local conf = (type(ctx.cfg.cms_confs) == "table" and ctx.cfg.cms_confs[lang]) or H.comment_string_confs[lang]
+  local conf = conf_getter(lang)
+  if type(conf) == "string" then conf = conf_getter(conf) end
   if not conf then return end
 
   if vim.is_callable(conf) then
@@ -1522,7 +1550,7 @@ function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
                 local key = table.concat({ ol, ocs, cl, cce }, ":")
                 if not seen[key] then
                   seen[key] = true
-                  plist[#plist + 1] = { ol, ocs, cl, cce }
+                  plist[#plist + 1] = { ol, ocs, cl, cce, lcs_len, rcs_len }
                 end
               end
               pos = cpos + rcs_len
@@ -1538,6 +1566,20 @@ function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
   end
 
   table.sort(all_pairs, function(a, b)
+    -- Detect marker overlap: e.g. `{/*` (len 3) and `/*` (len 2) share bytes.
+    -- This is not real nesting — prefer the larger region.
+    if a[1] == b[1] then
+      local a_start, a_len = a[2], a[5]
+      local b_start, b_len = b[2], b[5]
+      if (a_start <= b_start and b_start < a_start + a_len) or (b_start <= a_start and a_start < b_start + b_len) then
+        local ra, ca = a[3] - a[1], a[4] - a[2]
+        local rb, cb = b[3] - b[1], b[4] - b[2]
+        if ra ~= rb then return ra > rb end
+        return ca > cb
+      end
+    end
+
+    -- Real nesting (or non-overlapping pairs): smaller region first.
     local ra, ca = a[3] - a[1], a[4] - a[2]
     local rb, cb = b[3] - b[1], b[4] - b[2]
     if ra ~= rb then return ra < rb end

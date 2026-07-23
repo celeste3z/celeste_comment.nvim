@@ -36,6 +36,6 @@ jobs:
       - name: Install treesitter parsers
         run: |
           nvim --headless --noplugin -u scripts/minimal_init.lua \
-            -c "lua vim.cmd('packadd nvim-treesitter'); require('nvim-treesitter').install({ 'cpp', 'bash', 'markdown', 'html' }):wait(600000)" \
+            -c "lua vim.cmd('packadd nvim-treesitter'); require('nvim-treesitter').install({ 'cpp', 'bash', 'markdown', 'html', 'css', 'vue', 'javascript', 'tsx' }):wait(600000)" \
             -c "qa!"
       - run: make test
