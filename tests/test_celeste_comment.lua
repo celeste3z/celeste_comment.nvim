@@ -121,16 +121,16 @@ end
 
 T["base"] = new_set()
 
-T["base"]["comment_string_unwrap"] = function()
-  local u = H.comment_string_unwrap
-  eq(u("//%s"), { { "//", "" } })
-  eq(u("/*%s*/"), { { "/*", "*/" } })
-  eq(u("// %s"), { { "// ", "" } })
-  eq(u("<!-- %s -->"), { { "<!-- ", " -->" } })
-  eq(u("# %s"), { { "# ", "" } })
-  eq(u("hello"), { { "", "" } })
-  eq(u("{-%s-}"), { { "{-", "-}" } })
-  eq(u("=begin%s=end"), { { "=begin", "=end" } })
+T["base"]["unwrap_comment_strings"] = function()
+  local u = H.unwrap_comment_strings
+  eq(u({ "//%s" }), { { "//", "" } })
+  eq(u({ "/*%s*/" }), { { "/*", "*/" } })
+  eq(u({ "// %s" }), { { "// ", "" } })
+  eq(u({ "<!-- %s -->" }), { { "<!-- ", " -->" } })
+  eq(u({ "# %s" }), { { "# ", "" } })
+  eq(u({ "hello" }), { { "", "" } })
+  eq(u({ "{-%s-}" }), { { "{-", "-}" } })
+  eq(u({ "=begin%s=end" }), { { "=begin", "=end" } })
   eq(u({ "//%s", "///%s", "//!%s" }), { { "//", "" }, { "///", "" }, { "//!", "" } })
 end
 
@@ -155,8 +155,8 @@ T["base"]["find_insert_offset"] = function()
   eq(f(" \t code", 3, 3, 4), 1)
 end
 
-T["base"]["pattern_ci"] = function()
-  local f = H.pattern_ci
+T["base"]["make_pattern_case_insensitive"] = function()
+  local f = H.make_pattern_case_insensitive
   eq(f("rem"), "[rR][eE][mM]")
   eq(f("REM"), "[rR][eE][mM]")
   eq(f("/%*"), "/%*")
@@ -4014,6 +4014,84 @@ T["disable"]["vim.b disables for buffer"] = function()
   set_cursor(1, 0)
   feed("gcc")
   eq(get_lines(), { "aa" })
+end
+
+-- warning msg tests ──────────────────────────────────────────────────────────
+
+local function clear_child_msg()
+  child.lua_func(function() _G.__echo_info = {} end)
+end
+
+local function child_msg() return child.lua_get([[__echo_info]]) end
+
+T["warning"] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua_func(function()
+        _G.__echo_info = {}
+        _G.__old_nvim_echo = vim.api.nvim_echo
+        ---@diagnostic disable-next-line: duplicate-set-field
+        vim.api.nvim_echo = function(chunks, _, _)
+          local msg = vim.iter(chunks):fold("", function(acc, chunk)
+            acc = acc .. chunk[1]
+            return acc
+          end)
+          __echo_info[#__echo_info + 1] = msg
+        end
+        vim.b.celeste_comment_config = { cms_confs = false, fallback_to_block = "never" }
+        vim.bo.filetype = "unknown"
+        vim.bo.commentstring = ""
+        vim.b.celeste_comment_block_commentstring = ""
+      end)
+    end,
+    post_case = function()
+      child.lua_func(function()
+        _G.__echo_info = nil
+        vim.api.nvim_echo = _G.__old_nvim_echo
+      end)
+    end,
+  },
+})
+
+T["warning"]["all invalid"] = function()
+  set_lines({ "a" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "a" })
+  eq(get_cursor(), { 1, 0 })
+  eq(child_msg(), { 'Invalid CommentStringConf : { { "" }, { "" } }' })
+end
+
+T["warning"]["no available"] = function()
+  set_lines({ "a" })
+  set_cursor(1, 0)
+  child.b.celeste_comment_block_commentstring = "{%s}"
+  feed("gcc")
+  eq(get_lines(), { "a" })
+  eq(get_cursor(), { 1, 0 })
+  eq(child_msg(), { "No available line comment string config" })
+  clear_child_msg()
+
+  feed("gbc")
+  eq(get_lines(), { "{ a }" })
+  eq(get_cursor(), { 1, 2 })
+  feed(".")
+  eq(child_msg(), {})
+  child.b.celeste_comment_block_commentstring = ""
+  child.bo.commentstring = "//%s"
+  feed("gbc")
+  eq(get_lines(), { "a" })
+  eq(get_cursor(), { 1, 0 })
+  eq(child_msg(), { "No available block comment string config" })
+
+  clear_child_msg()
+  child.b.celeste_comment_config = { cms_confs = false, fallback_to_block = "if_line_cms_wrapped" }
+  child.b.celeste_comment_block_commentstring = "!@#%s#@!"
+  child.bo.commentstring = ""
+  feed("gcc")
+  eq(get_lines(), { "!@# a #@!" })
+  eq(get_cursor(), { 1, 4 })
+  eq(child_msg(), {})
 end
 
 -- Referenced from vscode ─────────────────────────────────────────────────────

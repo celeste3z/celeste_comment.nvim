@@ -345,7 +345,7 @@ H.comment_string_confs = {
   c = { "//%s", "/*%s*/" },
   cmake = { { "#%s" }, "#[[%s]]" },
   cpp = { { "//%s" }, "/*%s*/" },
-  css = { nil, "/*%s*/" },
+  css = { nil, { "/*%s*/", "<!--%s-->" } },
   d = { "//%s", "/*%s*/" },
   fish = { { "#%s" }, nil },
   go = { { "//%s" }, "/*%s*/" },
@@ -399,92 +399,6 @@ end
 
 ---@return boolean
 function H.is_visual() return vim.fn.mode():match("[vV\22]") ~= nil end
-
----@param pat string
----@return string case-insensitive variant, e.g. "rem" -> "[rR][eE][mM]"
-function H.pattern_ci(pat)
-  local result = pat:gsub("%a", function(c)
-    local l, u = c:lower(), c:upper()
-    return l == u and c or ("[" .. l .. u .. "]")
-  end)
-  return result
-end
-
----@param cs string|string[]
----@return {[1]:string,[2]:string}[]
-function H.comment_string_unwrap(cs)
-  local tp = type(cs)
-  assert(tp == "table" or tp == "string", "invalid comment string")
-  if tp == "string" then cs = { cs } end
-
-  local result = {}
-  for _, s in ipairs(cs) do
-    local l, r = s:match("^(.-)%%s(.-)$")
-    result[#result + 1] = { l or "", r or "" }
-  end
-  return result
-end
-
----@param pairs {[1]:string,[2]:string}[]
----@param opts? {pad?: boolean, ci?: boolean}
----@return Celeste.Comment.CommentStringInfo?
-function H.make_csi(pairs, opts)
-  opts = opts or {}
-  local function make_tesc(cs) return opts.ci and H.pattern_ci(vim.pesc(cs)) or vim.pesc(cs) end
-
-  local function make_out_pair(tlcs, trcs, lcs, rcs)
-    local olcs, orcs = lcs, rcs
-    if opts.pad then
-      olcs = tlcs == "" and "" or tlcs .. " "
-      orcs = trcs == "" and "" or " " .. trcs
-    end
-    return olcs, orcs
-  end
-
-  local tpairs = vim.iter(pairs):map(function(p) return { vim.trim(p[1]), vim.trim(p[2]), p[1], p[2] } end):totable()
-  table.sort(tpairs, function(a, b)
-    local la, lb = a[1], b[1]
-    if #la ~= #lb then return #la > #lb end
-    local lcra, lcrb = a[2], b[2]
-    if #lcra ~= #lcrb then return #lcra > #lcrb end
-    return la > lb
-  end)
-
-  tpairs = vim
-    .iter(tpairs)
-    :filter(function(p) return p[1] ~= "" or p[2] ~= "" end)
-    :map(
-      function(p)
-        return {
-          tesc = { make_tesc(p[1]), make_tesc(p[2]) },
-          traw = { p[1], p[2] },
-          tout = { make_out_pair(p[1], p[2], p[3], p[4]) },
-        }
-      end
-    )
-    :totable()
-
-  if #tpairs == 0 then return end
-
-  local plcs, prcs = unpack(pairs[1], 1, 2)
-  local tplcs, tprcs = vim.trim(plcs), vim.trim(prcs)
-  local olcs, orcs = make_out_pair(tplcs, tprcs, plcs, prcs)
-
-  ---@type Celeste.Comment.CommentStringInfo
-  local res = {
-    pairs = tpairs,
-    tlcs = tplcs,
-    trcs = tprcs,
-    olcs = olcs,
-    orcs = orcs,
-    ci = opts.ci or false,
-    wrapped = (tplcs ~= "" and tprcs ~= ""),
-  }
-
-  if H.should_log(vim.log.levels.TRACE) then H.log(vim.log.levels.TRACE, "csi_info", vim.inspect(res)) end
-
-  return res
-end
 
 ---@param cms_conf Celeste.Comment.CommentStringConf
 function H.normalize_cms_conf(cms_conf)
@@ -631,7 +545,7 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
 end
 
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
-function H.cms_conf_resolver(ctx)
+function H.default_cms_conf_resolver(ctx)
   if ctx.cfg.cms_confs == false then return end
 
   local cursor = ctx.cursor
@@ -679,11 +593,11 @@ end
 ---@param cursor vim.Pos
 ---@param cfg    Celeste.Comment.Opts
 ---@param range? Celeste.Comment.Range4
----@return Celeste.Comment.CommentStringConf?
-function H.make_cms_conf(cursor, cfg, range)
-  local resolvers = { cfg.hooks.cms_conf_resolver or "", H.cms_conf_resolver, H.nvim_builtin_like_cms_conf_resolver }
+function H.make_cms_conf_chainably(cursor, cfg, range)
+  local chains =
+    { cfg.hooks.cms_conf_resolver or "", H.default_cms_conf_resolver, H.nvim_builtin_like_cms_conf_resolver }
 
-  for _, resolver in ipairs(resolvers) do
+  for _, resolver in ipairs(chains) do
     if vim.is_callable(resolver) then
       ---@type Celeste.Comment.Hooks.CmsConfResolver.Ctx
       local ctx = { cfg = cfg, cursor = cursor, range = range }
@@ -699,51 +613,150 @@ function H.make_cms_conf(cursor, cfg, range)
   end
 end
 
----@param cms_conf Celeste.Comment.CommentStringConf
----@param ctype    Celeste.Comment.CommentType
----@param cfg      Celeste.Comment.Opts
----@param silent?  boolean
+---@param pattern string
+---@return string case-insensitive variant, e.g. "rem" -> "[rR][eE][mM]"
+function H.make_pattern_case_insensitive(pattern)
+  local result = pattern:gsub("%a", function(c)
+    local l, u = c:lower(), c:upper()
+    return l == u and c or ("[" .. l .. u .. "]")
+  end)
+  return result
+end
+
+---@param pairs {[1]:string,[2]:string}[]
+---@param opts? {pad?: boolean, ci?: boolean, should_be_wrapped?: boolean}
 ---@return Celeste.Comment.CommentStringInfo?
-function H.make_csi_from_cms_conf(cms_conf, ctype, cfg, silent)
-  if not cms_conf then return end
-  if type(cms_conf) ~= "table" then return end
-  local cms = cms_conf[ctype]
-  if not cms then return end
-  if type(cms) == "string" and cms == "" then return end
-  local pairs = H.comment_string_unwrap(cms)
-  if ctype == M.CMT.kBlock then
-    if vim.iter(pairs):any(function(p) return p[1] == "" or p[2] == "" end) then
-      if not silent then
-        vim.api.nvim_echo(
-          { { "Invalid ", "WarningMsg" }, { "blockwise commentstring : " }, { ("%s"):format(vim.inspect(pairs)) } },
-          true,
-          {}
-        )
+function H.make_csi(pairs, opts)
+  opts = opts or {}
+  local function make_tesc(cs) return opts.ci and H.make_pattern_case_insensitive(vim.pesc(cs)) or vim.pesc(cs) end
+
+  local function make_out_pair(tlcs, trcs, lcs, rcs)
+    local olcs, orcs = lcs, rcs
+    if opts.pad then
+      olcs = tlcs == "" and "" or tlcs .. " "
+      orcs = trcs == "" and "" or " " .. trcs
+    end
+    return olcs, orcs
+  end
+
+  local tpairs = vim
+    .iter(pairs)
+    :map(function(p) return { vim.trim(p[1]), vim.trim(p[2]), p[1], p[2] } end)
+    :filter(function(p)
+      if p[1] == "" and p[2] == "" then return false end
+      if opts.should_be_wrapped then return p[1] ~= "" and p[2] ~= "" end
+      return true
+    end)
+    :totable()
+
+  table.sort(tpairs, function(a, b)
+    local la, lb = a[1], b[1]
+    if #la ~= #lb then return #la > #lb end
+    local lcra, lcrb = a[2], b[2]
+    if #lcra ~= #lcrb then return #lcra > #lcrb end
+    return la > lb
+  end)
+
+  tpairs = vim
+    .iter(tpairs)
+    :map(
+      function(p)
+        return {
+          tesc = { make_tesc(p[1]), make_tesc(p[2]) },
+          traw = { p[1], p[2] },
+          tout = { make_out_pair(p[1], p[2], p[3], p[4]) },
+        }
       end
-      return
+    )
+    :totable()
+
+  if #tpairs == 0 then return end
+
+  local plcs, prcs = unpack(pairs[1], 1, 2)
+  local tplcs, tprcs = vim.trim(plcs), vim.trim(prcs)
+  local olcs, orcs = make_out_pair(tplcs, tprcs, plcs, prcs)
+
+  ---@type Celeste.Comment.CommentStringInfo
+  return {
+    pairs = tpairs,
+    tlcs = tplcs,
+    trcs = tprcs,
+    olcs = olcs,
+    orcs = orcs,
+    ci = opts.ci or false,
+    wrapped = (tplcs ~= "" and tprcs ~= ""),
+  }
+end
+
+---@param cs string[]
+---@return ([string, string])[]
+function H.unwrap_comment_strings(cs)
+  local result = {}
+  for _, s in ipairs(cs) do
+    local l, r = s:match("^(.-)%%s(.-)$")
+    result[#result + 1] = { l or "", r or "" }
+  end
+  return result
+end
+
+---@param cursor vim.Pos
+---@param cfg Celeste.Comment.Opts
+---@param range? Celeste.Comment.Range4
+---@param silent? boolean
+---@return Celeste.Comment.CommentStringInfo[]?
+function H.make_all_csi(cursor, cfg, range, silent)
+  local cms_conf = H.make_cms_conf_chainably(cursor, cfg, range)
+  if not cms_conf then return end
+  local all, valid = {}, false
+  for _, k in pairs(M.CMT) do
+    local cs = cms_conf[k]
+    if type(cs) == "table" then
+      local pairs = H.unwrap_comment_strings(cs)
+      all[k] = H.make_csi(
+        pairs,
+        { pad = cfg.insert_space, ci = cfg.case_insensitive, should_be_wrapped = (k == M.CMT.kBlock) }
+      )
+      valid = valid or (all[k] ~= nil)
     end
   end
-  return H.make_csi(pairs, { pad = cfg.insert_space, ci = cfg.case_insensitive })
+
+  if not valid then
+    if not silent then
+      vim.api.nvim_echo(
+        { { "Invalid", "WarningMsg" }, { " CommentStringConf : " }, { ("%s"):format(vim.inspect(cms_conf)) } },
+        true,
+        {}
+      )
+    end
+    return
+  end
+
+  return all
 end
 
 ---@param cursor vim.Pos
 ---@param ctype  Celeste.Comment.CommentType
 ---@param cfg    Celeste.Comment.Opts
 ---@param range? Celeste.Comment.Range4
+---@param silent? boolean
 ---@return Celeste.Comment.CommentStringInfo?
 ---@return Celeste.Comment.CommentType?
-function H.resolve(cursor, ctype, cfg, range)
-  local cms_conf = H.make_cms_conf(cursor, cfg, range)
-  if not cms_conf then return end
+function H.resolve(cursor, ctype, cfg, range, silent)
+  local all = H.make_all_csi(cursor, cfg, range, silent)
+  if not all then return end
 
-  local csi = H.make_csi_from_cms_conf(cms_conf, ctype, cfg)
-
+  local csi = all[ctype]
   if ctype == M.CMT.kLine and cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then
     if not csi then
-      csi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kBlock, cfg)
+      csi, ctype = all[M.CMT.kBlock], M.CMT.kBlock
+    elseif csi.wrapped then
       ctype = M.CMT.kBlock
     end
-    if csi and csi.wrapped then ctype = M.CMT.kBlock end
+  end
+
+  if not csi and not silent then
+    local t = ctype == M.CMT.kLine and "line" or "block"
+    vim.api.nvim_echo({ { "No available", "WarningMsg" }, { (" %s comment string config"):format(t) } }, true, {})
   end
 
   return csi, ctype
@@ -1708,11 +1721,10 @@ end
 ---@return Celeste.Comment.CommentType?
 ---@return Celeste.Comment.CommentStringInfo?
 function H.compute_x_comment_range(cfg, cursor)
-  local cms_conf = H.make_cms_conf(cursor, cfg)
-  if not cms_conf then return end
+  local all_csi = H.make_all_csi(cursor, cfg, nil, false)
+  if not all_csi then return end
+  local lcsi, bcsi = all_csi[M.CMT.kLine], all_csi[M.CMT.kBlock]
 
-  local lcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kLine, cfg, true)
-  local bcsi = H.make_csi_from_cms_conf(cms_conf, M.CMT.kBlock, cfg, true)
   -- a little bit hack, but works in most scenarios..
   local bprefix = lcsi ~= nil
     and bcsi ~= nil
