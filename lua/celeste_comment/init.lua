@@ -48,7 +48,7 @@ M.FBK2BLOCK = {
 }
 
 ---@enum Celeste.Comment.Action
-M.ACT = {
+M.ACTION = {
   --- Toggle: if all lines commented → uncomment; else → comment.
   kToggle = 1,
   --- Invert: per-line toggle, each line independently commented or uncommented.
@@ -912,7 +912,7 @@ function H.line_comment_info(lines, csi, cfg, range, action, opts)
   -- align to min visible column
   if not cfg.line_comment_no_indent then
     min_visible_col = min_visible_col == math.huge and 0 or (math.floor(min_visible_col / indent_size) * indent_size)
-    if not all_info.should_remove or action == M.ACT.kInvert then
+    if not all_info.should_remove or action == M.ACTION.kInvert then
       for i, line in ipairs(lines) do
         local info = all_info.lines[i]
         if not info.ignore then
@@ -998,23 +998,23 @@ function H.compute_line_edits(lines, range, motion, csi, cfg, action, opts)
     if not info.ignore then
       local edits
 
-      if action == M.ACT.kToggle then
+      if action == M.ACTION.kToggle then
         if all_info.should_remove then
           edits = H.make_uncomment_edits(info, line, cfg)
         else
           edits = H.make_comment_edits(info, line, cfg, range, opts)
         end
-      elseif action == M.ACT.kInvert then
+      elseif action == M.ACTION.kInvert then
         if info.commented then
           edits = H.make_uncomment_edits(info, line, cfg)
         else
           edits = H.make_comment_edits(info, line, cfg, range, opts)
         end
-      elseif action == M.ACT.kForceAdd then
+      elseif action == M.ACTION.kForceAdd then
         edits = H.make_comment_edits(info, line, cfg, range, opts)
       else
         -- kForceRemove
-        assert(action == M.ACT.kForceRemove, "unknown action")
+        assert(action == M.ACTION.kForceRemove, "unknown action")
         if info.commented then edits = H.make_uncomment_edits(info, line, cfg) end
       end
 
@@ -1233,7 +1233,7 @@ function H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
   local info = H.block_comment_info(lines, csi, motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
 
-  if action == M.ACT.kToggle or action == M.ACT.kInvert then
+  if action == M.ACTION.kToggle or action == M.ACTION.kInvert then
     if info then
       edits = H.make_block_uncomment_edits(info)
     elseif motion == "char" then
@@ -1241,7 +1241,7 @@ function H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
     else
       edits = H.make_block_comment_edits(lines, csi, range, opts)
     end
-  elseif action == M.ACT.kForceAdd then
+  elseif action == M.ACTION.kForceAdd then
     if motion == "char" then
       edits = H.make_block_partial_edits(lines, csi, range, opts)
     else
@@ -1249,7 +1249,7 @@ function H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
     end
   else
     -- kForceRemove
-    assert(action == M.ACT.kForceRemove, "unknown action")
+    assert(action == M.ACTION.kForceRemove, "unknown action")
     if info then edits = H.make_block_uncomment_edits(info) end
   end
   return edits
@@ -1723,7 +1723,7 @@ function H.uncomment_auto()
   local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
-  H.make_actionx(cfg, ctype, M.ACT.kToggle, lines, csi, range, ctype == M.CMT.kLine and "line" or "char", cursor)
+  H.make_actionx(cfg, ctype, M.ACTION.kToggle, lines, csi, range, ctype == M.CMT.kLine and "line" or "char", cursor)
 end
 
 -- Textobject: select contiguous linewise comment block
@@ -1806,10 +1806,13 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
   local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
-  local csi, resolved_ctype = H.resolve(cursor, ctype, cfg, range)
-  if not csi or not resolved_ctype then return end
+  local csi, n_ctype = H.resolve(cursor, ctype, cfg, range)
+  if not csi or not n_ctype then return end
 
-  H.make_actionx(cfg, resolved_ctype, action, lines, csi, range, motion, cursor, opts)
+  -- Like VSCode/Zed, always expand selection to line boundaries if fallback to block
+  if ctype == M.CMT.kLine and n_ctype == M.CMT.kBlock then motion = "line" end
+
+  H.make_actionx(cfg, n_ctype, action, lines, csi, range, motion, cursor, opts)
 end
 
 --- Track cursor position
@@ -1821,7 +1824,7 @@ function M.track_cursor() H.track_cursor_state() end
 function H.make_operator(ctype, opts)
   opts = opts or {}
   local s = type(opts.suffix) == "string" and opts.suffix or ""
-  local action = opts.action or M.ACT.kToggle
+  local action = opts.action or M.ACTION.kToggle
   local o = { cfg = opts.cfg }
 
   ---@param motion Celeste.Comment.Motion
@@ -1830,8 +1833,6 @@ function H.make_operator(ctype, opts)
     local cursor = H.make_cursor(0)
     local range = H.get_selection_range(cursor.buf)
     if not range then return end
-
-    -- TODO: should we always expand selection to line boundaries if fallback to block?
     H.make_action_range(cursor, range, ctype, action, motion, o)
   end
 
@@ -1898,9 +1899,9 @@ function M.setup(config)
   local op_toggle_cur       = H.make_operator(M.CMT.kLine, { suffix = "_" })
   local op_block_toggle     = H.make_operator(M.CMT.kBlock)
   local op_block_toggle_cur = H.make_operator(M.CMT.kBlock, { suffix = "_" })
-  local op_invert           = H.make_operator(M.CMT.kLine, { action = M.ACT.kInvert })
-  local op_force_add        = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceAdd })
-  local op_force_rmv        = H.make_operator(M.CMT.kLine, { action = M.ACT.kForceRemove })
+  local op_invert           = H.make_operator(M.CMT.kLine, { action = M.ACTION.kInvert })
+  local op_force_add        = H.make_operator(M.CMT.kLine, { action = M.ACTION.kForceAdd })
+  local op_force_rmv        = H.make_operator(M.CMT.kLine, { action = M.ACTION.kForceRemove })
 
   map("n", m.line_toggle,        op_toggle,           { expr = true, desc = "Comment by motion" })
   map("n", m.line_toggle_cur,    op_toggle_cur,       { expr = true, desc = "Comment current line" })
@@ -1949,7 +1950,7 @@ function M.setup(config)
     H.track_cursor_state()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
-    H.make_action_range(cursor, range, M.CMT.kLine, M.ACT.kToggle, "line", { insmode = true })
+    H.make_action_range(cursor, range, M.CMT.kLine, M.ACTION.kToggle, "line", { insmode = true })
   end, { desc = "Toggle line comment at insert mode" })
 end
 

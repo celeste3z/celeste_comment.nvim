@@ -1215,7 +1215,7 @@ T["edits"]["make_block_partial_edits"] = function()
 end
 
 T["edits"]["compute_line_edits_actions"] = function()
-  local ACT = M.ACT
+  local ACT = M.ACTION
   local csi = H.make_csi({ { "// ", "" } })
   local cfg = {}
 
@@ -1257,7 +1257,7 @@ T["edits"]["compute_line_edits_actions"] = function()
 end
 
 T["edits"]["compute_block_edits_actions"] = function()
-  local ACT = M.ACT
+  local ACT = M.ACTION
   local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local cfg = {}
 
@@ -3803,7 +3803,7 @@ T["markdown"]["visual mode works"] = function()
     "## head",
     "aaa",
     "<!-- ```lua",
-    "  --> local x = 1",
+    "  local x = 1 -->",
     "  local y = 2",
     "```",
     "bbb",
@@ -4510,8 +4510,27 @@ T["referenced_from_vscode"]["fallback to block comment command"] = function()
   })
 end
 
---TODO: https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L874
--- should we always expand selection to line boundaries?
+-- https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L874
+T["referenced_from_vscode"]["always expand selection to line boundaries"] = function()
+  child.bo.commentstring = ""
+  child.b.celeste_comment_block_commentstring = "(%s)"
+  set_lines({
+    "first",
+    "\tsecond line",
+    "third line",
+    "fourth line",
+    "fifth",
+  })
+  selection(3, 2, 1, 3)
+  feed("gc")
+  eq(get_lines(), {
+    "( first",
+    "\tsecond line",
+    "third line )",
+    "fourth line",
+    "fifth",
+  })
+end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L924
 T["referenced_from_vscode"]["fallback to block : no selection => uses indentation"] = function()
@@ -4910,10 +4929,11 @@ T["fallback_to_block"]["if_line_cms_wrapped: works1"] = function()
   feed("gcj")
   eq(get_lines(), { "aaa", "bbb", "ccc" })
 
+  -- always expand selection to line boundaries when fallback_to_block
   set_lines({ "hello world", "foo bar baz" })
   selection(1, 6, 2, 4)
   feed("gc")
-  eq(get_lines(), { "hello /* world", "foo b */ar baz" })
+  eq(get_lines(), { "/* hello world", "foo bar baz */" })
   -- round-trip: gcgc uncomments
   feed("gcgc")
   eq(get_lines(), { "hello world", "foo bar baz" })
@@ -4964,10 +4984,11 @@ T["fallback_to_block"]["if_line_cms_wrapped: works2"] = function()
   eq(get_lines(), { "aaa", "bbb", "ccc" })
   eq(get_cursor(), { 1, 2 })
 
+  -- always expand selection to linewise
   set_lines({ "hello world", "foo bar baz" })
   selection(1, 6, 2, 4)
   feed("gc")
-  eq(get_lines(), { "hello !@# world", "foo b #@!ar baz" })
+  eq(get_lines(), { "!@# hello world", "foo bar baz #@!" })
   -- round-trip: gcgc uncomments
   feed("gcgc")
   eq(get_lines(), { "hello world", "foo bar baz" })
