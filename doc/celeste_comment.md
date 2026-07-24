@@ -1,34 +1,30 @@
 ## Introduction
 
-celeste_comment.nvim — VSCode-style commenting plugin for Neovim with support for line/block comment,
-textobjects, force add/remove, real cursor tracking and more.
+celeste_comment.nvim — a **batteries-included** commenting plugin for Neovim with
+line/block comment toggle, textobjects, force add/remove, real cursor tracking,
+Tree-sitter context-aware comment resolution, and more.
 
-`celeste_comment.nvim` provides a comprehensive commenting experience inspired
-by VSCode's comment implementation. It offers line and block comment toggles,
-textobject selection, force add/remove operations, and precise cursor tracking
-through all edit operations.
-The plugin uses a `TextEdits` model where every operation is defined as
-range+text pairs. This allows accurate cursor position tracking across complex
-multi-line edits and dot-repeat support.
+The plugin uses a `TextEdits` edit-model where every operation is defined as
+range+text pairs, making it more hackable and composable than the direct buffer
+mutations used by other comment plugins. Cursor position is automatically
+computed from `TextEdits`, providing precise tracking across complex multi-line
+edits and full dot-repeat support.
 
 ## Features
 
-- Line comment toggle
-- Block comment toggle
-- Linewise / Blockwise / Auto-detect comment textobject
-- Force add / Force remove line comment
-- Invert comment per line
-- VSCode-style indent algorithm
-- Dot-repeatable, count support
-- Real cursor sticky — tracks cursor position through every edit
-- Insert comment above / below / at end of line
-- Insert mode line toggle
-- Action types — Toggle, Invert, Force Add, Force Remove
-- Case insensitive comment detection
-- Relaxed block detection
-- Multi line comment string detection (e.g. Rust `//`, `///`, `//!`)
-- 40+ built-in language comment strings
-- Custom comment string resolver hook
+- **Line/block comment toggle** -- fully dot-repeatable with count support
+- **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
+- **VSCode-style indent algorithm** -- handles mixed tabs and spaces
+- **Invert/Force add/Force remove** -- per-line comment action control
+- **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
+- **Insert mode line comment toggle** -- with cursor sticky support
+- **Insert comment above / below / at end of line**
+- **Case insensitive comment detection** -- e.g. `@REM` vs `@rem` vs `@rEm`
+- **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
+- **Multi-variant comment string detection** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
+- **`TextEdits` edit-model** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
+- **40+ built-in language comment strings**
+- **Custom comment string resolver hook**
 
 ## Comparison
 
@@ -386,7 +382,7 @@ end, { expr = true })
 
 ```lua
 ---@enum Celeste.Comment.Action
-M.ACT = {
+M.ACTION = {
   kToggle      = 1, -- If all lines commented → uncomment; else → comment
   kInvert      = 2, -- Per-line toggle, each line independently
   kForceAdd    = 3, -- Add comment to all lines (already-commented get another layer)
@@ -490,7 +486,7 @@ vim.b.celeste_comment_config = {
     pre_commit_edits = function(ctx)
       local cmt = require("celeste_comment")
       if ctx.ctype ~= cmt.CMT.kBlock then return end
-      if ctx.action == cmt.ACT.kForceRemove then return end
+      if ctx.action == cmt.ACTION.kForceRemove then return end
       if ctx.motion ~= "line" then return end
       if ctx.edits[1] and ctx.edits[1].text[1] == ctx.csi.olcs then
         local indent = ctx.lines[1]:match("^(%s*)") or ""
@@ -528,24 +524,33 @@ require("celeste_comment").setup({
 
 ## Limitations
 
-- `Auto-detect textobject accuracy` — `auto_textobject` first checks
+- **Auto-detect textobject accuracy** — `textobject_auto()` first checks
   whether the current line contains a line comment. In languages like Lua
   where `--` is used for both line comments (`--`) and block comments
   (`--[[ ]]`), a line starting with `--` may be misidentified as a line
-  comment.
-- `Regex-based textobject range` — Pattern matching can produce false
-  positives in certain scenarios. Comment-like tokens inside strings may
-  be mistaken for actual comments.
-- `Visual block mode (<C-V>)` — Selection is treated as linewise;
-  the entire selected lines are block-commented rather than inserting
-  comment markers per column.
+  comment, leading to incorrect textobject selection.
+
+- **Regex-based textobject range** — Pattern matching can produce false
+  positives in certain scenarios. For example, comment-like tokens inside
+  strings may be mistakenly treated as actual comments. Additionally, the
+  scan range is capped by `block_textobj_nlines` (default 200), so
+  textobject detection may not work beyond that limit.
+
+- **Visual block mode (`<C-v>`)** — Selection is treated as linewise; the
+  entire selected lines are block-commented rather than inserting comment
+  markers per column. For column-wise comment operations, consider using
+  a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
 
 ## Acknowledgments
 
-- [`VSCode`](https://github.com/microsoft/vscode) — The indent algorithm
+- [**VSCode**](https://github.com/microsoft/vscode) — The indent algorithm
   is ported from VSCode's comment implementation. Most of its test cases
-  have also been ported to this plugin's test suite.
-- [`mini.comment`](https://github.com/echasnovski/mini.nvim) — Code style
-  and linewise textobject implementation served as a reference.
-- [`Comment.nvim`](https://github.com/numToStr/Comment.nvim) — Part of the
-  built-in language comment string table was adapted from Comment.nvim.
+  have also been ported to this plugin's test suite. This plugin is highly
+  inspired by it.
+
+- [**mini.comment**](https://github.com/nvim-mini/mini.nvim) — Its code
+  style and linewise textobject implementation served as a reference for
+  this plugin's development.
+
+- [**Comment.nvim**](https://github.com/numToStr/Comment.nvim) — Part of
+  the built-in language comment string table was adapted from Comment.nvim.

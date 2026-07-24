@@ -1,5 +1,5 @@
 <h1 align="center">celeste_comment.nvim</h1>
-<p align="center">VSCode-style commenting plugin with support for line/block comment, textobjects, real sticky cursor and more!</p>
+<p align="center"><b>Batteries-included</b> commenting plugin — line/block comment, textobjects, real sticky cursor, and more!</p>
 
 <!--toc:start-->
 
@@ -19,20 +19,17 @@
 
 ## Features
 
-- Line comment toggle
-- Block comment toggle
-- Linewise/Blockwise/Auto-detect comment textobject (can work without treesitter)
-- Vscode-style indent algorithm, line comment fallback to block comment
-- Dot-repeatable, count support
-- Real cursor sticky
-- Invert comment per line
-- Force add / Force remove line comment
-- Insert mode line comment toggle
-- Insert comment above / below / at end of line
-- Case insensitive comment detection
-- Relaxed block detection
-- Precise edit tracking (via TextEdits)
-- Multi line comment string uncomment — detects and removes multiple line comment strings (e.g. Rust `//`, `///`, `//!`)
+- **Line/block comment toggle** -- fully dot-repeatable with count support
+- **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
+- **VSCode-style indent algorithm** -- handles mixed tabs and spaces
+- **Invert/Force add/Force remove** -- per-line comment action control
+- **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
+- **Insert mode line comment toggle** -- with cursor sticky support
+- **Insert comment above / below / at end of line**
+- **Case insensitive comment detection** -- e.g. `@REM` vs `@rem` vs `@rEm`
+- **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
+- **Multi-variant comment string detecttion** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
+- **`TextEdits` edit-model** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
 
 ## Comparison
 
@@ -63,6 +60,11 @@
 <div align="center">
 <img src="https://github.com/user-attachments/assets/49812f9f-5f1b-44d7-b52a-e46fdccd322f" alt="Commenting in insert mode with keep cursor">
 <p><em>Commenting in insert mode with keep cursor</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/bc163a67-045a-4298-9229-fecf405bfae2" alt="Context-aware comment string resolution via Tree-sitter">
+<p><em>Context-aware comment string resolution via Tree-sitter</em></p>
 </div>
 
 <div align="center">
