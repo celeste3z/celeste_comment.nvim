@@ -22,14 +22,14 @@
 - **Line/block comment toggle** -- fully dot-repeatable with count support
 - **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
-- **Invert/Force add/Force remove** -- per-line comment action control
+- **Invert/Force add/Force remove comment** -- per-line comment action control
 - **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
 - **Insert mode line comment toggle** -- with cursor sticky support
 - **Insert comment above / below / at end of line**
 - **Case insensitive comment detection** -- e.g. `@REM` vs `@rem` vs `@rEm`
 - **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
-- **Multi-variant comment string detecttion** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
-- **`TextEdits` edit-model** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
+- **Multi-variant comment string detection** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
+- **`TextEdits`** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
 
 ## Comparison
 
@@ -210,6 +210,10 @@ require("celeste_comment").setup({})
 See `:help celeste_comment-configuration` for details.
 
 > [!TIP]
+> If a language has **just one** comment style (e.g. `vim`, `asm`) and Neovim already
+> can sets its `commentstring` natively, you don't have to define anything here, we can
+> fully fall back to Neovim's built-in `commentstring` resolution.
+>
 > This plugin already has built-in block comment support for most common languages.
 >
 > If your filetype isn't included, the fastest and simplest way to add it is:
@@ -220,6 +224,17 @@ See `:help celeste_comment-configuration` for details.
 > ```lua
 > -- for example
 > vim.b.celeste_comment_block_commentstring = "{-%s-}"
+> ```
+>
+> Or, you can use `cms_confs`:
+>
+> ```lua
+> -- for example, `xxx` should be the Tree-sitter parser name or filetype
+> require("celeste_comment").setup({
+>   cms_confs = {
+>     "xxx" = {"//%s", "/*%s*/"}
+>   }
+> })
 > ```
 >
 > Line comments are configured via `vim.bo.commentstring` (the standard Neovim option).

@@ -339,15 +339,32 @@ function H.buf_config(cfg)
   return vim.tbl_deep_extend("force", H.config, tb_bcfg and bcfg or {}, tb_cfg and cfg or {})
 end
 
+---NOTE:
+--- 1. The `key` can be a Tree-sitter name or a filetype. e.g. `cs` vs `c_sharp`
+--- 2. If a language has just one comment style (e.g. `vim`, `asm`) and Neovim already
+---    can sets its `commentstring` natively, you don't need to define anything here. Use
+---    `vim.filetype.get_option("xxx", "commentstring")` to see if it's supported, we'll
+---    automatically fall back to it, no extra config needed here.
 ---@type Celeste.Comment.CommentStringConfs
 H.comment_string_confs = {
   bat = { "@REM%s", nil },
+  bicep = { "//%s", "/*%s*/" },
   c = { "//%s", "/*%s*/" },
+  c_sharp = { "//%s", "/*%s*/" },
   cmake = { { "#%s" }, "#[[%s]]" },
   cpp = { { "//%s" }, "/*%s*/" },
+  cs = "c_sharp",
   css = { nil, { "/*%s*/", "<!--%s-->" } },
+  cuda = { "//%s", "/*%s*/" },
   d = { "//%s", "/*%s*/" },
-  fish = { { "#%s" }, nil },
+  dart = { "//%s", "/*%s*/" },
+  dhall = { "--%s", "{-%s-}" },
+  dot = { "//%s", "/*%s*/" },
+  elm = { "--%s", "{-%s-}" },
+  faust = { "//%s", "/*%s*/" },
+  foam = { "//%s", "/*%s*/" },
+  fsharp = { "//", "(*%s*)" },
+  gdshader = { "//%s", "/*%s*/" },
   go = { { "//%s" }, "/*%s*/" },
   gomod = { { "//%s" }, nil },
   groovy = { { "//%s" }, "/*%s*/" },
@@ -359,37 +376,62 @@ H.comment_string_confs = {
   json5 = { { "//%s" }, "/*%s*/" },
   jsonc = { { "//%s" }, "/*%s*/" },
   jsx = "tsx",
+  julia = { "#%s", "#=%s=#" },
+  kdl = { "//%s", { "/*%s*/" } },
   kotlin = { { "//%s" }, "/*%s*/" },
+  latex = { "%%s", { "\\iffalse%s\\fi", "\\begin{comment}%s\\end{comment}" } },
+  tex = "latex",
   lisp = { { ";;%s" }, "#|%s|#" },
   lua = { { "--%s", "--[[%s]]" }, "--[[%s]]" },
   markdown = { nil, "<!--%s-->" },
+  nim = { "#", "#[%s]#" },
   nix = { { "#%s" }, "/*%s*/" },
-  nu = { { "#%s" }, nil },
   objc = { { "//%s" }, "/*%s*/" },
   objcpp = { { "//%s" }, "/*%s*/" },
+  odin = { "//%s", "/*%s*/" },
   php = { { "//%s" }, "/*%s*/" },
+  powershell = { "#%s", "<#%s#>" },
+  ps1 = "powershell",
+  proto = { "//%s", "/*%s*/" },
+  purescript = { "--%s", "{-%s-}" },
   python = { { "#%s" }, '"""%s"""' },
+  racket = { ";;%s", "#|%s|#" },
+  rasi = { "//%s", "/*%s*/" },
+  rescript = { "//%s", "/*%s*/" },
+  ron = { "//%s", "/*%s*/" },
   rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
   scala = { { "//%s" }, "/*%s*/" },
+  scheme = { { ";;%s" }, { "#|%s|#" } },
+  solidity = { "//%s", "/*%s*/" },
   sql = { { "--%s" }, "/*%s*/" },
+  supercollider = { "//%s", "/*%s*/" },
   swift = { { "//%s" }, "/*%s*/" },
+  systemverilog = { "//%s", "/*%s*/" },
+  tablegen = { "//%s", "/*%s*/" },
+  teal = { "--%s", "--[[%s]]" },
+  terraform = { "#%s", "/*%s*/" },
   tsx = {
     { "//%s", "{/*%s*/}" },
     { "/*%s*/", "{/*%s*/}" },
     query = [[
-      (jsx_element) @element
+      (jsx_element) @jsx
       [
         (jsx_opening_element)
         (jsx_closing_element)
         (jsx_self_closing_element)
         (jsx_expression)
-      ] @default
+      ] @nojsx
     ]],
-    overrides = { element = { nil, "{/*%s*/}" }, default = { { "//%s", "{/*%s*/}" }, { "/*%s*/", "{/*%s*/}" } } },
+    overrides = { jsx = { nil, "{/*%s*/}" }, nojsx = { { "//%s", "{/*%s*/}" }, { "/*%s*/", "{/*%s*/}" } } },
   },
   typescript = { { "//%s" }, "/*%s*/" },
+  typespec = { "//%s", "/*%s*/" },
+  typst = { "//%s", "/*%s*/" },
+  v = { "//%s", "/*%s*/" },
+  vala = { "//%s", "/*%s*/" },
+  wgsl = { "//%s", "/*%s*/" },
   xml = { nil, "<!--%s-->" },
-  zig = { { "//%s", "///", "//!" }, nil },
+  zig = { { "//%s", "///%s", "//!%s" }, nil },
 }
 
 ---@return boolean
