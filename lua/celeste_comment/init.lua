@@ -414,7 +414,15 @@ H.comment_string_confs = {
     { "//%s", "{/*%s*/}" },
     { "/*%s*/", "{/*%s*/}" },
     query = [[
-      (jsx_element) @jsx.inner
+      (jsx_element) @jsx.end_exclusive
+      (
+        [
+          (jsx_expression (comment)+)
+          (object (comment)+)
+          (statement_block (comment)+)
+        ] @jsx.inclusive
+        (#match? @jsx.inclusive "^\\{/\\*")
+      )
       [
         (jsx_opening_element)
         (jsx_closing_element)
@@ -422,7 +430,7 @@ H.comment_string_confs = {
         (jsx_expression)
       ] @nojsx.inner
     ]],
-    overrides = { jsx = { nil, "{/*%s*/}" }, nojsx = { { "//%s", "{/*%s*/}" }, { "/*%s*/", "{/*%s*/}" } } },
+    overrides = { jsx = { "{/*%s*/}", "{/*%s*/}" }, nojsx = { { "//%s", "{/*%s*/}" }, { "/*%s*/", "{/*%s*/}" } } },
   },
   typescript = { { "//%s" }, "/*%s*/" },
   typespec = { "//%s", "/*%s*/" },
@@ -543,7 +551,14 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
   end
 
   local ok, query = pcall(vim.treesitter.query.parse, ltree:lang(), cms_conf.query)
-  if not ok or not query then return conf end
+  if not ok then
+    if H.should_log(vim.log.levels.ERROR) then
+      H.log(vim.log.levels.ERROR, ("lang:%s error:%s"):format(ltree:lang(), vim.inspect(query)))
+    end
+    return conf
+  end
+  ---@cast query vim.treesitter.Query
+  assert(query ~= nil, "fatal error, nil Query object")
 
   if #ltree:trees() == 0 then ltree:parse(false) end
   local root_tree = ltree:trees()[1]
@@ -555,14 +570,18 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
     return conf
   end
 
-  local row, col = cursor.row, cursor.col
+  -- PERF: limit the iter match range, window size 400
   local best_name, best_len = nil, math.huge
+  local row, col = cursor.row, cursor.col
+  local the_root = root_tree:root()
+  local iter_from, iter_to = math.max(the_root:start(), row - 200), math.min(the_root:end_(), row + 200)
 
-  for _pattern, matchs, _metadata in query:iter_matches(root_tree:root(), ltree:source()) do
+  for _pattern, matchs, _metadata in query:iter_matches(root_tree:root(), ltree:source(), iter_from, iter_to) do
     for capture_id, nodes in pairs(matchs) do
-      local raw_name = query.captures[capture_id]
-      local base, suffix = raw_name:match("^(.+)%.([^%.]+)$")
-      local name = base or raw_name
+      local capture_name = query.captures[capture_id]
+      local base, suffix = capture_name:match("^(.+)%.([^%.]+)$")
+      local name = base or capture_name
+      -- inclusive default
       local inclusive_start, inclusive_end = true, true
 
       if suffix == "inner" then
@@ -571,8 +590,8 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
         inclusive_end = false
       elseif suffix == "start_exclusive" then
         inclusive_start = false
-      elseif suffix == "inclusive" then
-        -- no change needed
+      else
+        -- inclusive, nothing to do here
       end
 
       local v = overrides[name]

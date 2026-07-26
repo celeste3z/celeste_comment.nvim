@@ -5675,7 +5675,7 @@ T["jsx/tsx"]["works"] = function()
 
   fl(1, { "// export default function App() {" })
   fl(2, { "  // return (" })
-  fl(3, { '    // <div className="app">' })
+  fl(3, { '    {/* <div className="app"> */}' })
   fl(4, { "      {/* <h1>Hello</h1> */}" })
   fl(5, { "      {/* <Foo bar={1} /> */}" })
   fl(6, { "    {/* </div> */}" })
@@ -5684,7 +5684,7 @@ T["jsx/tsx"]["works"] = function()
 
   fl(1, { "/* export default function App() { */" }, "gbc")
   fl(2, { "  /* return ( */" }, "gbc")
-  fl(3, { '    /* <div className="app"> */' }, "gbc")
+  fl(3, { '    {/* <div className="app"> */}' }, "gbc")
   fl(4, { "      {/* <h1>Hello</h1> */}" }, "gbc")
   fl(5, { "      {/* <Foo bar={1} /> */}" }, "gbc")
   fl(6, { "    {/* </div> */}" }, "gbc")
@@ -5692,10 +5692,10 @@ T["jsx/tsx"]["works"] = function()
   fl(8, { "/* } */" }, "gbc")
 
   fs({ 3, 0, 6, 0 }, {
-    '    // <div className="app">',
-    "    //   <h1>Hello</h1>",
-    "    //   <Foo bar={1} />",
-    "    // </div>",
+    '    {/* <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div> */}",
   })
 
   fs({ 4, 0, 5, 0 }, {
@@ -5704,10 +5704,10 @@ T["jsx/tsx"]["works"] = function()
   })
 
   fs({ 3, 0, 6, 9 }, {
-    '/*     <div className="app">',
+    '{/*     <div className="app">',
     "      <h1>Hello</h1>",
     "      <Foo bar={1} />",
-    "    </div> */",
+    "    </div> */}",
   }, "gb")
 
   fs({ 4, 0, 5, 20 }, {
@@ -5731,6 +5731,7 @@ T["jsx/tsx"]["works in markdown"] = function()
   }
   set_lines(lines)
   child.bo.filetype = "markdown"
+  child.bo.tabstop = 2
   child.lua_func(function() vim.treesitter.start() end)
   set_cursor(1, 0)
   feed("gcc")
@@ -5739,13 +5740,205 @@ T["jsx/tsx"]["works in markdown"] = function()
   eq(get_lines(1, 1), { "```tsx" })
   set_cursor(4, 0)
   feed(".")
-  eq(get_lines(4, 4), { '    // <div className="app">' })
+  eq(get_lines(4, 4), { '    {/* <div className="app"> */}' })
   feed(".")
   eq(get_lines(4, 4), { '    <div className="app">' })
   set_cursor(5, 0)
   feed(".")
   eq(get_lines(5, 5), { "      {/* <h1>Hello</h1> */}" })
   feed(".")
+  eq(get_lines(5, 5), { "      <h1>Hello</h1>" })
+
+  selection(4, 0, 7, 10)
+  feed("gc")
+  eq(get_lines(), {
+    "```tsx",
+    "export default function App() {",
+    "  return (",
+    '    {/* <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div> */}",
+    "  );",
+    "}",
+    "```",
+  })
+  feed("gcgc")
+  eq(get_lines(), {
+    "```tsx",
+    "export default function App() {",
+    "  return (",
+    '    <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div>",
+    "  );",
+    "}",
+    "```",
+  })
+
+  selection(3, 0, 8, 3)
+  feed("gc")
+  eq(get_lines(), {
+    "```tsx",
+    "export default function App() {",
+    "  // return (",
+    '  //   <div className="app">',
+    "  //     <h1>Hello</h1>",
+    "  //     <Foo bar={1} />",
+    "  //   </div>",
+    "  // );",
+    "}",
+    "```",
+  })
+  feed("gcgc")
+  eq(get_lines(), {
+    "```tsx",
+    "export default function App() {",
+    "  return (",
+    '    <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div>",
+    "  );",
+    "}",
+    "```",
+  })
+  selection(3, 0, 8, 3)
+  feed("gb")
+  eq(get_lines(), {
+    "```tsx",
+    "export default function App() {",
+    "/*   return (",
+    '    <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div>",
+    "  ); */",
+    "}",
+    "```",
+  })
+  feed("gbgb")
+  eq(get_lines(), {
+    "```tsx",
+    "export default function App() {",
+    "  return (",
+    '    <div className="app">',
+    "      <h1>Hello</h1>",
+    "      <Foo bar={1} />",
+    "    </div>",
+    "  );",
+    "}",
+    "```",
+  })
+end
+
+T["jsx/tsx"]["special case1"] = function()
+  local lines = {
+    "function Test() {",
+    "  return (",
+    "    <Component",
+    '      propA="propA"',
+    '      propB="propB"',
+    '      propC="propC"',
+    '      propD="propD"',
+    '      propE="propE"',
+    '      propF="propF"',
+    "    >",
+    "      children",
+    "    </Component>",
+    "  )",
+    "}",
+  }
+  set_lines(lines)
+  child.bo.filetype = "tsx"
+  child.bo.tabstop = 2
+  child.lua_func(function() vim.treesitter.start() end)
+  set_cursor(4, 0)
+  feed("gcc")
+  eq(get_lines(4, 4), { '      // propA="propA"' })
+  feed(".")
+  eq(get_lines(4, 4), { '      propA="propA"' })
+  set_cursor(11, 0)
+  feed(".")
+  eq(get_lines(11, 11), { "      {/* children */}" })
+  feed(".")
+  eq(get_lines(11, 11), { "      children" })
+
+  selection(3, 0, 10, 4)
+  feed("gc")
+  eq(get_lines(3, 10), {
+    "    {/* <Component",
+    '      propA="propA"',
+    '      propB="propB"',
+    '      propC="propC"',
+    '      propD="propD"',
+    '      propE="propE"',
+    '      propF="propF"',
+    "    > */}",
+  })
+  feed("gcgc")
+  eq(get_lines(3, 10), {
+    "    <Component",
+    '      propA="propA"',
+    '      propB="propB"',
+    '      propC="propC"',
+    '      propD="propD"',
+    '      propE="propE"',
+    '      propF="propF"',
+    "    >",
+  })
+  selection(2, 0, 10, 4)
+  feed("gc")
+  eq(get_lines(2, 10), {
+    "  // return (",
+    "  //   <Component",
+    '  //     propA="propA"',
+    '  //     propB="propB"',
+    '  //     propC="propC"',
+    '  //     propD="propD"',
+    '  //     propE="propE"',
+    '  //     propF="propF"',
+    "  //   >",
+  })
+  feed("gcgc")
+  eq(get_lines(2, 10), {
+    "  return (",
+    "    <Component",
+    '      propA="propA"',
+    '      propB="propB"',
+    '      propC="propC"',
+    '      propD="propD"',
+    '      propE="propE"',
+    '      propF="propF"',
+    "    >",
+  })
+
+  selection(2, 0, 10, 4)
+  feed("gb")
+  eq(get_lines(2, 10), {
+    "/*   return (",
+    "    <Component",
+    '      propA="propA"',
+    '      propB="propB"',
+    '      propC="propC"',
+    '      propD="propD"',
+    '      propE="propE"',
+    '      propF="propF"',
+    "    > */",
+  })
+  feed("gbgb")
+  eq(get_lines(2, 10), {
+    "  return (",
+    "    <Component",
+    '      propA="propA"',
+    '      propB="propB"',
+    '      propC="propC"',
+    '      propD="propD"',
+    '      propE="propE"',
+    '      propF="propF"',
+    "    >",
+  })
 end
 
 return T
