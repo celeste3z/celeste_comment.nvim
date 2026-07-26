@@ -414,13 +414,13 @@ H.comment_string_confs = {
     { "//%s", "{/*%s*/}" },
     { "/*%s*/", "{/*%s*/}" },
     query = [[
-      (jsx_element) @jsx
+      (jsx_element) @jsx.inner
       [
         (jsx_opening_element)
         (jsx_closing_element)
         (jsx_self_closing_element)
         (jsx_expression)
-      ] @nojsx
+      ] @nojsx.inner
     ]],
     overrides = { jsx = { nil, "{/*%s*/}" }, nojsx = { { "//%s", "{/*%s*/}" }, { "/*%s*/", "{/*%s*/}" } } },
   },
@@ -560,17 +560,33 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
 
   for _pattern, matchs, _metadata in query:iter_matches(root_tree:root(), ltree:source()) do
     for capture_id, nodes in pairs(matchs) do
-      local name = query.captures[capture_id]
+      local raw_name = query.captures[capture_id]
+      local base, suffix = raw_name:match("^(.+)%.([^%.]+)$")
+      local name = base or raw_name
+      local inclusive_start, inclusive_end = true, true
+
+      if suffix == "inner" then
+        inclusive_start, inclusive_end = false, false
+      elseif suffix == "end_exclusive" then
+        inclusive_end = false
+      elseif suffix == "start_exclusive" then
+        inclusive_start = false
+      elseif suffix == "inclusive" then
+        -- no change needed
+      end
+
       local v = overrides[name]
       if v then
         for _, node in ipairs(nodes) do
           local sr, sc, er, ec = node:range(false)
           local len = node:byte_length()
-          if
-            (sr < row or (sr == row and sc < col))
-            and (er > row or (er == row and ec >= col))
-            and (not best_name or len < best_len)
-          then
+
+          local start_ok = (inclusive_start and (sr < row or (sr == row and sc <= col)))
+            or (sr < row or (sr == row and sc < col))
+          local end_ok = (inclusive_end and (er > row or (er == row and ec >= col)))
+            or (er > row or (er == row and ec > col))
+
+          if start_ok and end_ok and (not best_name or len < best_len) then
             best_name, best_len, conf = name, len, v
           end
         end
