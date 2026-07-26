@@ -421,9 +421,9 @@ H.comment_string_confs = {
       (jsx_element) @jsx.end_exclusive
       (
         [
-          (jsx_expression (comment)+)
-          (object (comment)+)
-          (statement_block (comment)+)
+          (jsx_expression . (comment)+)
+          (object . (comment)+)
+          (statement_block . (comment)+)
         ] @jsx.inclusive
         (#match? @jsx.inclusive "^\\{/\\*")
       )

@@ -63,7 +63,7 @@
 </div>
 
 <div align="center">
-<img src="https://github.com/user-attachments/assets/7786631f-d49d-4388-babc-fa7643b8dc51" alt="Context-aware comment string resolution via Tree-sitter">
+<img src="https://github.com/user-attachments/assets/58a8e554-cf6b-40c0-aa1b-13110bbd1dba" alt="Context-aware comment string resolution via Tree-sitter">
 <p><em>Context-aware comment string resolution via Tree-sitter</em></p>
 </div>
 
