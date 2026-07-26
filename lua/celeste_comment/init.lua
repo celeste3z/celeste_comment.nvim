@@ -351,6 +351,7 @@ end
 ---    automatically fall back to it, no extra config needed here.
 ---@type Celeste.Comment.CommentStringConfs
 H.comment_string_confs = {
+  astro = { nil, "<!--%s-->" },
   bat = { "@REM%s", nil },
   bicep = { "//%s", "/*%s*/" },
   c = { "//%s", "/*%s*/" },
@@ -373,6 +374,7 @@ H.comment_string_confs = {
   gomod = { { "//%s" }, nil },
   groovy = { { "//%s" }, "/*%s*/" },
   haskell = { { "--%s" }, "{-%s-}" },
+  hcl = { { "#%s", "//%s" }, "/*%s*/" },
   html = { nil, "<!--%s-->" },
   ini = { { ";%s", "#%s" }, nil },
   java = { { "//%s" }, "/*%s*/" },
@@ -409,11 +411,12 @@ H.comment_string_confs = {
   solidity = { "//%s", "/*%s*/" },
   sql = { { "--%s" }, "/*%s*/" },
   supercollider = { "//%s", "/*%s*/" },
+  superhtml = { nil, "<!--%s-->" },
   swift = { { "//%s" }, "/*%s*/" },
   systemverilog = { "//%s", "/*%s*/" },
   tablegen = { "//%s", "/*%s*/" },
   teal = { "--%s", "--[[%s]]" },
-  terraform = { "#%s", "/*%s*/" },
+  terraform = { { "#%s", "//%s" }, "/*%s*/" },
   tsx = {
     { "//%s", "{/*%s*/}" },
     { "/*%s*/", "{/*%s*/}" },
@@ -498,7 +501,7 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
   end
 
   ---@type Range4
-  local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
+  local range = { cursor.row, cursor.col, cursor.row, cursor.col }
   local ts_cs, res_level = nil, 0
 
   ---@param ltree vim.treesitter.LanguageTree
@@ -536,7 +539,7 @@ function H.overrides_cms_conf(cms_conf, pos, ltree)
 
   if type(cms_conf.query) ~= "string" then
     ---@type Range4
-    local range = { pos.row, pos.col, pos.row, pos.col + 1 }
+    local range = { pos.row, pos.col, pos.row, pos.col }
     local node = ltree:named_node_for_range(range)
     while node do
       local t = node:type()
@@ -636,7 +639,7 @@ function H.default_cms_conf_resolver(ctx)
   local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
   if ok and parser ~= nil then
     ---@type Range4
-    local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
+    local range = { cursor.row, cursor.col, cursor.row, cursor.col }
     dptree = parser
     ---@param ltree vim.treesitter.LanguageTree
     local function walk(ltree)

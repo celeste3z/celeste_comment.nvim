@@ -5626,6 +5626,89 @@ T["vue"]["works"] = function()
   eq(get_lines(14, 14), { "/* div { color: red; } */" })
 end
 
+-- PHP files test ─────────────────────────────────────────────────────────────
+
+T["php"] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua_func(function()
+        vim.treesitter.language.add("php")
+        vim.b.celeste_comment_config = {
+          fallback_to_block = "if_line_cms_wrapped",
+          cms_confs = {
+            php = { { "//%s", "<!--%s-->" }, { "/*%s*/", "<!--%s-->" } },
+          },
+        }
+        vim.bo.filetype = "php"
+        vim.treesitter.start()
+      end)
+    end,
+  },
+})
+
+T["php"]["works"] = function()
+  local lines = {
+    "<html>",
+    "<?php",
+    "for ($i = 0; $i < 10; $i++)",
+    "    print_r($i)",
+    "}",
+    "?>",
+    "</html>",
+  }
+  set_lines(lines)
+  set_cursor(3, 0)
+  feed("gc2j")
+  eq(get_cursor(), { 3, 3 })
+  eq(get_lines(3, 5), {
+    "// for ($i = 0; $i < 10; $i++)",
+    "//     print_r($i)",
+    "// }",
+  })
+  feed("gcgc")
+  eq(get_cursor(), { 3, 0 })
+  eq(get_lines(3, 5), {
+    "for ($i = 0; $i < 10; $i++)",
+    "    print_r($i)",
+    "}",
+  })
+
+  feed("gb2j")
+  eq(get_cursor(), { 3, 3 })
+  eq(get_lines(3, 5), {
+    "/* for ($i = 0; $i < 10; $i++)",
+    "    print_r($i)",
+    "} */",
+  })
+  feed(".")
+  eq(get_cursor(), { 3, 0 })
+  eq(get_lines(3, 5), {
+    "for ($i = 0; $i < 10; $i++)",
+    "    print_r($i)",
+    "}",
+  })
+
+  set_cursor(2, 0)
+  feed("gc4j")
+  eq(get_cursor(), { 2, 5 })
+  eq(get_lines(2, 6), {
+    "<!-- <?php",
+    "for ($i = 0; $i < 10; $i++)",
+    "    print_r($i)",
+    "}",
+    "?> -->",
+  })
+  feed("gcgc")
+  eq(get_cursor(), { 2, 0 })
+  eq(get_lines(2, 6), {
+    "<?php",
+    "for ($i = 0; $i < 10; $i++)",
+    "    print_r($i)",
+    "}",
+    "?>",
+  })
+end
+
 -- JSX/TSX files test ─────────────────────────────────────────────────────────
 
 T["jsx/tsx"] = new_set({
