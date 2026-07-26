@@ -1459,7 +1459,8 @@ function H.compute_cursor_state(state, edits, lines, range, csi)
 
   local orow, ocol = state.cursor.row, state.cursor.col
   local ncol, nrow = ocol, orow
-  local eol_pos = #lines[orow - range[1] + 1]
+  local cursor_line = lines[orow - range[1] + 1]
+  local eol_pos = cursor_line and #cursor_line or nil
 
   for i = #edits, 1, -1 do
     local e = edits[i]
