@@ -63,7 +63,7 @@
 </div>
 
 <div align="center">
-<img src="https://github.com/user-attachments/assets/bc163a67-045a-4298-9229-fecf405bfae2" alt="Context-aware comment string resolution via Tree-sitter">
+<img src="https://github.com/user-attachments/assets/7786631f-d49d-4388-babc-fa7643b8dc51" alt="Context-aware comment string resolution via Tree-sitter">
 <p><em>Context-aware comment string resolution via Tree-sitter</em></p>
 </div>
 
@@ -281,8 +281,11 @@ See `:help celeste_comment-configuration` for details.
   have also been ported to this plugin's test suite. This plugin is highly
   inspired by it.
 
+- [**Zed**](https://github.com/zed-industries/zed) — The capture-based overrides
+  paradigm for comment scope resolution.
+
 - [**mini.comment**](https://github.com/nvim-mini/mini.nvim) — Its code
-  style and linewise textobject implementation served as a reference for
+  style and linewise textobjects implementation served as a reference for
   this plugin's development.
 
 - [**Comment.nvim**](https://github.com/numToStr/Comment.nvim) — Part of

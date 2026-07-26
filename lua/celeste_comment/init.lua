@@ -271,6 +271,10 @@ do
     return buf, pos
   end
 
+  ---@param pos vim.Pos
+  ---@return integer
+  function H.pos_to_offset(pos) return vim.api.nvim_buf_get_offset(pos.buf, pos[1]) + pos[2] end
+
   if vim.fn.has("nvim-0.12.2") == 1 then
     ---@param buf integer
     ---@param pos [integer, integer] (lnum, col) tuple
@@ -521,9 +525,9 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
 end
 
 ---@param cms_conf Celeste.Comment.CommentStringConf
----@param cursor vim.Pos
+---@param pos vim.Pos
 ---@param ltree? vim.treesitter.LanguageTree
-function H.overrides_cms_conf(cms_conf, cursor, ltree)
+function H.overrides_cms_conf(cms_conf, pos, ltree)
   local conf = cms_conf
   if not ltree then return conf end
 
@@ -532,7 +536,7 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
 
   if type(cms_conf.query) ~= "string" then
     ---@type Range4
-    local range = { cursor.row, cursor.col, cursor.row, cursor.col + 1 }
+    local range = { pos.row, pos.col, pos.row, pos.col + 1 }
     local node = ltree:named_node_for_range(range)
     while node do
       local t = node:type()
@@ -540,7 +544,7 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
       if v then
         H.log(
           vim.log.levels.TRACE,
-          ("override type:%s lang:%s cursor:[%s, %s, %s]"):format(t, ltree:lang(), cursor.buf, cursor.row, cursor.col)
+          ("override type:%s lang:%s cursor:[%s, %s, %s]"):format(t, ltree:lang(), pos.buf, pos.row, pos.col)
         )
         conf = v
         break
@@ -565,16 +569,16 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
   if not root_tree then
     H.log(
       vim.log.levels.TRACE,
-      ("root tree nil of lang:%s cursor:[%s, %s, %s]"):format(ltree:lang(), cursor.buf, cursor.row, cursor.col)
+      ("root tree nil of lang:%s pos:[%s, %s, %s]"):format(ltree:lang(), pos.buf, pos.row, pos.col)
     )
     return conf
   end
 
   -- PERF: limit the iter match range, window size 400
   local best_name, best_len = nil, math.huge
-  local row, col = cursor.row, cursor.col
+  local off = H.pos_to_offset(pos)
   local the_root = root_tree:root()
-  local iter_from, iter_to = math.max(the_root:start(), row - 200), math.min(the_root:end_(), row + 200)
+  local iter_from, iter_to = math.max(the_root:start(), pos.row - 200), math.min(the_root:end_(), pos.row + 200)
 
   for _pattern, matchs, _metadata in query:iter_matches(root_tree:root(), ltree:source(), iter_from, iter_to) do
     for capture_id, nodes in pairs(matchs) do
@@ -597,15 +601,13 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
       local v = overrides[name]
       if v then
         for _, node in ipairs(nodes) do
-          local sr, sc, er, ec = node:range(false)
+          local _, _, s_off, _, _, e_off = node:range(true)
           local len = node:byte_length()
 
-          local start_ok = (inclusive_start and (sr < row or (sr == row and sc <= col)))
-            or (sr < row or (sr == row and sc < col))
-          local end_ok = (inclusive_end and (er > row or (er == row and ec >= col)))
-            or (er > row or (er == row and ec > col))
+          local sok = (inclusive_start and off >= s_off) or off > s_off
+          local eok = (inclusive_end and off < e_off) or off <= e_off
 
-          if start_ok and end_ok and (not best_name or len < best_len) then
+          if sok and eok and (not best_name or len < best_len) then
             best_name, best_len, conf = name, len, v
           end
         end
@@ -615,7 +617,7 @@ function H.overrides_cms_conf(cms_conf, cursor, ltree)
 
   H.log(
     vim.log.levels.TRACE,
-    ("lang:%s best_name:%s cursor:[%s, %s, %s]"):format(ltree:lang(), best_name, cursor.buf, row, col)
+    ("lang:%s best_name:%s pos:[%s, %s, %s]"):format(ltree:lang(), best_name, pos.buf, pos.row, pos.col)
   )
 
   return conf
