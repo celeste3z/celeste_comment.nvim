@@ -368,7 +368,7 @@ H.comment_string_confs = {
   elm = { "--%s", "{-%s-}" },
   faust = { "//%s", "/*%s*/" },
   foam = { "//%s", "/*%s*/" },
-  fsharp = { "//", "(*%s*)" },
+  fsharp = { { "//%s", "///%s" }, "(*%s*)" },
   gdshader = { "//%s", "/*%s*/" },
   go = { { "//%s" }, "/*%s*/" },
   gomod = { { "//%s" }, nil },
@@ -395,7 +395,7 @@ H.comment_string_confs = {
   objc = { { "//%s" }, "/*%s*/" },
   objcpp = { { "//%s" }, "/*%s*/" },
   odin = { "//%s", "/*%s*/" },
-  php = { { "//%s" }, "/*%s*/" },
+  php = { { "//%s" }, { "/*%s*/", "<!--%s-->" } },
   powershell = { "#%s", "<#%s#>" },
   ps1 = "powershell",
   proto = { "//%s", "/*%s*/" },
@@ -478,10 +478,31 @@ function H.normalize_cms_conf(cms_conf)
   cms_conf[M.CMT.kBlock] = norm(cms_conf[M.CMT.kBlock])
 end
 
----Referenced from https://github.com/neovim/neovim/blob/master/runtime/lua/vim/_comment.lua
+---@param ltree vim.treesitter.LanguageTree
+---@param pos vim.Pos
+---@return boolean
+function H.ltree_contains(ltree, pos)
+  local off = H.pos_to_offset(pos)
+  for _, tree in pairs(ltree:trees()) do
+    local ranges = tree:included_ranges(true)
+    -- HACK: `#ranges > 1` signals a combined injection; may not be accurate, but works in most scenarios?
+    -- Useful for some cases, e.g. html+css (</style>) and php+html (<?php)
+    local inclusive = #ranges > 1
+    for _, tr in ipairs(ranges) do
+      if off >= tr[3] and (off < tr[6] or (inclusive and off == tr[6])) then return true end
+    end
+  end
+  return false
+end
+
+---Based on https://github.com/neovim/neovim/blob/master/runtime/lua/vim/_comment.lua
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
 function H.nvim_builtin_like_cms_conf_resolver(ctx)
   local cursor = ctx.cursor
+  local line = vim.fn.getline(cursor.row + 1)
+  local start_col = line:match("^%s*()")
+  if start_col then cursor = H.make_pos(cursor.buf, cursor.row, start_col - 1) end
+
   ctx.o_cms_conf = {
     [M.CMT.kLine] = vim.bo[cursor.buf].commentstring,
     [M.CMT.kBlock] = vim.b[cursor.buf].celeste_comment_block_commentstring,
@@ -500,14 +521,12 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
     end
   end
 
-  ---@type Range4
-  local range = { cursor.row, cursor.col, cursor.row, cursor.col }
   local ts_cs, res_level = nil, 0
 
   ---@param ltree vim.treesitter.LanguageTree
   ---@param level integer
   local function walk(ltree, level)
-    if not ltree:contains(range) then return end
+    if not H.ltree_contains(ltree, cursor) then return end
     local lang = ltree:lang()
     local filetypes = vim.treesitter.language.get_filetypes(lang)
     for _, ft in ipairs(filetypes) do
@@ -638,12 +657,10 @@ function H.default_cms_conf_resolver(ctx)
   local dptree ---@type vim.treesitter.LanguageTree?
   local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
   if ok and parser ~= nil then
-    ---@type Range4
-    local range = { cursor.row, cursor.col, cursor.row, cursor.col }
     dptree = parser
     ---@param ltree vim.treesitter.LanguageTree
     local function walk(ltree)
-      if ltree:lang() ~= "comment" and ltree:contains(range) then dptree = ltree end
+      if ltree:lang() ~= "comment" and H.ltree_contains(ltree, cursor) then dptree = ltree end
       for _, child_ltree in pairs(ltree:children()) do
         walk(child_ltree)
       end
@@ -2003,7 +2020,7 @@ function M.setup(config)
   vim.validate("block_relaxed_detect", config.block_relaxed_detect, "boolean", true, "boolean")
   vim.validate("block_textobj_nlines", config.block_textobj_nlines, "number", true, "number")
   vim.validate("mappings", config.mappings, "table", true, "table")
-  vim.validate("cms_confs", config.cms_confs, "table", true, "table")
+  vim.validate("cms_confs", config.cms_confs, { "table", "boolean" }, true, "table")
   vim.validate("log_level", config.log_level, "number", true, "vim.log.levels")
   for k, v in pairs(config.mappings) do
     vim.validate("mappings." .. k, v, { "string", "table" }, true, "string or string[]")

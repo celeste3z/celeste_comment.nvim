@@ -5635,9 +5635,6 @@ T["php"] = new_set({
         vim.treesitter.language.add("php")
         vim.b.celeste_comment_config = {
           fallback_to_block = "if_line_cms_wrapped",
-          cms_confs = {
-            php = { { "//%s", "<!--%s-->" }, { "/*%s*/", "<!--%s-->" } },
-          },
         }
         vim.bo.filetype = "php"
         vim.treesitter.start()
@@ -5706,6 +5703,68 @@ T["php"]["works"] = function()
     "    print_r($i)",
     "}",
     "?>",
+  })
+end
+
+-- HTML tests ─────────────────────────────────────────────────────────────────
+
+T["html"] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua_func(function()
+        vim.treesitter.language.add("html")
+        vim.treesitter.language.add("css")
+        vim.b.celeste_comment_config = {
+          fallback_to_block = "if_line_cms_wrapped",
+        }
+        vim.bo.filetype = "html"
+        vim.bo.tabstop = 2
+        vim.treesitter.start()
+      end)
+    end,
+  },
+})
+
+T["html"]["works"] = function()
+  local lines = {
+    "<!DOCTYPE html>",
+    '<html lang="en">',
+    "<body>",
+    "  <style>",
+    "    p {",
+    "      color:'#36f482'",
+    "    }",
+    "  </style>",
+    "</body>",
+    "</html>",
+  }
+  set_lines(lines)
+
+  set_cursor(4, 4)
+  feed("gcc")
+  eq(get_lines(4, 4), { "  <!-- <style> -->" })
+  eq(get_cursor(), { 4, 9 })
+  feed(".")
+  eq(get_lines(4, 4), { "  <style>" })
+  set_cursor(8, 4)
+  feed("gcc")
+  eq(get_lines(8, 8), { "  <!-- </style> -->" })
+  eq(get_cursor(), { 8, 9 })
+  feed(".")
+  eq(get_lines(8, 8), { "  </style>" })
+
+  selection(5, 0, 7, 0)
+  feed("gc")
+  eq(get_lines(5, 7), {
+    "    /* p {",
+    "      color:'#36f482'",
+    "    } */",
+  })
+  feed("gcgc")
+  eq(get_lines(5, 7), {
+    "    p {",
+    "      color:'#36f482'",
+    "    }",
   })
 end
 
