@@ -403,6 +403,14 @@ H.comment_string_confs = {
   python = { { "#%s" }, '"""%s"""' },
   racket = { ";;%s", "#|%s|#" },
   rasi = { "//%s", "/*%s*/" },
+  razor = {
+    { "@*%s*@" },
+    { "@*%s*@" },
+    query = [[
+      (razor_block) @code.inner
+    ]],
+    overrides = { code = { "//%s", nil } },
+  },
   rescript = { "//%s", "/*%s*/" },
   ron = { "//%s", "/*%s*/" },
   rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
@@ -416,6 +424,14 @@ H.comment_string_confs = {
   systemverilog = { "//%s", "/*%s*/" },
   tablegen = { "//%s", "/*%s*/" },
   teal = { "--%s", "--[[%s]]" },
+  templ = {
+    { "//%s" },
+    nil,
+    query = [[
+      (component_block) @statement.inner
+    ]],
+    overrides = { statement = { "<!--%s-->", "<!--%s-->" } },
+  },
   terraform = { { "#%s", "//%s" }, "/*%s*/" },
   tsx = {
     { "//%s", "{/*%s*/}" },
@@ -495,23 +511,29 @@ function H.ltree_contains(ltree, pos)
   return false
 end
 
+---@param pos vim.Pos
+---@return vim.Pos
+function H.adjust_to_start_column_pos(pos)
+  local line = vim.fn.getline(pos.row + 1)
+  local start_col = line:match("^%s*()")
+  if start_col then return H.make_pos(pos.buf, pos.row, start_col - 1) end
+  return pos
+end
+
 ---Based on https://github.com/neovim/neovim/blob/master/runtime/lua/vim/_comment.lua
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
 function H.nvim_builtin_like_cms_conf_resolver(ctx)
-  local cursor = ctx.cursor
-  local line = vim.fn.getline(cursor.row + 1)
-  local start_col = line:match("^%s*()")
-  if start_col then cursor = H.make_pos(cursor.buf, cursor.row, start_col - 1) end
+  local pos = H.adjust_to_start_column_pos(ctx.cursor)
 
   ctx.o_cms_conf = {
-    [M.CMT.kLine] = vim.bo[cursor.buf].commentstring,
-    [M.CMT.kBlock] = vim.b[cursor.buf].celeste_comment_block_commentstring,
+    [M.CMT.kLine] = vim.bo[pos.buf].commentstring,
+    [M.CMT.kBlock] = vim.b[pos.buf].celeste_comment_block_commentstring,
   }
 
-  local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
+  local ok, parser = pcall(vim.treesitter.get_parser, pos.buf, "")
   if not ok or parser == nil then return end
 
-  local caps = vim.treesitter.get_captures_at_pos(cursor.buf, cursor.row, cursor.col)
+  local caps = vim.treesitter.get_captures_at_pos(pos.buf, pos.row, pos.col)
   for i = #caps, 1, -1 do
     local id, metadata = caps[i].id, caps[i].metadata
     local md_cms = metadata["bo.commentstring"] or metadata[id] and metadata[id]["bo.commentstring"]
@@ -526,7 +548,7 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
   ---@param ltree vim.treesitter.LanguageTree
   ---@param level integer
   local function walk(ltree, level)
-    if not H.ltree_contains(ltree, cursor) then return end
+    if not H.ltree_contains(ltree, pos) then return end
     local lang = ltree:lang()
     local filetypes = vim.treesitter.language.get_filetypes(lang)
     for _, ft in ipairs(filetypes) do
@@ -626,8 +648,8 @@ function H.overrides_cms_conf(cms_conf, pos, ltree)
           local _, _, s_off, _, _, e_off = node:range(true)
           local len = node:byte_length()
 
-          local sok = (inclusive_start and off >= s_off) or off > s_off
-          local eok = (inclusive_end and off < e_off) or off <= e_off
+          local sok = off > s_off or (inclusive_start and off == s_off)
+          local eok = off < e_off or (inclusive_end and off == e_off)
 
           if sok and eok and (not best_name or len < best_len) then
             best_name, best_len, conf = name, len, v
@@ -649,18 +671,14 @@ end
 function H.default_cms_conf_resolver(ctx)
   if ctx.cfg.cms_confs == false then return end
 
-  local cursor = ctx.cursor
-  local line = vim.fn.getline(cursor.row + 1)
-  local start_col = line:match("^%s*()")
-  if start_col then cursor = H.make_pos(cursor.buf, cursor.row, start_col - 1) end
-
+  local pos = H.adjust_to_start_column_pos(ctx.cursor)
   local dptree ---@type vim.treesitter.LanguageTree?
-  local ok, parser = pcall(vim.treesitter.get_parser, cursor.buf, "")
+  local ok, parser = pcall(vim.treesitter.get_parser, pos.buf, "")
   if ok and parser ~= nil then
     dptree = parser
     ---@param ltree vim.treesitter.LanguageTree
     local function walk(ltree)
-      if ltree:lang() ~= "comment" and H.ltree_contains(ltree, cursor) then dptree = ltree end
+      if ltree:lang() ~= "comment" and H.ltree_contains(ltree, pos) then dptree = ltree end
       for _, child_ltree in pairs(ltree:children()) do
         walk(child_ltree)
       end
@@ -672,7 +690,7 @@ function H.default_cms_conf_resolver(ctx)
     return (type(ctx.cfg.cms_confs)) == "table" and ctx.cfg.cms_confs[lang] or H.comment_string_confs[lang]
   end
 
-  local lang = dptree and dptree:lang() or vim.bo[cursor.buf].filetype
+  local lang = dptree and dptree:lang() or vim.bo[pos.buf].filetype
   if not lang then return end
 
   local conf = conf_getter(lang)
@@ -686,7 +704,7 @@ function H.default_cms_conf_resolver(ctx)
   end
 
   ---@cast conf Celeste.Comment.CommentStringConf
-  ctx.o_cms_conf = H.overrides_cms_conf(conf, cursor, dptree)
+  ctx.o_cms_conf = H.overrides_cms_conf(conf, pos, dptree)
 end
 
 ---@param cursor vim.Pos
@@ -746,6 +764,7 @@ function H.make_csi(pairs, opts)
       if opts.should_be_wrapped then return p[1] ~= "" and p[2] ~= "" end
       return true
     end)
+    :unique(function(p) return p[1] .. "^" .. p[2] end)
     :totable()
 
   table.sort(tpairs, function(a, b)
