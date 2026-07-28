@@ -1830,7 +1830,9 @@ function H.select_range(range)
   if #range == 2 then
     vim.cmd(("normal! %dGV%dG"):format(range[1] + 1, range[2] + 1))
   else
-    vim.cmd(("normal! %dG%d|v%dG%d|"):format(range[1] + 1, range[2] + 1, range[3] + 1, range[4] + 1))
+    vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
+    vim.cmd("normal! v")
+    vim.api.nvim_win_set_cursor(0, { range[3] + 1, range[4] })
   end
 end
 

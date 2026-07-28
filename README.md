@@ -89,7 +89,8 @@
 
 ## Requirements
 
-- Neovim **>= 0.12**
+- Neovim >= 0.12
+- Tree-sitter parsers (Optional) -- for context-aware comment string resolution
 
 ## Installation
 

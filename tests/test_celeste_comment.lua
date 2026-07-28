@@ -2799,6 +2799,30 @@ T["textobject"]["auto_blockwise_detect"] = function()
   eq(get_lines(), { "start", "", "end" })
 end
 
+T["textobject"]["tabstop + noexpandtab"] = function()
+  child.bo.filetype = "php"
+  child.bo.tabstop = 2
+  child.bo.expandtab = false
+  set_lines({
+    "\tpublic function test(): void {",
+    "\t\techo 'hi';",
+    "\t}",
+  })
+  selection(1, 1, 3, 1)
+  feed("gb")
+  eq(get_lines(), {
+    "\t/* public function test(): void {",
+    "\t\techo 'hi';",
+    "\t} */",
+  })
+  feed("gbgb")
+  eq(get_lines(), {
+    "\tpublic function test(): void {",
+    "\t\techo 'hi';",
+    "\t}",
+  })
+end
+
 T["textobject"]["nested linewise and blockwise comment auto detect"] = function()
   child.bo.filetype = "cpp"
   child.bo.tabstop = 2
