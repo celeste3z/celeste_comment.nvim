@@ -292,100 +292,93 @@ end
 T["base"]["match_line_comment"] = function()
   local csi = H.make_csi({ { "//", "" }, { "///", "" }, { "//!", "" } })
   -- check_only mode
-  eq(H.match_line_comment("/// doc", 0, csi, { check_only = true }), true)
-  eq(H.match_line_comment("//! note", 0, csi, { check_only = true }), true)
-  eq(H.match_line_comment("// comment", 0, csi, { check_only = true }), true)
-  eq(H.match_line_comment("not a comment", 0, csi, { check_only = true }), false)
+  eq(H.match_line_comment("/// doc", 0, csi, { check_only = true }).matched, true)
+  eq(H.match_line_comment("//! note", 0, csi, { check_only = true }).matched, true)
+  eq(H.match_line_comment("// comment", 0, csi, { check_only = true }).matched, true)
+  eq(H.match_line_comment("not a comment", 0, csi, { check_only = true }).matched, false)
 
   -- full mode: lcs_pos
   local r = H.match_line_comment("  /// doc", 1, csi)
-  assert(r)
-  eq(type(r), "table")
+  eq(r.matched, true)
   eq(r.lcs_pos[1], 1)
   eq(r.lcs_pos[2], 2)
   eq(r.rcs_pos, nil)
 
   r = H.match_line_comment("  //! note", 1, csi)
-  eq(type(r), "table")
+  eq(r.matched, true)
 
   r = H.match_line_comment("  // comment", 1, csi)
-  eq(type(r), "table")
+  eq(r.matched, true)
 
   -- no match
-  eq(H.match_line_comment("  foo", 0, csi), nil)
-  eq(H.match_line_comment("  foo", 0, csi, { check_only = true }), false)
+  eq(H.match_line_comment("  foo", 0, csi).matched, false)
+  eq(H.match_line_comment("  foo", 0, csi, { check_only = true }).matched, false)
 
   -- single token (backward compat)
   local csi2 = H.make_csi({ { "//", "" } })
-  eq(H.match_line_comment("// foo", 0, csi2, { check_only = true }), true)
-  eq(H.match_line_comment("/// foo", 0, csi2, { check_only = true }), true)
-  eq(H.match_line_comment("foo", 0, csi2, { check_only = true }), false)
+  eq(H.match_line_comment("// foo", 0, csi2, { check_only = true }).matched, true)
+  eq(H.match_line_comment("/// foo", 0, csi2, { check_only = true }).matched, true)
+  eq(H.match_line_comment("foo", 0, csi2, { check_only = true }).matched, false)
 
   -- rcs-only comment string (%s # style)
   local csi3 = H.make_csi({ { "", " #" } })
-  eq(H.match_line_comment("line #", 0, csi3, { check_only = true }), true)
-  eq(H.match_line_comment("line # ", 0, csi3, { check_only = true }), true)
-  eq(H.match_line_comment("line", 0, csi3, { check_only = true }), false)
+  eq(H.match_line_comment("line #", 0, csi3, { check_only = true }).matched, true)
+  eq(H.match_line_comment("line # ", 0, csi3, { check_only = true }).matched, true)
+  eq(H.match_line_comment("line", 0, csi3, { check_only = true }).matched, false)
 
   -- rcs-only full mode
   local r3 = H.match_line_comment("  a # b #", 1, csi3)
-  assert(r3)
-  eq(type(r3), "table")
+  eq(r3.matched, true)
   eq(r3.rcs_pos, { 1, 7, 8 })
   eq(r3.lcs_pos, nil)
 
   -- rcs-only: line with multiple ##, only last one matched
   r3 = H.match_line_comment("line ##", 1, csi3)
-  assert(r3)
-  eq(type(r3), "table")
+  eq(r3.matched, true)
   eq(r3.rcs_pos, { 1, 6, 6 })
 
   -- lcs+rcs with pad
   local csi4 = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local r4 = H.match_line_comment("  /* hello */", 1, csi4)
-  assert(r4)
+  eq(r4.matched, true)
   eq(r4.lcs_pos[2], 2)
   eq(r4.rcs_pos, { 1, 10, 12 })
 
   -- lcs+rcs without pad
   local csi5 = H.make_csi({ { "/*", "*/" } }, { pad = false })
   local r5 = H.match_line_comment("  /*hello*/", 1, csi5)
-  assert(r5)
-  eq(r5 ~= nil, true)
+  eq(r5.matched, true)
   eq(r5.lcs_pos[2], 2)
   eq(r5.rcs_pos[2], 9)
 
   -- multi-word content after lcs with rcs
   local csi6 = H.make_csi({ { "// ", "" } })
   local r6 = H.match_line_comment("  // hello world", 1, csi6)
-  assert(r6)
-  eq(type(r6), "table")
+  eq(r6.matched, true)
   eq(r6.lcs_pos[2], 2)
   eq(r6.rcs_pos, nil)
 
   -- tab indentation
   r6 = H.match_line_comment("\t// indented", 1, csi6)
-  assert(r6)
-  eq(type(r6), "table")
+  eq(r6.matched, true)
   eq(r6.lcs_pos[2], 1)
 
   r6 = H.match_line_comment("// foo", 1, csi6)
-  assert(r6)
+  eq(r6.matched, true)
 
   -- lcs+rcs: content with nested lcs pattern
   local csi7 = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local r7 = H.match_line_comment("  /* a /* b */", 1, csi7)
-  assert(r7)
-  eq(type(r7), "table")
+  eq(r7.matched, true)
   eq(r7.lcs_pos, { 1, 2, 4 })
   eq(r7.rcs_pos, { 1, 11, 13 })
 
   -- will_blank with check_will_blank
   local r8 = H.match_line_comment("  //", 1, csi, { check_will_blank = true })
-  assert(r8)
+  eq(r8.matched, true)
   eq(r8.will_blank, true)
   r8 = H.match_line_comment("  /// doc", 1, csi, { check_will_blank = true })
-  assert(r8)
+  eq(r8.matched, true)
   eq(r8.will_blank, false)
 end
 

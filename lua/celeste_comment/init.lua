@@ -86,13 +86,13 @@ M.ACTION = {
 ---@field tout [string, string]
 
 ---@class Celeste.Comment.CommentStringInfo
----@field ci         boolean -- case-insensitive
----@field wrapped    boolean -- comment string was wrapped
----@field tlcs       string  -- vim.trim(lcs)
----@field trcs       string  -- vim.trim(rcs)
----@field olcs       string  -- output: pad=true->tlcs+" ", else->lcs
----@field orcs       string  -- output: pad=true->" "+trcs, else->rcs
----@field pairs      Celeste.Comment.CommentStringInfo.Pairs[]
+---@field ci          boolean -- case-insensitive
+---@field wrapped     boolean -- comment string was wrapped
+---@field tlcs        string  -- vim.trim(lcs)
+---@field trcs        string  -- vim.trim(rcs)
+---@field olcs        string  -- output: pad=true->tlcs+" ", else->lcs
+---@field orcs        string  -- output: pad=true->" "+trcs, else->rcs
+---@field pairs       Celeste.Comment.CommentStringInfo.Pairs[]
 
 ---@class Celeste.Comment.LineCommentInfo.Line
 ---@field row         integer real row in buffer
@@ -881,22 +881,25 @@ function H.resolve(cursor, ctype, cfg, range, silent)
 end
 
 ---@class Celeste.Comment.MatchLineComment.Result
+---@field matched     boolean
+---@field idx?        integer
 ---@field lcs_pos?    Celeste.Comment.Range3
 ---@field rcs_pos?    Celeste.Comment.Range3
 ---@field will_blank? boolean
 
----@param line  string
----@param row   integer
 ---@param csi   Celeste.Comment.CommentStringInfo
 ---@param opts? {check_only?: boolean, check_will_blank?: boolean}
----@return (boolean|Celeste.Comment.MatchLineComment.Result)?
+---@return Celeste.Comment.MatchLineComment.Result
 function H.match_line_comment(line, row, csi, opts)
-  for _, p in ipairs(csi.pairs) do
+  opts = opts or {}
+
+  for idx, p in ipairs(csi.pairs) do
     local tlcs_esc, trcs_esc = p.tesc[1], p.tesc[2]
     local suffix = #trcs_esc > 0 and "(.-)()" .. trcs_esc .. "()%s*$" or "(.-)%s*$"
     local s, _e, p1, p2, content, p3, p4 = line:find("^%s*()" .. tlcs_esc .. "()" .. suffix)
     if s then
-      if opts and opts.check_only then return true end
+      local real_idx = idx
+      if opts.check_only then return { matched = true, idx = real_idx } end
 
       local olcs, orcs = p.tout[1], p.tout[2]
 
@@ -911,12 +914,12 @@ function H.match_line_comment(line, row, csi, opts)
         local rcs_start = p3 - matched
         rcs_pos = { row, rcs_start - 1, p4 - 2 }
       end
-      local res = { lcs_pos = lcs_pos, rcs_pos = rcs_pos }
-      if opts and opts.check_will_blank then res.will_blank = content:match("^%s*$") ~= nil end
+      local res = { matched = true, idx = real_idx, lcs_pos = lcs_pos, rcs_pos = rcs_pos }
+      if opts.check_will_blank then res.will_blank = content:match("^%s*$") ~= nil end
       return res
     end
   end
-  if opts and opts.check_only then return false end
+  return { matched = false }
 end
 
 ---@param cur_visible_col integer current visible column
@@ -993,9 +996,10 @@ end
 ---@param cfg    Celeste.Comment.Opts
 ---@param range  Celeste.Comment.Range4
 ---@param action Celeste.Comment.Action
----@param opts?  Celeste.Comment.ExecutionOpts
+---@param cursor? vim.Pos
+---@param opts?   Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.LineCommentInfo
-function H.line_comment_info(lines, csi, cfg, range, action, opts)
+function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
   opts = opts or {}
   range = range or { 0 }
   ---@type Celeste.Comment.LineCommentInfo
@@ -1032,9 +1036,10 @@ function H.line_comment_info(lines, csi, cfg, range, action, opts)
       info.offset = cfg.line_comment_no_indent and 0 or ws_len
       info.lead_ws_len = ws_len
 
-      local match_res =
-        H.match_line_comment(line, row, csi, { check_will_blank = cfg.ignore_empty_lines == M.IGN_EMT.kMixed })
-      if match_res then
+      local match_res = H.match_line_comment(line, row, csi, {
+        check_will_blank = cfg.ignore_empty_lines == M.IGN_EMT.kMixed,
+      })
+      if match_res.matched then
         info.lcs_pos = match_res.lcs_pos
         info.rcs_pos = match_res.rcs_pos
         info.will_blank = match_res.will_blank
@@ -1147,10 +1152,10 @@ end
 ---@param action Celeste.Comment.Action
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.compute_line_edits(lines, range, motion, csi, cfg, action, opts)
+function H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   opts = opts or {}
   local all_edits = {} ---@type Celeste.Comment.TextEdits
-  local all_info = H.line_comment_info(lines, csi, cfg, range, action, opts)
+  local all_info = H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
 
   for i, line in ipairs(lines) do
     local info = all_info.lines[i]
@@ -1388,7 +1393,7 @@ end
 ---@param action Celeste.Comment.Action
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
-function H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
+function H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   local info = H.block_comment_info(lines, csi, motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
 
@@ -1550,9 +1555,9 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
   opts = opts or {}
   local edits ---@type Celeste.Comment.TextEdits
   if ctype == M.CMT.kBlock then
-    edits = H.compute_block_edits(lines, range, motion, csi, cfg, action, opts)
+    edits = H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   else
-    edits = H.compute_line_edits(lines, range, motion, csi, cfg, action, opts)
+    edits = H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   end
   assert(edits, "unexpected error, nil edits")
 
@@ -1590,7 +1595,7 @@ function H.compute_linecomment_range(cfg, cursor, csi)
   local function is_comment(lnum)
     local l = vim.fn.getline(lnum)
     if l:match("^%s*$") then return false end
-    return H.match_line_comment(l, lnum - 1, csi, { check_only = true })
+    return H.match_line_comment(l, lnum - 1, csi, { check_only = true }).matched
   end
 
   if line:match("^%s*$") then
