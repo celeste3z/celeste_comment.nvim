@@ -70,7 +70,7 @@
 </div>
 
 <div align="center">
-<img src="https://github.com/user-attachments/assets/ef75bbe0-a9e9-4099-989b-9ed4e2910482" alt="Keep selection when toggle comments in visual mode">
+<img src="https://github.com/user-attachments/assets/42deb618-74c2-4589-9c7c-2f1b8441f487" alt="Keep selection when toggle comments in visual mode">
 <p><em>Keep selection when toggle comments in visual mode</em></p>
 </div>
 
