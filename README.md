@@ -21,6 +21,7 @@
 
 - **Line/block comment toggle** -- fully dot-repeatable with count support
 - **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
+- **Keep selection** -- selection range automatically adjusts across `TextEdits` when toggling comments in visual mode
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
 - **Invert/Force add/Force remove comment** -- per-line comment action control
 - **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
@@ -43,7 +44,8 @@
 | **Dot-repeat**           | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
 | **Count**                | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
 | **Indent algorithm**     | **VSCode-style** — min visible col<br>• handle mixed tab/space                                                              | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Minimal — `^\s*\zs`<br>• optional startofline             |
-| **Keep cursor**          | **Precise tracking** — adjust per TextEdit<br>• row/col shifts<br>• multi-line inserts                                      | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                                  | ❌                                                        |
+| **Keep cursor**          | **Precise tracking** — cursor adjusts per TextEdit                                                                          | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                                  | ❌                                                        |
+| **Keep selection**       | **Precise tracking** — selection adjusts per TextEdit                                                                       | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Invert per line**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Line textobject**      | ✅                                                                                                                          | ✅                                                                  | ❌                                                            | ✅                                                                  | ✅                                                        |
 | **Block textobject**     | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
@@ -65,6 +67,11 @@
 <div align="center">
 <img src="https://github.com/user-attachments/assets/58a8e554-cf6b-40c0-aa1b-13110bbd1dba" alt="Context-aware comment string resolution via Tree-sitter">
 <p><em>Context-aware comment string resolution via Tree-sitter</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/ef75bbe0-a9e9-4099-989b-9ed4e2910482" alt="Keep selection when toggle comments in visual mode">
+<p><em>Keep selection when toggle comments in visual mode</em></p>
 </div>
 
 <div align="center">
@@ -126,6 +133,9 @@ require("celeste_comment").setup({})
 {
   -- Restore cursor position after commenting.
   keep_cursor            = true,
+
+  -- Restore selection after commenting.
+  keep_selection         = false,
 
   -- Insert space between comment marker and text.
   insert_space           = true,

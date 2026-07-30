@@ -160,6 +160,7 @@ M.ACTION = {
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor?                boolean default true
+---@field keep_selection?             boolean default false
 ---@field insert_space?               boolean default true
 ---@field line_comment_no_indent?     boolean default false
 ---@field case_insensitive?           boolean default false
@@ -176,16 +177,19 @@ M.ACTION = {
 ---@class Celeste.Comment.ExecutionOpts
 ---@field [string] any
 
----@class Celeste.Comment.CursorStateTrack
----@field cursor vim.Pos
+---@class Celeste.Comment.StateTrack
+---@field cursor? vim.Pos
+---@field end_pos? vim.Pos
+---@field mode? string
 
----@type Celeste.Comment.CursorStateTrack?
-H.cursor_state = nil
+---@type Celeste.Comment.StateTrack?
+H.state_track = nil
 
 -- stylua: ignore start
 ---@type Celeste.Comment.Opts
 H.config = {
   keep_cursor               = true,
+  keep_selection            = false,
   insert_space              = true,
   line_comment_no_indent    = false,
   case_insensitive          = false,
@@ -1487,23 +1491,49 @@ function H.get_selection_range(buf)
   return { sr, sc, er, ec }
 end
 
-function H.track_cursor_state() H.cursor_state = { cursor = H.make_cursor(0) } end
-
----@param cfg Celeste.Comment.Opts
-function H.restore_cursor_state(cfg)
-  if cfg.keep_cursor and H.cursor_state then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(H.cursor_state.cursor)) end
-  H.cursor_state = nil
+function H.make_state_track()
+  local state = {} ---@type Celeste.Comment.StateTrack
+  state.cursor = H.make_cursor(0)
+  if H.is_visual() then
+    state.mode = vim.fn.mode()
+    local end_pos = vim.fn.getpos("v")
+    if end_pos then state.end_pos = H.make_pos(end_pos[1], end_pos[2] - 1, end_pos[3] - 1) end
+  end
+  H.state_track = state
 end
 
----@param state? Celeste.Comment.CursorStateTrack
+---@param cfg Celeste.Comment.Opts
+function H.restore_state(cfg)
+  local state
+  state, H.state_track = H.state_track, nil
+
+  if not state then return end
+
+  if cfg.keep_selection and state.mode then
+    local range ---@type Celeste.Comment.Range4
+    if state.mode == "\22" then
+      vim.cmd("normal! gv")
+    elseif state.mode == "V" then
+      range = { state.end_pos[1], state.cursor[1] }
+      if range[1] > range[2] then range = { range[2], range[1] } end
+    elseif state.mode == "v" then
+      range = { state.end_pos[1], state.end_pos[2], state.cursor[1], state.cursor[2] }
+    end
+
+    if range then H.select_range(range) end
+  end
+
+  if cfg.keep_cursor and state.cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.cursor)) end
+end
+
+---@param pos vim.Pos
 ---@param edits Celeste.Comment.TextEdits
 ---@param lines string[]
 ---@param range Celeste.Comment.Range4
 ---@param csi  Celeste.Comment.CommentStringInfo
-function H.compute_cursor_state(state, edits, lines, range, csi)
-  if not state then return end
-
-  local orow, ocol = state.cursor.row, state.cursor.col
+---@return vim.Pos
+function H.compute_cursor_pos(pos, edits, lines, range, csi)
+  local orow, ocol = pos.row, pos.col
   local ncol, nrow = ocol, orow
   local cursor_line = lines[orow - range[1] + 1]
   local eol_pos = cursor_line and #cursor_line or nil
@@ -1539,7 +1569,18 @@ function H.compute_cursor_state(state, edits, lines, range, csi)
     end
   end
 
-  state.cursor = H.make_pos(state.cursor.buf, math.max(0, nrow), math.max(0, ncol))
+  return H.make_pos(pos.buf, math.max(0, nrow), math.max(0, ncol))
+end
+
+---@param state? Celeste.Comment.StateTrack
+---@param edits Celeste.Comment.TextEdits
+---@param lines string[]
+---@param range Celeste.Comment.Range4
+---@param csi  Celeste.Comment.CommentStringInfo
+function H.compute_cursor_state(state, edits, lines, range, csi)
+  if not state then return end
+  state.cursor = H.compute_cursor_pos(state.cursor, edits, lines, range, csi)
+  if state.end_pos then state.end_pos = H.compute_cursor_pos(state.end_pos, edits, lines, range, csi) end
 end
 
 ---@param cfg    Celeste.Comment.Opts
@@ -1576,11 +1617,17 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
   }
   if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
-  H.compute_cursor_state(cfg.keep_cursor and H.cursor_state or nil, ctx.edits, lines, range, ctx.csi)
+  H.compute_cursor_state(
+    (cfg.keep_cursor or cfg.keep_selection) and H.state_track or nil,
+    ctx.edits,
+    lines,
+    range,
+    ctx.csi
+  )
 
   H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
 
-  H.restore_cursor_state(cfg)
+  H.restore_state(cfg)
 end
 
 ---@param cfg Celeste.Comment.Opts
@@ -1889,7 +1936,7 @@ end
 --- Auto-detect and remove comment
 function H.uncomment_auto()
   if H.is_disabled() then return end
-  H.track_cursor_state()
+  H.make_state_track()
 
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
@@ -1996,7 +2043,7 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
 end
 
 --- Track cursor position
-function M.track_cursor() H.track_cursor_state() end
+function M.track_cursor() H.make_state_track() end
 
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.ExecutionOpts
@@ -2018,7 +2065,7 @@ function H.make_operator(ctype, opts)
 
   return function()
     if H.is_disabled() then return "" end
-    H.track_cursor_state()
+    H.make_state_track()
 
     _G.__celeste_comment_operator_func = f
     vim.o.operatorfunc = "v:lua.__celeste_comment_operator_func"
@@ -2030,6 +2077,7 @@ end
 function M.setup(config)
   config = vim.tbl_deep_extend("force", vim.deepcopy(H.config), config or {})
   vim.validate("keep_cursor", config.keep_cursor, "boolean", true, "boolean")
+  vim.validate("keep_selection", config.keep_selection, "boolean", true, "boolean")
   vim.validate("insert_space", config.insert_space, "boolean", true, "boolean")
   vim.validate("line_comment_no_indent", config.line_comment_no_indent, "boolean", true, "boolean")
   vim.validate("ignore_empty_lines", config.ignore_empty_lines, function(v)
@@ -2075,17 +2123,17 @@ function M.setup(config)
   end
 
   -- stylua: ignore start
-  local op_toggle           = H.make_operator(M.CMT.kLine)
-  local op_toggle_cur       = H.make_operator(M.CMT.kLine, { suffix = "_" })
+  local op_line_toggle      = H.make_operator(M.CMT.kLine)
+  local op_line_toggle_cur  = H.make_operator(M.CMT.kLine, { suffix = "_" })
   local op_block_toggle     = H.make_operator(M.CMT.kBlock)
   local op_block_toggle_cur = H.make_operator(M.CMT.kBlock, { suffix = "_" })
   local op_invert           = H.make_operator(M.CMT.kLine, { action = M.ACTION.kInvert })
   local op_force_add        = H.make_operator(M.CMT.kLine, { action = M.ACTION.kForceAdd })
   local op_force_rmv        = H.make_operator(M.CMT.kLine, { action = M.ACTION.kForceRemove })
 
-  map("n", m.line_toggle,        op_toggle,           { expr = true, desc = "Comment by motion" })
-  map("n", m.line_toggle_cur,    op_toggle_cur,       { expr = true, desc = "Comment current line" })
-  map("x", m.line_toggle_visual, op_toggle,           { expr = true, desc = "Comment selection" })
+  map("n", m.line_toggle,        op_line_toggle,      { expr = true, desc = "Line comment by motion" })
+  map("n", m.line_toggle_cur,    op_line_toggle_cur,  { expr = true, desc = "Line comment current line" })
+  map("x", m.line_toggle_visual, op_line_toggle,      { expr = true, desc = "Line comment selection" })
   map("n", m.block_toggle,       op_block_toggle,     { expr = true, desc = "Block comment by motion" })
   map("n", m.block_toggle_cur,   op_block_toggle_cur, { expr = true, desc = "Block comment current line" })
   map("x", m.block_toggle_visual,op_block_toggle,     { expr = true, desc = "Block comment selection" })
@@ -2122,12 +2170,12 @@ function M.setup(config)
   )
 
   map("n", m.dot_repeat, function()
-    H.track_cursor_state()
+    H.make_state_track()
     return "."
   end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
 
   map("i", m.line_toggle_insert, function()
-    H.track_cursor_state()
+    H.make_state_track()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
     H.make_action_range(cursor, range, M.CMT.kLine, M.ACTION.kToggle, "line", { insmode = true })

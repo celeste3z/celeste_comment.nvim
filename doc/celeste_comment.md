@@ -13,6 +13,7 @@ edits and full dot-repeat support.
 ## Features
 
 - **Line/block comment toggle** -- fully dot-repeatable with count support
+- **Keep selection** -- selection range automatically adjusts across `TextEdits` when toggling comments in visual mode
 - **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
 - **Invert/Force add/Force remove** -- per-line comment action control
@@ -81,6 +82,7 @@ require("celeste_comment").setup()
 ```lua
 {
   keep_cursor            = true,  -- Restore cursor position after commenting
+  keep_selection         = false, -- Restore visual selection after commenting
   insert_space           = true,  -- Insert space between comment marker and text
   line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
   case_insensitive       = false, -- Match comment markers case-insensitively
@@ -130,6 +132,14 @@ Restores the cursor to its computed position after commenting.
 The plugin tracks the original cursor, adjusts it through each edit operation,
 and restores it. When `false`, the cursor stays where Vim places it after the
 edit.
+
+#### `keep_selection` {doc="celeste_comment-config-keep_selection"}
+
+Default: `false`.
+Restores the visual selection to its computed position after commenting.
+The plugin tracks the original cursor and selection end positions, adjusts them
+through each edit operation, and restores the visual selection. When `false`,
+the selection is not restored (default behavior).
 
 #### `insert_space` {doc="celeste_comment-config-insert_space"}
 
