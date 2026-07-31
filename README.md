@@ -166,6 +166,9 @@ require("celeste_comment").setup({})
   -- Log level (nvim-0.13+). Ignored on older versions.
   log_level              = vim.log.levels.OFF,
 
+  -- Comment string configuration.
+  cms_confs              = nil,
+
   mappings = {
     -- Line comment by motion (n)
     line_toggle          = "gc",

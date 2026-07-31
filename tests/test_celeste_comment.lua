@@ -108,6 +108,28 @@ local T = new_set({
 local H = require("celeste_comment").H
 local M = require("celeste_comment")
 
+local ccp = function(pos, edits, lines, range, csi)
+  return H.compute_cursor_pos(pos, {
+    edits = edits,
+    lines = lines,
+    range = range,
+    csi = csi,
+  })
+end
+
+local ccs = function(state, edits, lines, range, csi, ctype, motion)
+  return H.compute_cursor_state({
+    state_track = state,
+    cfg = { keep_cursor = true },
+    edits = edits,
+    lines = lines,
+    range = range,
+    csi = csi,
+    ctype = ctype,
+    motion = motion,
+  })
+end
+
 local apply = function(line, edits)
   local lines = { line }
   H.apply_edits(lines, edits or {})
@@ -396,92 +418,47 @@ T["base"]["compute_cursor_pos"] = function()
   local pos = p(0, 0, 2)
 
   -- insertion on same row, cursor after insert point
-  eq(
-    H.compute_cursor_pos(
-      pos,
-      { { range = { 0, 0, 0, 0 }, text = { "# " } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
-    p(0, 0, 4)
-  )
+  eq(ccp(pos, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }), p(0, 0, 4))
 
   -- insertion on same row, cursor at insert point
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 0),
-      { { range = { 0, 0, 0, 0 }, text = { "# " } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 0), { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
     p(0, 0, 2)
   )
 
   -- insertion on same row, cursor before insert point
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 0),
-      { { range = { 0, 3, 0, 3 }, text = { "//" } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 0), { { range = { 0, 3, 0, 3 }, text = { "//" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
     p(0, 0, 0)
   )
 
   -- insertion on different row, no col shift
   eq(
-    H.compute_cursor_pos(
-      p(0, 1, 2),
-      { { range = { 0, 0, 0, 0 }, text = { "# " } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 1, 2), { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
     p(0, 1, 2)
   )
 
   -- deletion, cursor after deleted range
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 5),
-      { { range = { 0, 0, 0, 3 }, text = { "" } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 5), { { range = { 0, 0, 0, 3 }, text = { "" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
     p(0, 0, 2)
   )
 
   -- deletion, cursor within deleted range → clamped to start
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 2),
-      { { range = { 0, 0, 0, 3 }, text = { "" } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 2), { { range = { 0, 0, 0, 3 }, text = { "" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
     p(0, 0, 0)
   )
 
   -- deletion, cursor before deleted range
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 0),
-      { { range = { 0, 3, 0, 5 }, text = { "" } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 0), { { range = { 0, 3, 0, 5 }, text = { "" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
     p(0, 0, 0)
   )
 
   -- multi-line replacement on same row, cursor after end
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 0, 6),
       { { range = { 0, 3, 0, 5 }, text = { "longer", "b", "c" } } },
       { "hello" },
@@ -493,19 +470,13 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- multi-line replacement on same row, cursor inside replaced range
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 4),
-      { { range = { 0, 3, 0, 5 }, text = { "/*", "*/" } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 4), { { range = { 0, 3, 0, 5 }, text = { "/*", "*/" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
     p(0, 1, 4)
   )
 
   -- multi-line replacement before cursor row
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 2, 2),
       { { range = { 0, 0, 0, 0 }, text = { "a", "b" } } },
       { "x", "x", "x", "x", "x" },
@@ -517,7 +488,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- multi-line replacement after cursor row
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 0, 2),
       { { range = { 3, 0, 3, 0 }, text = { "a", "b" } } },
       { "x", "x", "x", "x", "x" },
@@ -529,7 +500,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- multiple edits: insert + delete
   eq(
-    H.compute_cursor_pos(p(0, 0, 5), {
+    ccp(p(0, 0, 5), {
       { range = { 0, 3, 0, 3 }, text = { "//" } },
       { range = { 0, 0, 0, 2 }, text = { "" } },
     }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
@@ -538,7 +509,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- multiple edits: two inserts
   eq(
-    H.compute_cursor_pos(p(0, 0, 3), {
+    ccp(p(0, 0, 3), {
       { range = { 0, 0, 0, 0 }, text = { "# " } },
       { range = { 0, 5, 0, 5 }, text = { " //" } },
     }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
@@ -547,7 +518,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- sentinel insert 1 line before cursor
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 1, 0),
       { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
       { "x", "x", "x", "x", "x" },
@@ -559,7 +530,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- sentinel insert 1 line on cursor row
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 0, 0),
       { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
       { "x", "x", "x", "x", "x" },
@@ -571,7 +542,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- sentinel insert after cursor row
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 0, 0),
       { { range = { 2, -1, 2, -1 }, text = { "/*" } } },
       { "x", "x", "x", "x", "x" },
@@ -583,19 +554,13 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- sentinel delete before cursor
   eq(
-    H.compute_cursor_pos(
-      p(0, 2, 0),
-      { { range = { 0, -1, 1, -1 }, text = {} } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 2, 0), { { range = { 0, -1, 1, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
     p(0, 1, 0)
   )
 
   -- multiple edits: delete + insert (reversed order)
   eq(
-    H.compute_cursor_pos(p(0, 0, 5), {
+    ccp(p(0, 0, 5), {
       { range = { 0, 0, 0, 2 }, text = { "" } },
       { range = { 0, 3, 0, 3 }, text = { "//" } },
     }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
@@ -604,7 +569,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- multiple edits: two multi-line inserts stacking
   eq(
-    H.compute_cursor_pos(p(0, 4, 0), {
+    ccp(p(0, 4, 0), {
       { range = { 0, 0, 0, 0 }, text = { "a", "b" } },
       { range = { 1, 0, 1, 0 }, text = { "c", "d" } },
     }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
@@ -613,7 +578,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- multiple edits: insert on same row + multi-line before row
   eq(
-    H.compute_cursor_pos(p(0, 2, 2), {
+    ccp(p(0, 2, 2), {
       { range = { 1, 0, 1, 0 }, text = { "x", "y" } },
       { range = { 2, 0, 2, 0 }, text = { "# " } },
     }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
@@ -622,7 +587,7 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- sentinel insert 2 lines before cursor
   eq(
-    H.compute_cursor_pos(
+    ccp(
       p(0, 1, 0),
       { { range = { 0, -1, 0, -1 }, text = { "a", "b" } } },
       { "x", "x", "x", "x", "x" },
@@ -634,91 +599,49 @@ T["base"]["compute_cursor_pos"] = function()
 
   -- sentinel delete 1 line on cursor row
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 0),
-      { { range = { 0, -1, 1, -1 }, text = {} } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 0), { { range = { 0, -1, 1, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
     p(0, 0, 0)
   )
 
   -- sentinel delete 1 line after cursor
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 0),
-      { { range = { 2, -1, 3, -1 }, text = {} } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 0), { { range = { 2, -1, 3, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
     p(0, 0, 0)
   )
 
   -- sentinel delete 2 lines before cursor
   eq(
-    H.compute_cursor_pos(
-      p(0, 3, 0),
-      { { range = { 0, -1, 2, -1 }, text = {} } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 3, 0), { { range = { 0, -1, 2, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
     p(0, 1, 0)
   )
 
   -- EOL + RHS insert: skip shift
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 7),
-      { { range = { 0, 7, 0, 7 }, text = { " */" } } },
-      { "  hello" },
-      { 0, 0, 0, 7 },
-      { orcs = " */" }
-    ),
+    ccp(p(0, 0, 7), { { range = { 0, 7, 0, 7 }, text = { " */" } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
     p(0, 0, 7)
   )
 
   -- EOL + LHS insert: normal shift
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 7),
-      { { range = { 0, 7, 0, 7 }, text = { "/* " } } },
-      { "  hello" },
-      { 0, 0, 0, 7 },
-      { orcs = " */" }
-    ),
+    ccp(p(0, 0, 7), { { range = { 0, 7, 0, 7 }, text = { "/* " } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
     p(0, 0, 10)
   )
 
   -- EOL + RHS with orcs="" (LHS-only): normal shift
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 7),
-      { { range = { 0, 7, 0, 7 }, text = { "// " } } },
-      { "  hello" },
-      { 0, 0, 0, 7 },
-      { orcs = "" }
-    ),
+    ccp(p(0, 0, 7), { { range = { 0, 7, 0, 7 }, text = { "// " } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = "" }),
     p(0, 0, 10)
   )
 
   -- non-EOL + RHS insert: no shift (cursor before insert point)
   eq(
-    H.compute_cursor_pos(
-      p(0, 0, 3),
-      { { range = { 0, 7, 0, 7 }, text = { " */" } } },
-      { "  hello" },
-      { 0, 0, 0, 7 },
-      { orcs = " */" }
-    ),
+    ccp(p(0, 0, 3), { { range = { 0, 7, 0, 7 }, text = { " */" } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
     p(0, 0, 3)
   )
 
   -- EOL + LHS+RHS: LHS shifts, RHS skips
   eq(
-    H.compute_cursor_pos(p(0, 0, 7), {
+    ccp(p(0, 0, 7), {
       { range = { 0, 2, 0, 2 }, text = { "/* " } },
       { range = { 0, 7, 0, 7 }, text = { " */" } },
     }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
@@ -735,53 +658,35 @@ T["base"]["compute_cursor_state"] = function()
 
   -- nil state
   local cs
-  H.compute_cursor_state(nil, {}, lines_d, range_d, csi_d)
+  ccs(nil, {}, lines_d, range_d, csi_d)
   eq(cs, nil)
 
   -- empty edits
   cs = cr(0, 3)
-  H.compute_cursor_state(cs, {}, lines_d, range_d, csi_d)
+  ccs(cs, {}, lines_d, range_d, csi_d)
   eq(cs, cr(0, 3))
 
   -- cursor only, no end_pos
   cs = cr(0, 3)
-  H.compute_cursor_state(
-    cs,
-    { { range = { 0, 0, 0, 0 }, text = { "# " } } },
-    { "hello" },
-    { 0, 0, 0, 3 },
-    { orcs = "" }
-  )
+  ccs(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
   eq(cs.cursor, p(0, 0, 5))
   eq(cs.end_pos, nil)
 
   -- cursor + end_pos on same line
   local s2 = { cursor = p(0, 0, 2), end_pos = p(0, 0, 5) }
-  H.compute_cursor_state(
-    s2,
-    { { range = { 0, 0, 0, 0 }, text = { "# " } } },
-    { "hello" },
-    { 0, 0, 0, 3 },
-    { orcs = "" }
-  )
+  ccs(s2, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
   eq(s2.cursor, p(0, 0, 4))
   eq(s2.end_pos, p(0, 0, 7))
 
   -- cursor + end_pos on different lines, both shifted
   local s3 = { cursor = p(0, 0, 2), end_pos = p(0, 1, 4) }
-  H.compute_cursor_state(
-    s3,
-    { { range = { 0, 0, 0, 0 }, text = { "# " } } },
-    { "hello", "world" },
-    { 0, 0, 1, 5 },
-    { orcs = "" }
-  )
+  ccs(s3, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello", "world" }, { 0, 0, 1, 5 }, { orcs = "" })
   eq(s3.cursor, p(0, 0, 4))
   eq(s3.end_pos, p(0, 1, 4))
 
   -- cursor + end_pos with multiple edits
   local s4 = { cursor = p(0, 0, 3), end_pos = p(0, 0, 5) }
-  H.compute_cursor_state(s4, {
+  ccs(s4, {
     { range = { 0, 0, 0, 0 }, text = { "# " } },
     { range = { 0, 5, 0, 5 }, text = { " //" } },
   }, { "hello" }, { 0, 0, 0, 3 }, { orcs = " //" })
@@ -790,15 +695,29 @@ T["base"]["compute_cursor_state"] = function()
 
   -- cursor + end_pos where end_pos is on a different row with line insert
   local s5 = { cursor = p(0, 1, 0), end_pos = p(0, 2, 0) }
-  H.compute_cursor_state(
-    s5,
-    { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
-    { "a", "b", "c" },
-    { 0, 0, 2, 0 },
-    { orcs = "" }
-  )
+  ccs(s5, { { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { "a", "b", "c" }, { 0, 0, 2, 0 }, { orcs = "" })
   eq(s5.cursor, p(0, 2, 0))
   eq(s5.end_pos, p(0, 3, 0))
+
+  -- block comment char-wise: RHS end_pos lands at content end
+  -- `12--[[ 3456789\n123 ]]456789`, selection {0,2,1,5}, uncomment
+  local s6 = { cursor = p(0, 0, 2), end_pos = p(0, 1, 5) }
+  ccs(s6, {
+    { range = { 0, 2, 0, 7 }, text = { "" } },
+    { range = { 1, 3, 1, 6 }, text = { "" } },
+  }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "char")
+  -- cursor on `--` → content start (col 2); end_pos on `]]` → last content char (col 2)
+  eq(s6.cursor, p(0, 0, 2))
+  eq(s6.end_pos, p(0, 1, 2))
+
+  -- same block uncomment but line-wise motion → RHS keeps default clamp
+  local s7 = { cursor = p(0, 0, 2), end_pos = p(0, 1, 5) }
+  ccs(s7, {
+    { range = { 0, 2, 0, 7 }, text = { "" } },
+    { range = { 1, 3, 1, 6 }, text = { "" } },
+  }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "line")
+  eq(s7.cursor, p(0, 0, 2))
+  eq(s7.end_pos, p(0, 1, 3))
 end
 
 T["base"]["make_csi"] = function()
@@ -3149,7 +3068,7 @@ T["textobject"]["auto_uncomment_do_nothing"] = function()
 
   set_cursor(1, 4)
   feed("gcu")
-  eq(get_cursor(), { 1, 1 })
+  eq(get_cursor(), { 1, 0 })
   eq(get_lines(), { "1 2 3" })
 
   child.bo.filetype = "unknown"

@@ -203,6 +203,7 @@ H.config = {
   ignore_empty_lines        = M.IGN_EMT.kAlways,
   fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
   log_level                 = vim.log.levels.OFF,
+  cms_confs                 = nil,
 
   mappings = {
     line_toggle             = "gc",
@@ -1496,6 +1497,7 @@ function H.get_selection_range(buf)
   return { sr, sc, er, ec }
 end
 
+---@return Celeste.Comment.StateTrack
 function H.make_state_track()
   local state = {} ---@type Celeste.Comment.StateTrack
   state.cursor = H.make_cursor(0)
@@ -1504,14 +1506,12 @@ function H.make_state_track()
     local end_pos = vim.fn.getpos("v")
     if end_pos then state.end_pos = H.make_pos(end_pos[1], end_pos[2] - 1, end_pos[3] - 1) end
   end
-  H.state_track = state
+  return state
 end
 
----@param cfg Celeste.Comment.Opts
-function H.restore_state(cfg)
-  local state
-  state, H.state_track = H.state_track, nil
-
+---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
+function H.restore_state(ctx)
+  local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
   if cfg.keep_selection and state.mode then
@@ -1532,12 +1532,10 @@ function H.restore_state(cfg)
 end
 
 ---@param pos vim.Pos
----@param edits Celeste.Comment.TextEdits
----@param lines string[]
----@param range Celeste.Comment.Range4
----@param csi  Celeste.Comment.CommentStringInfo
+---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
 ---@return vim.Pos
-function H.compute_cursor_pos(pos, edits, lines, range, csi)
+function H.compute_cursor_pos(pos, ctx)
+  local edits, lines, range, csi, ctype, motion = ctx.edits, ctx.lines, ctx.range, ctx.csi, ctx.ctype, ctx.motion
   local orow, ocol = pos.row, pos.col
   local ncol, nrow = ocol, orow
   local cursor_line = lines[orow - range[1] + 1]
@@ -1568,7 +1566,18 @@ function H.compute_cursor_pos(pos, edits, lines, range, csi)
         elseif ocol >= e.range[4] then
           ncol = ncol + #e.text[1] - (e.range[4] - e.range[2])
         elseif ocol > e.range[2] then
+          -- RHS marker (char-wise block): land at range[2]-1 (before the padding).
           ncol = e.range[2]
+          if
+            ctype == M.CMT.kBlock
+            and motion == "char"
+            and e.range[1] <= range[3]
+            and range[3] <= e.range[3]
+            and e.range[2] <= range[4]
+            and range[4] < e.range[4]
+          then
+            ncol = math.max(0, e.range[2] - 1)
+          end
         end
       end
     end
@@ -1577,15 +1586,28 @@ function H.compute_cursor_pos(pos, edits, lines, range, csi)
   return H.make_pos(pos.buf, math.max(0, nrow), math.max(0, ncol))
 end
 
----@param state? Celeste.Comment.StateTrack
----@param edits Celeste.Comment.TextEdits
----@param lines string[]
----@param range Celeste.Comment.Range4
----@param csi  Celeste.Comment.CommentStringInfo
-function H.compute_cursor_state(state, edits, lines, range, csi)
-  if not state then return end
-  state.cursor = H.compute_cursor_pos(state.cursor, edits, lines, range, csi)
-  if state.end_pos then state.end_pos = H.compute_cursor_pos(state.end_pos, edits, lines, range, csi) end
+---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
+function H.compute_cursor_state(ctx)
+  local state = ctx.state_track
+  if not (ctx.cfg.keep_cursor or ctx.cfg.keep_selection) or not state then return end
+  state.cursor = H.compute_cursor_pos(state.cursor, ctx)
+  if state.end_pos then state.end_pos = H.compute_cursor_pos(state.end_pos, ctx) end
+end
+
+---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
+function H.invoke_pre_commit_chainably(ctx)
+  local hooks = { ctx.cfg.hooks.pre_commit_edits or "", H.compute_cursor_state }
+  for _, hook in ipairs(hooks) do
+    if vim.is_callable(hook) then hook(ctx) end
+  end
+end
+
+---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
+function H.invoke_post_commit_chainably(ctx)
+  local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.restore_state }
+  for _, hook in ipairs(hooks) do
+    if vim.is_callable(hook) then hook(ctx) end
+  end
 end
 
 ---@param cfg    Celeste.Comment.Opts
@@ -1618,25 +1640,15 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
     range = range,
     motion = motion,
     edits = edits,
+    state_track = opts.state_track,
     execution_opts = opts,
-    state_track = H.state_track,
   }
-  if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
-  H.compute_cursor_state(
-    (cfg.keep_cursor or cfg.keep_selection) and H.state_track or nil,
-    ctx.edits,
-    lines,
-    range,
-    ctx.csi
-  )
+  H.invoke_pre_commit_chainably(ctx)
 
   H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
 
-  ---@cast ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
-  if vim.is_callable(cfg.hooks.post_commit_edits) then cfg.hooks.post_commit_edits(ctx) end
-
-  H.restore_state(cfg)
+  H.invoke_post_commit_chainably(ctx --[[@as Celeste.Comment.Hooks.PostCommitEdits.Ctx]])
 end
 
 ---@param cfg Celeste.Comment.Opts
@@ -1945,13 +1957,15 @@ end
 --- Auto-detect and remove comment
 function H.uncomment_auto()
   if H.is_disabled() then return end
-  H.make_state_track()
 
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
+  local state_track = H.make_state_track()
 
   local range, ctype, csi = H.compute_x_comment_range(cfg, cursor)
   if not range or not ctype or not csi then return end
+
+  local motion = ctype == M.CMT.kLine and "line" or "char"
 
   if ctype == M.CMT.kLine then range = { range[1], 0, range[2], 0 } end
   ---@cast range Celeste.Comment.Range4
@@ -1959,7 +1973,7 @@ function H.uncomment_auto()
   local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
-  H.make_actionx(cfg, ctype, M.ACTION.kToggle, lines, csi, range, ctype == M.CMT.kLine and "line" or "char", cursor)
+  H.make_actionx(cfg, ctype, M.ACTION.kToggle, lines, csi, range, motion, cursor, { state_track = state_track })
 end
 
 -- Textobject: select contiguous linewise comment block
@@ -2052,7 +2066,7 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
 end
 
 --- Track cursor position
-function M.track_cursor() H.make_state_track() end
+function M.track_cursor() H.state_track = H.make_state_track() end
 
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.ExecutionOpts
@@ -2061,20 +2075,21 @@ function H.make_operator(ctype, opts)
   opts = opts or {}
   local s = type(opts.suffix) == "string" and opts.suffix or ""
   local action = opts.action or M.ACTION.kToggle
-  local o = { cfg = opts.cfg }
 
   ---@param motion Celeste.Comment.Motion
   local f = function(motion)
+    local state_track = H.state_track
+    H.state_track = nil
     -- actually, at the region start position, it may not be the same as `cursor_state`
     local cursor = H.make_cursor(0)
     local range = H.get_selection_range(cursor.buf)
     if not range then return end
-    H.make_action_range(cursor, range, ctype, action, motion, o)
+    H.make_action_range(cursor, range, ctype, action, motion, { cfg = opts.cfg, state_track = state_track })
   end
 
   return function()
     if H.is_disabled() then return "" end
-    H.make_state_track()
+    H.state_track = H.make_state_track()
 
     _G.__celeste_comment_operator_func = f
     vim.o.operatorfunc = "v:lua.__celeste_comment_operator_func"
@@ -2110,6 +2125,7 @@ function M.setup(config)
   end
   vim.validate("hooks", config.hooks, "table", true, "table")
   vim.validate("pre_commit_edits", config.hooks.pre_commit_edits, "callable", true, "callable")
+  vim.validate("post_commit_edits", config.hooks.post_commit_edits, "callable", true, "callable")
   vim.validate("cms_conf_resolver", config.hooks.cms_conf_resolver, "callable", true, "callable")
 
   H.config = config
@@ -2179,15 +2195,17 @@ function M.setup(config)
   )
 
   map("n", m.dot_repeat, function()
-    H.make_state_track()
+    H.state_track = H.make_state_track()
     return "."
   end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
 
   map("i", m.line_toggle_insert, function()
-    H.make_state_track()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
-    H.make_action_range(cursor, range, M.CMT.kLine, M.ACTION.kToggle, "line", { insmode = true })
+    H.make_action_range(cursor, range, M.CMT.kLine, M.ACTION.kToggle, "line", {
+      insmode = true,
+      state_track = H.make_state_track(),
+    })
   end, { desc = "Toggle line comment at insert mode" })
 end
 
