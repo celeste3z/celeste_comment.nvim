@@ -114,6 +114,11 @@ M.ACTION = {
 ---@field lcs_pos Celeste.Comment.Range3
 ---@field rcs_pos Celeste.Comment.Range3
 
+---@class Celeste.Comment.StateTrack
+---@field cursor? vim.Pos
+---@field end_pos? vim.Pos
+---@field mode? string
+
 ---@class Celeste.Comment.Hooks.PreCommitEdits.Ctx
 ---@field cursor          vim.Pos
 ---@field range           Celeste.Comment.Range4
@@ -124,8 +129,11 @@ M.ACTION = {
 ---@field motion          Celeste.Comment.Motion
 ---@field csi             Celeste.Comment.CommentStringInfo
 ---@field lines           string[]
+---@field state_track?    Celeste.Comment.StateTrack
 ---@field execution_opts? Celeste.Comment.ExecutionOpts
 ---@field o_use_set_text? boolean o: means output from user
+
+---@class Celeste.Comment.Hooks.PostCommitEdits.Ctx : Celeste.Comment.Hooks.PreCommitEdits.Ctx
 
 ---@class Celeste.Comment.Hooks.CmsConfResolver.Ctx
 ---@field cursor      vim.Pos
@@ -136,6 +144,7 @@ M.ACTION = {
 
 ---@class Celeste.Comment.Hooks
 ---@field pre_commit_edits?  fun(ctx:Celeste.Comment.Hooks.PreCommitEdits.Ctx)
+---@field post_commit_edits? fun(ctx:Celeste.Comment.Hooks.PostCommitEdits.Ctx)
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
@@ -176,11 +185,6 @@ M.ACTION = {
 
 ---@class Celeste.Comment.ExecutionOpts
 ---@field [string] any
-
----@class Celeste.Comment.StateTrack
----@field cursor? vim.Pos
----@field end_pos? vim.Pos
----@field mode? string
 
 ---@type Celeste.Comment.StateTrack?
 H.state_track = nil
@@ -228,6 +232,7 @@ H.config = {
 
   hooks = {
     pre_commit_edits        = nil,
+    post_commit_edits       = nil,
     cms_conf_resolver       = nil
   }
 }
@@ -1614,6 +1619,7 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
     motion = motion,
     edits = edits,
     execution_opts = opts,
+    state_track = H.state_track,
   }
   if vim.is_callable(cfg.hooks.pre_commit_edits) then cfg.hooks.pre_commit_edits(ctx) end
 
@@ -1626,6 +1632,9 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
   )
 
   H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
+
+  ---@cast ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
+  if vim.is_callable(cfg.hooks.post_commit_edits) then cfg.hooks.post_commit_edits(ctx) end
 
   H.restore_state(cfg)
 end

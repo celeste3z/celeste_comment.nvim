@@ -15,6 +15,7 @@
 - [Limitations](#limitations)
 - [Future work](#future-work)
 - [Acknowledgments](#acknowledgments)
+
 <!--toc:end-->
 
 ## Features
@@ -212,6 +213,8 @@ require("celeste_comment").setup({})
   hooks = {
     -- Called before commit edits, receives context
     pre_commit_edits     = nil,
+    -- Called after commit edits, receives context
+    post_commit_edits    = nil,
     -- Custom comment string resolver function
     cms_conf_resolver    = nil,
   },
