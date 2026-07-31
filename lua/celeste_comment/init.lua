@@ -1646,7 +1646,7 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
 
   H.invoke_pre_commit_chainably(ctx)
 
-  H.commit_edits(cursor.buf, ctx.range, lines, ctx.edits, ctx.o_use_set_text)
+  H.commit_edits(cursor.buf, ctx.range, ctx.lines, ctx.edits, ctx.o_use_set_text)
 
   H.invoke_post_commit_chainably(ctx --[[@as Celeste.Comment.Hooks.PostCommitEdits.Ctx]])
 end
@@ -1896,16 +1896,20 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range)
 end
 
 ---@param range? Celeste.Comment.Range2|Celeste.Comment.Range4
-function H.select_range(range)
+---@param opts? { end_inclusive?: boolean } when true, should check `selection`
+function H.select_range(range, opts)
   if not range then return end
+  opts = opts or {}
 
   if H.is_visual() then vim.cmd("normal! \27") end
   if #range == 2 then
     vim.cmd(("normal! %dGV%dG"):format(range[1] + 1, range[2] + 1))
   else
+    local end_col = range[4]
+    if opts.end_inclusive and vim.o.selection == "exclusive" then end_col = end_col + 1 end
     vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
     vim.cmd("normal! v")
-    vim.api.nvim_win_set_cursor(0, { range[3] + 1, range[4] })
+    vim.api.nvim_win_set_cursor(0, { range[3] + 1, end_col })
   end
 end
 
@@ -1951,7 +1955,7 @@ function H.textobject_auto()
   if H.is_disabled() then return end
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
-  H.select_range((H.compute_x_comment_range(cfg, cursor)))
+  H.select_range((H.compute_x_comment_range(cfg, cursor)), { end_inclusive = true })
 end
 
 --- Auto-detect and remove comment
@@ -1988,7 +1992,7 @@ function H.textobject_linewise()
 
   local csi = H.resolve(cursor, M.CMT.kLine, cfg)
   if not csi then return end
-  H.select_range((H.compute_linecomment_range(cfg, cursor, csi)))
+  H.select_range((H.compute_linecomment_range(cfg, cursor, csi)), { end_inclusive = true })
 end
 
 ---Textobject: select blockwise comment that surrounds the cursor.
@@ -2001,7 +2005,7 @@ function H.textobject_blockwise()
   local csi = H.resolve(cursor, M.CMT.kBlock, cfg)
   if not csi then return end
 
-  H.select_range((H.compute_blockcomment_range(cfg, cursor, csi)))
+  H.select_range((H.compute_blockcomment_range(cfg, cursor, csi)), { end_inclusive = true })
 end
 
 ---@param kind 'above'|'below'|'eol'

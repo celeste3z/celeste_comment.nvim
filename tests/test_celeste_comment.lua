@@ -2947,6 +2947,32 @@ T["textobject"]["auto_blockwise_detect"] = function()
   eq(get_lines(), { "start", "", "end" })
 end
 
+T["textobject"]["block textobject works with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.b.celeste_comment_block_commentstring = "/*%s*/"
+  set_lines({ "  /* hello */  tail", "  after" })
+  set_cursor(1, 4)
+  feed("d", "gb")
+  eq(get_lines(), { "    tail", "  after" })
+end
+
+T["textobject"]["auto textobject works with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.bo.filetype = "cpp"
+  set_lines({ "  /* hello */  tail", "  after" })
+  set_cursor(1, 4)
+  feed("d", "ga")
+  eq(get_lines(), { "    tail", "  after" })
+end
+
+T["textobject"]["line textobject works with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  set_lines({ "aa", "#bb", "# cc", "dd" })
+  set_cursor(2, 2)
+  feed("d", "gc")
+  eq(get_lines(), { "aa", "dd" })
+end
+
 T["textobject"]["tabstop + noexpandtab"] = function()
   child.bo.filetype = "php"
   child.bo.tabstop = 2
@@ -3557,6 +3583,68 @@ T["keep_selection"]["works in `v` mode"] = function()
   feed("gbgb")
   eq(get_cursor(), { 2, 6 })
   eq(get_lines(), lines)
+end
+
+T["keep_selection"]["works in `v` mode with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  local lines = {
+    "  first line, 11",
+    "  second line, 2222",
+  }
+  set_lines(lines)
+
+  selection(1, 0, 2, 18)
+  feed("gc")
+  eq(get_lines(), {
+    "  // first line, 11",
+    "  // second line, 2222",
+  })
+  eq(get_cursor(), { 2, 21 })
+  eq(get_selection(), { { 0, 0, 1, 21 }, "v" })
+
+  feed("gc")
+  eq(get_lines(), lines)
+  eq(get_cursor(), { 2, 18 })
+  eq(get_selection(), { { 0, 0, 1, 18 }, "v" })
+
+  feed("<Esc>")
+  selection(1, 4, 2, 6)
+  feed("gb")
+  eq(get_lines(), {
+    "  fi/* rst line, 11",
+    "  seco */nd line, 2222",
+  })
+  eq(get_cursor(), { 2, 6 })
+  eq(get_selection(), { { 0, 7, 1, 6 }, "v" })
+  feed("d")
+  eq(get_lines(), { "  fi/*  */nd line, 2222" })
+  feed("u")
+  eq(get_lines(), {
+    "  fi/* rst line, 11",
+    "  seco */nd line, 2222",
+  })
+
+  selection(1, 4, 2, 9)
+  feed("gb")
+  eq(get_lines(), lines)
+  eq(get_selection(), { { 0, 4, 1, 6 }, "v" })
+end
+
+T["keep_selection"]["restores exact selection content with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  set_lines({ "  first line, 11", "  second line, 2222" })
+
+  -- original exclusive selection: cursor at (2,18) excludes the last `2`
+  selection(1, 0, 2, 18)
+  feed('"zy')
+  eq(child.fn.getreg("z"), "  first line, 11\n  second line, 222")
+
+  feed("gv")
+  feed("gc")
+
+  -- restored selection must cover the same effective range (no char lost/gained)
+  feed('"zy')
+  eq(child.fn.getreg("z"), "  // first line, 11\n  // second line, 222")
 end
 
 T["keep_selection"]["works in `V` mode"] = function()
