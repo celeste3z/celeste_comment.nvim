@@ -13,8 +13,8 @@ edits and full dot-repeat support.
 ## Features
 
 - **Line/block comment toggle** -- fully dot-repeatable with count support
-- **Keep selection** -- selection range automatically adjusts across `TextEdits` when toggling comments in visual mode
-- **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
+- **Truly accurate keep cursor** -- precise row/column tracking across `TextEdits`, adjusted per edit
+- **Truly accurate keep selection** -- selection range tracks each `TextEdit` precisely when toggling comments in visual mode
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
 - **Invert/Force add/Force remove** -- per-line comment action control
 - **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
@@ -24,20 +24,21 @@ edits and full dot-repeat support.
 - **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
 - **Multi-variant comment string detection** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
 - **`TextEdits` edit-model** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
-- **40+ built-in language comment strings**
-- **Custom comment string resolver hook**
 
 ## Comparison
 
 | Feature              | celeste_comment.nvim | Neovim built-in | Comment.nvim | mini.comment | vim-commentary |
 | -------------------- | -------------------- | --------------- | ------------ | ------------ | -------------- |
+| Edit model           | TextEdits            | set_lines       | set_lines    | set_lines    | setline()      |
 | Line comment         | yes                  | yes             | yes          | yes          | yes            |
 | Block comment        | yes                  | no              | yes          | no           | no             |
 | Force add comment    | yes                  | no              | no           | no           | no             |
 | Force remove comment | yes                  | no              | no           | no           | no             |
 | Dot-repeat           | yes                  | yes             | yes          | yes          | yes            |
 | Count                | yes                  | yes             | yes          | yes          | yes            |
+| Indent algorithm     | VSCode-style         | Simple          | Standard     | Simple       | Minimal        |
 | Keep cursor          | yes                  | no              | partial      | no           | no             |
+| Keep selection       | yes                  | no              | no           | no           | no             |
 | Invert per line      | yes                  | no              | no           | no           | no             |
 | Line textobject      | yes                  | yes             | no           | yes          | yes            |
 | Block textobject     | yes                  | no              | no           | no           | no             |
@@ -47,6 +48,7 @@ edits and full dot-repeat support.
 ## Requirements
 
 - Neovim `>= 0.12`
+- Tree-sitter parsers(Optional) -- for context-aware comment string resolution
 
 ## Installation
 
@@ -276,15 +278,17 @@ Called before edits are applied to the buffer. Receives a context table:
 
 ```lua
 ---@class Celeste.Comment.Hooks.PreCommitEdits.Ctx
----@field cursor  vim.Pos
----@field range   Celeste.Comment.Range4
----@field edits   Celeste.Comment.TextEdits
----@field cfg     Celeste.Comment.Opts
----@field ctype   Celeste.Comment.CommentType
----@field action  Celeste.Comment.Action
----@field motion  Celeste.Comment.Motion
----@field csi     Celeste.Comment.CommentStringInfo
----@field lines   string[]
+---@field cursor          vim.Pos
+---@field range           Celeste.Comment.Range4
+---@field edits           Celeste.Comment.TextEdits
+---@field cfg             Celeste.Comment.Opts
+---@field ctype           Celeste.Comment.CommentType
+---@field action          Celeste.Comment.Action
+---@field motion          Celeste.Comment.Motion
+---@field csi             Celeste.Comment.CommentStringInfo
+---@field lines           string[]
+---@field comment_info?   Celeste.Comment.LineCommentInfo|Celeste.Comment.BlockCommentInfo
+---@field state_track?    Celeste.Comment.StateTrack
 ```
 
 Example — force use `nvim_buf_set_text` instead of `lockmarks + nvim_buf_set_lines`:
@@ -531,6 +535,62 @@ require("celeste_comment").setup({
   },
 })
 ```
+
+### Preserve extmarks during edits
+
+By default, `commit_edits` replaces the whole comment range with a single
+`nvim_buf_set_lines` call (under `lockmarks`). This displaces extmarks
+(tree-sitter nodes, diagnostics, highlights, ...) sitting on the content lines
+inside the range — they are moved to the end of the replaced region.
+
+Forcing per-edit `nvim_buf_set_text` instead leaves untouched content lines
+alone, so extmarks on them survive (and only shift naturally on lines where a
+marker is inserted):
+
+```lua
+vim.b.celeste_comment_config = {
+  hooks = {
+    pre_commit_edits = function(ctx)
+      ctx.o_use_set_text = true
+    end,
+  },
+}
+```
+
+Buffer-local, combine with a `FileType` autocmd to scope this hook to specific filetypes.
+
+### Keep selection including the outer comment markers
+
+With `keep_selection`, the selection is restored to the original content-only
+range after a toggle. To also include the comment markers that were just
+added, hook `post_commit_edits` and extend `state_track` (it is already
+shifted by `compute_cursor_state`, so extending is just a matter of adding the
+marker lengths).
+
+This applies to charwise block comments (`motion == "char"`). For a block
+comment that was just added, `ctx.comment_info == nil` (info is only computed
+for already-commented ranges):
+
+```lua
+vim.b.celeste_comment_config = {
+  keep_selection = true,
+  hooks = {
+    ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
+    post_commit_edits = function(ctx)
+      local st = ctx.state_track
+      local cmt = require("celeste_comment")
+      if not st or ctx.motion ~= "char" or not st.end_pos then return end
+      if ctx.ctype ~= cmt.CMT.kBlock then return end
+      if ctx.comment_info ~= nil then return end
+      st.end_pos = vim.pos(0, st.end_pos[1], st.end_pos[2] - #ctx.csi.olcs)
+      st.cursor = vim.pos(0, st.cursor[1], st.cursor[2] + #ctx.csi.orcs)
+    end,
+  },
+}
+```
+
+Selecting `hello world` and pressing `gb` now keeps the whole
+`/* hello world */` (markers included) selected.
 
 ## Limitations
 

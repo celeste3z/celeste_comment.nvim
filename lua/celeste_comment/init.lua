@@ -131,6 +131,7 @@ M.ACTION = {
 ---@field lines           string[]
 ---@field state_track?    Celeste.Comment.StateTrack
 ---@field execution_opts? Celeste.Comment.ExecutionOpts
+---@field comment_info?   Celeste.Comment.LineCommentInfo|Celeste.Comment.BlockCommentInfo
 ---@field o_use_set_text? boolean o: means output from user
 
 ---@class Celeste.Comment.Hooks.PostCommitEdits.Ctx : Celeste.Comment.Hooks.PreCommitEdits.Ctx
@@ -143,8 +144,8 @@ M.ACTION = {
 ---@field tree?       vim.treesitter.LanguageTree
 
 ---@class Celeste.Comment.Hooks
----@field pre_commit_edits?  fun(ctx:Celeste.Comment.Hooks.PreCommitEdits.Ctx)
----@field post_commit_edits? fun(ctx:Celeste.Comment.Hooks.PostCommitEdits.Ctx)
+---@field pre_commit_edits?  fun(ctx:Celeste.Comment.Hooks.PreCommitEdits.Ctx):boolean?
+---@field post_commit_edits? fun(ctx:Celeste.Comment.Hooks.PostCommitEdits.Ctx):boolean?
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
@@ -1162,6 +1163,7 @@ end
 ---@param action Celeste.Comment.Action
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
+---@return Celeste.Comment.LineCommentInfo?
 function H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   opts = opts or {}
   local all_edits = {} ---@type Celeste.Comment.TextEdits
@@ -1200,7 +1202,7 @@ function H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, op
     end
   end
 
-  return all_edits
+  return all_edits, all_info
 end
 
 ---@param lines string[]
@@ -1403,6 +1405,7 @@ end
 ---@param action Celeste.Comment.Action
 ---@param opts?  Celeste.Comment.ExecutionOpts
 ---@return Celeste.Comment.TextEdits
+---@return Celeste.Comment.BlockCommentInfo?
 function H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   local info = H.block_comment_info(lines, csi, motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
@@ -1426,7 +1429,7 @@ function H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, o
     assert(action == M.ACTION.kForceRemove, "unknown action")
     if info then edits = H.make_block_uncomment_edits(info) end
   end
-  return edits
+  return edits, info
 end
 
 ---@param edits Celeste.Comment.TextEdits
@@ -1598,7 +1601,7 @@ end
 function H.invoke_pre_commit_chainably(ctx)
   local hooks = { ctx.cfg.hooks.pre_commit_edits or "", H.compute_cursor_state }
   for _, hook in ipairs(hooks) do
-    if vim.is_callable(hook) then hook(ctx) end
+    if vim.is_callable(hook) and hook(ctx) == true then break end
   end
 end
 
@@ -1606,7 +1609,7 @@ end
 function H.invoke_post_commit_chainably(ctx)
   local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.restore_state }
   for _, hook in ipairs(hooks) do
-    if vim.is_callable(hook) then hook(ctx) end
+    if vim.is_callable(hook) and hook(ctx) == true then break end
   end
 end
 
@@ -1622,10 +1625,11 @@ end
 function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, opts)
   opts = opts or {}
   local edits ---@type Celeste.Comment.TextEdits
+  local info ---@type (Celeste.Comment.LineCommentInfo|Celeste.Comment.BlockCommentInfo)?
   if ctype == M.CMT.kBlock then
-    edits = H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
+    edits, info = H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   else
-    edits = H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
+    edits, info = H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   end
   assert(edits, "unexpected error, nil edits")
 
@@ -1640,6 +1644,7 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
     range = range,
     motion = motion,
     edits = edits,
+    comment_info = info,
     state_track = opts.state_track,
     execution_opts = opts,
   }

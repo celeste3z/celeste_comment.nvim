@@ -21,8 +21,8 @@
 ## Features
 
 - **Line/block comment toggle** -- fully dot-repeatable with count support
-- **Real cursor sticky** -- precise cursor position tracking across `TextEdits`, cursor row and column automatically adjust for any edit
-- **Keep selection** -- selection range automatically adjusts across `TextEdits` when toggling comments in visual mode
+- **Truly accurate keep cursor** -- precise row/column tracking across `TextEdits`, adjusted per edit
+- **Truly accurate keep selection** -- selection range tracks each `TextEdit` precisely when toggling comments in visual mode
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
 - **Invert/Force add/Force remove comment** -- per-line comment action control
 - **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter

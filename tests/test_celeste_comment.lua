@@ -3737,6 +3737,84 @@ T["keep_selection"]["works with multibyte marker and selection=exclusive"] = fun
   eq(get_lines(), { "    tail" })
 end
 
+T["keep_selection"]["post_commit_edits extends selection to include block markers"] = function()
+  child.lua_func(function()
+    vim.b.celeste_comment_config = {
+      keep_selection = true,
+      hooks = {
+        post_commit_edits = function(ctx)
+          local st = ctx.state_track
+          local HH = require("celeste_comment").H
+          if not st or ctx.motion ~= "char" or not st.end_pos then return end -- charwise block only
+          if ctx.ctype ~= 2 then return end
+          if ctx.comment_info ~= nil then return end -- removing, keep content-only selection
+          st.end_pos = HH.make_pos(0, st.end_pos[1], st.end_pos[2] - #ctx.csi.olcs)
+          st.cursor = HH.make_pos(0, st.cursor[1], st.cursor[2] + #ctx.csi.orcs)
+        end,
+      },
+    }
+  end)
+
+  -- with selection == 'inclusive'
+  child.o.selection = "inclusive"
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 13)
+  feed("gb")
+  eq(get_lines(), { "  /* hello world */", "  second" })
+  feed('"zy')
+  eq(child.fn.getreg("z"), "/* hello world */\n")
+
+  set_lines({ "  hello world", "  second" })
+  selection(1, 0, 2, 0, "V")
+  feed("gb")
+  eq(get_lines(), { "  /* hello world", "  second */" })
+  feed('"zy')
+  eq(child.fn.getreg("z"), "  /* hello world\n  second */\n")
+
+  set_cursor(2, 0)
+  feed("gbgb")
+  eq(get_lines(), { "  hello world", "  second" })
+
+  selection(1, 4, 2, 6)
+  feed("gb")
+  eq(get_cursor(), { 2, 9 })
+  eq(get_selection(), { { 0, 4, 1, 9 }, "v" })
+  eq(get_lines(), { "  he/* llo world", "  secon */d" })
+  feed("gb")
+  eq(get_cursor(), { 2, 6 })
+  eq(get_selection(), { { 0, 4, 1, 6 }, "v" })
+  eq(get_lines(), { "  hello world", "  second" })
+  feed("gb")
+  eq(get_cursor(), { 2, 9 })
+  eq(get_selection(), { { 0, 4, 1, 9 }, "v" })
+  eq(get_lines(), { "  he/* llo world", "  secon */d" })
+  feed("gb")
+  eq(get_cursor(), { 2, 6 })
+  eq(get_selection(), { { 0, 4, 1, 6 }, "v" })
+  eq(get_lines(), { "  hello world", "  second" })
+  feed("<Esc>")
+
+  -- with selection == 'exclusive'
+  child.o.selection = "exclusive"
+  selection(1, 4, 2, 7)
+  feed("gb")
+  eq(get_cursor(), { 2, 10 })
+  eq(get_selection(), { { 0, 4, 1, 10 }, "v" })
+  eq(get_lines(), { "  he/* llo world", "  secon */d" })
+  feed("gb")
+  eq(get_cursor(), { 2, 7 })
+  eq(get_selection(), { { 0, 4, 1, 7 }, "v" })
+  eq(get_lines(), { "  hello world", "  second" })
+  feed("gb")
+  eq(get_cursor(), { 2, 10 })
+  eq(get_selection(), { { 0, 4, 1, 10 }, "v" })
+  eq(get_lines(), { "  he/* llo world", "  secon */d" })
+  feed("gb")
+  eq(get_cursor(), { 2, 7 })
+  eq(get_selection(), { { 0, 4, 1, 7 }, "v" })
+  eq(get_lines(), { "  hello world", "  second" })
+end
+
 -- PreCommitEdits tests ───────────────────────────────────────────────────────
 
 T["pre_commit_edits"] = new_set()
@@ -3859,6 +3937,69 @@ T["pre_commit_edits"]["out of range fallback to set lines"] = function()
   set_cursor(1, 0)
   feed("gcj")
   eq(get_lines(), { "# aaa", "# bbb", "ccc" })
+end
+
+T["pre_commit_edits"]["o_use_set_text preserves extmarks inside the range"] = function()
+  child.bo.filetype = "c"
+  set_lines({ "aaa", "bbb", "ccc", "ddd" })
+  child.lua_func(function()
+    vim.b.celeste_comment_config = {
+      hooks = {
+        pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
+      },
+    }
+    local ns = vim.api.nvim_create_namespace("celeste_test")
+    _G.__em = {
+      first_pt = vim.api.nvim_buf_set_extmark(0, ns, 0, 1, {}),
+      mid_pt = vim.api.nvim_buf_set_extmark(0, ns, 1, 1, {}),
+      mid_span = vim.api.nvim_buf_set_extmark(0, ns, 1, 0, { end_col = 3 }),
+      last_pt = vim.api.nvim_buf_set_extmark(0, ns, 2, 1, {}),
+      outside = vim.api.nvim_buf_set_extmark(0, ns, 3, 1, {}),
+    }
+  end)
+  selection(1, 0, 3, 0, "V")
+  feed("gb")
+  eq(get_lines(), { "/* aaa", "bbb", "ccc */", "ddd" })
+
+  local res = child.lua_func(function()
+    local ns = vim.api.nvim_create_namespace("celeste_test")
+    local get = function(id) return vim.api.nvim_buf_get_extmark_by_id(0, ns, id, {}) end
+    return {
+      first_pt = get(__em.first_pt),
+      mid_pt = get(__em.mid_pt),
+      last_pt = get(__em.last_pt),
+      outside = get(__em.outside),
+      mid_span = vim.api.nvim_buf_get_extmark_by_id(0, ns, __em.mid_span, { details = true }),
+    }
+  end)
+
+  -- marker line: extmark follows the inserted `/* ` (shifts right)
+  eq(res.first_pt, { 0, 4 })
+  -- untouched content line: preserved exactly
+  eq(res.mid_pt, { 1, 1 })
+  -- span extmark on untouched content line: start and end both preserved
+  eq(res.mid_span[1], 1)
+  eq(res.mid_span[2], 0)
+  eq(res.mid_span[3].end_col, 3)
+  -- RHS insert is after the extmark on the last line: preserved
+  eq(res.last_pt, { 2, 1 })
+  -- line outside the range: untouched
+  eq(res.outside, { 3, 1 })
+end
+
+T["pre_commit_edits"]["default commit displaces extmarks inside the range"] = function()
+  child.bo.filetype = "c"
+  set_lines({ "aaa", "bbb", "ccc", "ddd" })
+  child.lua_func(function()
+    _G.__ns = vim.api.nvim_create_namespace("celeste_test")
+    _G.__mid = vim.api.nvim_buf_set_extmark(0, _G.__ns, 1, 1, {})
+  end)
+  selection(1, 0, 3, 0, "V")
+  feed("gb")
+  eq(get_lines(), { "/* aaa", "bbb", "ccc */", "ddd" })
+  local pos = child.lua_func(function() return vim.api.nvim_buf_get_extmark_by_id(0, _G.__ns, _G.__mid, {}) end)
+  -- default whole-range `set_lines` displaces in-range extmarks to the range end
+  eq(pos, { 3, 0 })
 end
 
 -- treesitter tests ───────────────────────────────────────────────────────────
