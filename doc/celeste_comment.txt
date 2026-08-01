@@ -1,5 +1,5 @@
 *celeste_comment.txt*                 MIT License Copyright (c) 2026 celeste3z
-                               For NVIM v0.12.0    Last change: 2026 August 02
+                               For NVIM v0.12.0    Last change: 2026 August 01
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
@@ -95,9 +95,9 @@ INSTALLATION                                    *celeste_comment-installation*
 
 
   [!IMPORTANT]
-- Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-- PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-- `Pinning to a specific version or commit is recommended.`
+  - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
+  - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
+  - `Pinning to a specific version or commit is recommended.`
 
 VIM.PACK (NEOVIM 0.12+) ~
 
@@ -260,7 +260,7 @@ With `commentstring = "# %s"` and line `" "` (2 spaces, no content):
 
 
   [!NOTE] `"mixed"` has no VSCode equivalent — it’s unique to
-celeste_comment.
+  celeste_comment.
 
 fallback_to_block                   *celeste_comment-config-fallback_to_block*
 
