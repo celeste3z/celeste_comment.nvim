@@ -1517,7 +1517,7 @@ function H.restore_state(ctx)
   if cfg.keep_selection and state.mode then
     local range ---@type Celeste.Comment.Range4
     if state.mode == "\22" then
-      vim.cmd("normal! gv")
+      vim.cmd.normal({ "gv", bang = true })
     elseif state.mode == "V" then
       range = { state.end_pos[1], state.cursor[1] }
       if range[1] > range[2] then range = { range[2], range[1] } end
@@ -1901,16 +1901,27 @@ function H.select_range(range, opts)
   if not range then return end
   opts = opts or {}
 
-  if H.is_visual() then vim.cmd("normal! \27") end
+  if H.is_visual() then vim.cmd.normal({ "\27", bang = true }) end
+
+  local sv = vim.fn.winsaveview()
+
   if #range == 2 then
-    vim.cmd(("normal! %dGV%dG"):format(range[1] + 1, range[2] + 1))
+    vim.cmd.normal({ ("%dG"):format(range[1] + 1), bang = true })
+    vim.cmd.normal({ "zv", bang = true })
+    vim.cmd.normal({ "V", bang = true })
+    vim.cmd.normal({ ("%dG"):format(range[2] + 1), bang = true })
+    vim.cmd.normal({ "zv", bang = true })
   else
     local end_col = range[4]
     if opts.end_inclusive and vim.o.selection == "exclusive" then end_col = end_col + 1 end
     vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
-    vim.cmd("normal! v")
+    vim.cmd.normal({ "zv", bang = true })
+    vim.cmd.normal({ "v", bang = true })
     vim.api.nvim_win_set_cursor(0, { range[3] + 1, end_col })
+    vim.cmd.normal({ "zv", bang = true })
   end
+
+  vim.fn.winrestview({ leftcol = sv.leftcol, topline = sv.topline })
 end
 
 ---@param cfg Celeste.Comment.Opts
@@ -2023,14 +2034,14 @@ function H.insert_comment(kind)
     local target = cursor.row + (kind == "above" and 0 or 1)
     vim.api.nvim_buf_set_lines(buf, target, target, false, { csi.olcs .. csi.orcs })
     vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
-    vim.cmd("normal! ==")
+    vim.cmd.normal({ "==", bang = true })
     local indent = #(vim.api.nvim_get_current_line():match("^(%s*)"))
     vim.api.nvim_win_set_cursor(0, { target + 1, indent + #csi.olcs })
   else
     local line = vim.api.nvim_get_current_line()
     if line:find("^%s*$") then
       vim.api.nvim_buf_set_text(buf, cursor.row, 0, cursor.row, 0, { csi.olcs .. csi.orcs })
-      vim.cmd("normal! ==")
+      vim.cmd.normal({ "==", bang = true })
       local indent = #(vim.api.nvim_get_current_line():match("^(%s*)"))
       vim.api.nvim_win_set_cursor(0, { cursor.row + 1, indent + #csi.olcs })
     else
@@ -2038,11 +2049,7 @@ function H.insert_comment(kind)
       vim.api.nvim_win_set_cursor(0, { cursor.row + 1, #line + 1 + #csi.olcs })
     end
   end
-  if csi.trcs ~= "" then
-    vim.cmd("startinsert")
-  else
-    vim.cmd("startinsert!")
-  end
+  vim.cmd.startinsert({ bang = (csi.trcs == "") })
 end
 
 ---@param cursor vim.Pos

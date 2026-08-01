@@ -3697,6 +3697,46 @@ T["keep_selection"]["works in `V` mode"] = function()
   eq(get_selection(), { { 0, 0, 1, 6 }, "V" })
 end
 
+T["keep_selection"]["works with multibyte marker and selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.bo.filetype = "unknown"
+  child.bo.tabstop = 2
+  child.b.celeste_comment_block_commentstring = "※%s※"
+  child.b.celeste_comment_config = { keep_selection = true }
+  set_lines({ "  hello你好  tail" })
+  selection(1, 2, 1, 13)
+  feed("d")
+  eq(get_lines(), { "    tail" })
+  feed("u")
+  eq(get_lines(), { "  hello你好  tail" })
+
+  selection(1, 2, 1, 13)
+  feed("gb")
+  eq(get_cursor(), { 1, 17 })
+  eq(get_lines(), { "  ※ hello你好 ※  tail" })
+  eq(get_selection(), { { 0, 6, 0, 17 }, "v" })
+  feed("d")
+  eq(get_lines(), { "  ※  ※  tail" })
+  feed("u")
+  eq(get_lines(), { "  ※ hello你好 ※  tail" })
+
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 2, 0, 21 }, "v" })
+  feed("d")
+  eq(get_lines(), { "    tail" })
+  feed("u")
+  eq(get_lines(), { "  ※ hello你好 ※  tail" })
+
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 2, 0, 21 }, "v" })
+  feed("gb")
+  eq(get_cursor(), { 1, 13 })
+  eq(get_lines(), { "  hello你好  tail" })
+  eq(get_selection(), { { 0, 2, 0, 13 }, "v" })
+  feed("d")
+  eq(get_lines(), { "    tail" })
+end
+
 -- PreCommitEdits tests ───────────────────────────────────────────────────────
 
 T["pre_commit_edits"] = new_set()
