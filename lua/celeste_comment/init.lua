@@ -2107,8 +2107,12 @@ function H.make_operator(ctype, opts)
     if H.is_disabled() then return "" end
     H.state_track = H.make_state_track()
 
-    _G.__celeste_comment_operator_func = f
-    vim.o.operatorfunc = "v:lua.__celeste_comment_operator_func"
+    if H.__has_nvim_013 then
+      vim.o.operatorfunc = f
+    else
+      _G.__celeste_comment_operator_func = f
+      vim.o.operatorfunc = "v:lua.__celeste_comment_operator_func"
+    end
     return "g@" .. s
   end
 end
