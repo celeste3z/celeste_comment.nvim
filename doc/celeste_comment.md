@@ -564,12 +564,13 @@ Buffer-local, combine with a `FileType` autocmd to scope this hook to specific f
 With `keep_selection`, the selection is restored to the original content-only
 range after a toggle. To also include the comment markers that were just
 added, hook `post_commit_edits` and extend `state_track` (it is already
-shifted by `compute_cursor_state`, so extending is just a matter of adding the
-marker lengths).
+shifted by `compute_cursor_state`).
 
-This applies to charwise block comments (`motion == "char"`). For a block
-comment that was just added, `ctx.comment_info == nil` (info is only computed
-for already-commented ranges):
+Block-comment add edits are deterministic: `edits[1]` is the LHS marker insert
+(text == `csi.olcs`) and `edits[2]` is the RHS marker insert (text ==
+`csi.orcs`). Reading the marker positions straight from the edits works for
+both plain charwise `gb` and `fallback_to_block` (e.g. `gc` on a wrapped line
+comment string, where `motion` is forced to `"line"`):
 
 ```lua
 vim.b.celeste_comment_config = {
@@ -578,12 +579,15 @@ vim.b.celeste_comment_config = {
     ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
     post_commit_edits = function(ctx)
       local st = ctx.state_track
-      local cmt = require("celeste_comment")
-      if not st or ctx.motion ~= "char" or not st.end_pos then return end
-      if ctx.ctype ~= cmt.CMT.kBlock then return end
-      if ctx.comment_info ~= nil then return end
-      st.end_pos = vim.pos(0, st.end_pos[1], st.end_pos[2] - #ctx.csi.olcs)
-      st.cursor = vim.pos(0, st.cursor[1], st.cursor[2] + #ctx.csi.orcs)
+      if not st then return end
+      local lcs, rcs = ctx.edits[1], ctx.edits[2]
+      if not lcs or not rcs then return end
+      if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
+      local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
+      st.end_pos = vim.pos(0, lcs.range[1], lcs.range[2])
+      local rcs_end = rcs.range[2] + shift + #rcs.text[1]
+      if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
+      st.cursor = vim.pos(0, rcs.range[1], rcs_end)
     end,
   },
 }

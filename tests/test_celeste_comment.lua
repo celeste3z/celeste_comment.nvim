@@ -3745,11 +3745,16 @@ T["keep_selection"]["post_commit_edits extends selection to include block marker
         post_commit_edits = function(ctx)
           local st = ctx.state_track
           local HH = require("celeste_comment").H
-          if not st or ctx.motion ~= "char" or not st.end_pos then return end -- charwise block only
-          if ctx.ctype ~= 2 then return end
-          if ctx.comment_info ~= nil then return end -- removing, keep content-only selection
-          st.end_pos = HH.make_pos(0, st.end_pos[1], st.end_pos[2] - #ctx.csi.olcs)
-          st.cursor = HH.make_pos(0, st.cursor[1], st.cursor[2] + #ctx.csi.orcs)
+          if not st then return end
+          -- block-add edits are fixed: [1] = LHS (olcs), [2] = RHS (orcs)
+          local lcs, rcs = ctx.edits[1], ctx.edits[2]
+          if not lcs or not rcs then return end
+          if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
+          local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
+          st.end_pos = HH.make_pos(0, lcs.range[1], lcs.range[2])
+          local rcs_end = rcs.range[2] + shift + #rcs.text[1]
+          if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
+          st.cursor = HH.make_pos(0, rcs.range[1], rcs_end)
         end,
       },
     }
@@ -3762,7 +3767,7 @@ T["keep_selection"]["post_commit_edits extends selection to include block marker
   feed("gb")
   eq(get_lines(), { "  /* hello world */", "  second" })
   feed('"zy')
-  eq(child.fn.getreg("z"), "/* hello world */\n")
+  eq(child.fn.getreg("z"), "/* hello world */")
 
   set_lines({ "  hello world", "  second" })
   selection(1, 0, 2, 0, "V")
@@ -3813,6 +3818,52 @@ T["keep_selection"]["post_commit_edits extends selection to include block marker
   eq(get_cursor(), { 2, 7 })
   eq(get_selection(), { { 0, 4, 1, 7 }, "v" })
   eq(get_lines(), { "  hello world", "  second" })
+end
+
+T["keep_selection"]["post_commit_edits extends selection including fallback-to-block"] = function()
+  child.lua_func(function()
+    vim.b.celeste_comment_config = {
+      keep_selection = true,
+      cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
+      hooks = {
+        post_commit_edits = function(ctx)
+          local st = ctx.state_track
+          local HH = require("celeste_comment").H
+          if not st then return end
+          local lcs, rcs = ctx.edits[1], ctx.edits[2]
+          if not lcs or not rcs then return end
+          if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
+          local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
+          st.end_pos = HH.make_pos(0, lcs.range[1], lcs.range[2])
+          local rcs_end = rcs.range[2] + shift + #rcs.text[1]
+          if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
+          st.cursor = HH.make_pos(0, rcs.range[1], rcs_end)
+        end,
+      },
+    }
+    -- wrapped line comment string: `gc` falls back to block (motion forced to "line")
+    vim.bo.commentstring = "<#%s#>"
+    vim.b.celeste_comment_block_commentstring = "<%#%s%#>"
+  end)
+
+  child.o.selection = "inclusive"
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 6) -- charwise "hello"
+  feed("gc")
+  eq(get_lines(), { "  <# hello world #>", "  second" })
+  eq(get_selection(), { { 0, 2, 0, 18 }, "v" }) -- inclusive: cursor on `>`
+  feed('"zy')
+  eq(child.fn.getreg("z"), "<# hello world #>")
+
+  -- exclusive: cursor sits one-past the RHS marker
+  child.o.selection = "exclusive"
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 6)
+  feed("gc")
+  eq(get_lines(), { "  <# hello world #>", "  second" })
+  eq(get_selection(), { { 0, 2, 0, 19 }, "v" })
+  feed('"zy')
+  eq(child.fn.getreg("z"), "<# hello world #>")
 end
 
 -- PreCommitEdits tests ───────────────────────────────────────────────────────
