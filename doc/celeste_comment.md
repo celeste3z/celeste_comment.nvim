@@ -409,6 +409,21 @@ vim.keymap.set("n", ".", function()
 end, { expr = true })
 ```
 
+The tracked state is exposed to hooks as `ctx.state_track`:
+
+```lua
+---@class Celeste.Comment.StateTrack
+---@field cursor?     vim.Pos  original cursor, never modified
+---@field end_pos?    vim.Pos  original visual-start mark, never modified
+---@field mode?       string   visual mode at track time ("v"/"V"/"\22")
+---@field adj_cursor? vim.Pos  adjusted cursor after edits (keep_cursor target)
+---@field adj_end_pos? vim.Pos adjusted selection anchor after edits
+```
+
+`cursor`/`end_pos` are the raw pre-edit positions; `adj_cursor`/`adj_end_pos`
+are the same positions shifted by the applied edits (and, with
+`keep_selection = "expand_block"`, extended to the block comment markers).
+
 ### Action enum
 
 ```lua

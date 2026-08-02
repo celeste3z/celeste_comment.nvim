@@ -654,7 +654,7 @@ T["base"]["compute_cursor_state"] = function()
   local lines_d = { "x", "x", "x", "x", "x" }
   local range_d = { 0 }
   local csi_d = { orcs = "" }
-  local function cr(row, col) return { cursor = p(0, row, col) } end
+  local function cr(row, col) return { adj_cursor = p(0, row, col) } end
 
   -- nil state
   local cs
@@ -669,55 +669,55 @@ T["base"]["compute_cursor_state"] = function()
   -- cursor only, no end_pos
   cs = cr(0, 3)
   ccs(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
-  eq(cs.cursor, p(0, 0, 5))
-  eq(cs.end_pos, nil)
+  eq(cs.adj_cursor, p(0, 0, 5))
+  eq(cs.adj_end_pos, nil)
 
   -- cursor + end_pos on same line
-  local s2 = { cursor = p(0, 0, 2), end_pos = p(0, 0, 5) }
+  local s2 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 0, 5) }
   ccs(s2, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
-  eq(s2.cursor, p(0, 0, 4))
-  eq(s2.end_pos, p(0, 0, 7))
+  eq(s2.adj_cursor, p(0, 0, 4))
+  eq(s2.adj_end_pos, p(0, 0, 7))
 
   -- cursor + end_pos on different lines, both shifted
-  local s3 = { cursor = p(0, 0, 2), end_pos = p(0, 1, 4) }
+  local s3 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 1, 4) }
   ccs(s3, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello", "world" }, { 0, 0, 1, 5 }, { orcs = "" })
-  eq(s3.cursor, p(0, 0, 4))
-  eq(s3.end_pos, p(0, 1, 4))
+  eq(s3.adj_cursor, p(0, 0, 4))
+  eq(s3.adj_end_pos, p(0, 1, 4))
 
   -- cursor + end_pos with multiple edits
-  local s4 = { cursor = p(0, 0, 3), end_pos = p(0, 0, 5) }
+  local s4 = { adj_cursor = p(0, 0, 3), adj_end_pos = p(0, 0, 5) }
   ccs(s4, {
     { range = { 0, 0, 0, 0 }, text = { "# " } },
     { range = { 0, 5, 0, 5 }, text = { " //" } },
   }, { "hello" }, { 0, 0, 0, 3 }, { orcs = " //" })
-  eq(s4.cursor, p(0, 0, 5))
-  eq(s4.end_pos, p(0, 0, 7))
+  eq(s4.adj_cursor, p(0, 0, 5))
+  eq(s4.adj_end_pos, p(0, 0, 7))
 
   -- cursor + end_pos where end_pos is on a different row with line insert
-  local s5 = { cursor = p(0, 1, 0), end_pos = p(0, 2, 0) }
+  local s5 = { adj_cursor = p(0, 1, 0), adj_end_pos = p(0, 2, 0) }
   ccs(s5, { { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { "a", "b", "c" }, { 0, 0, 2, 0 }, { orcs = "" })
-  eq(s5.cursor, p(0, 2, 0))
-  eq(s5.end_pos, p(0, 3, 0))
+  eq(s5.adj_cursor, p(0, 2, 0))
+  eq(s5.adj_end_pos, p(0, 3, 0))
 
   -- block comment char-wise: RHS end_pos lands at content end
   -- `12--[[ 3456789\n123 ]]456789`, selection {0,2,1,5}, uncomment
-  local s6 = { cursor = p(0, 0, 2), end_pos = p(0, 1, 5) }
+  local s6 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 1, 5) }
   ccs(s6, {
     { range = { 0, 2, 0, 7 }, text = { "" } },
     { range = { 1, 3, 1, 6 }, text = { "" } },
   }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "char")
   -- cursor on `--` → content start (col 2); end_pos on `]]` → last content char (col 2)
-  eq(s6.cursor, p(0, 0, 2))
-  eq(s6.end_pos, p(0, 1, 2))
+  eq(s6.adj_cursor, p(0, 0, 2))
+  eq(s6.adj_end_pos, p(0, 1, 2))
 
   -- same block uncomment but line-wise motion → RHS keeps default clamp
-  local s7 = { cursor = p(0, 0, 2), end_pos = p(0, 1, 5) }
+  local s7 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 1, 5) }
   ccs(s7, {
     { range = { 0, 2, 0, 7 }, text = { "" } },
     { range = { 1, 3, 1, 6 }, text = { "" } },
   }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "line")
-  eq(s7.cursor, p(0, 0, 2))
-  eq(s7.end_pos, p(0, 1, 3))
+  eq(s7.adj_cursor, p(0, 0, 2))
+  eq(s7.adj_end_pos, p(0, 1, 3))
 end
 
 T["base"]["make_csi"] = function()
@@ -3014,7 +3014,7 @@ T["textobject"]["nested linewise and blockwise comment auto detect"] = function(
   })
   set_cursor(6, 6)
   feed("vga")
-  eq(get_cursor(), { 7, 7 })
+  eq(get_cursor(), { 7, 6 })
   feed("d")
   eq(get_lines(), {
     "  aaa",
@@ -3689,12 +3689,12 @@ T["keep_selection"]["works in `V` mode"] = function()
     "  // second line, 2222",
   })
   eq(get_cursor(), { 2, 9 })
-  eq(get_selection(), { { 0, 0, 1, 9 }, "V" })
+  eq(get_selection(), { { 0, 7, 1, 9 }, "V" })
 
   feed("gc")
   eq(get_lines(), lines)
   eq(get_cursor(), { 2, 6 })
-  eq(get_selection(), { { 0, 0, 1, 6 }, "V" })
+  eq(get_selection(), { { 0, 4, 1, 6 }, "V" })
 end
 
 T["keep_selection"]["works with multibyte marker and selection=exclusive"] = function()
@@ -3847,6 +3847,153 @@ T["keep_selection"]["expand_block does not expand wrapped line comment"] = funct
   feed("gc")
   eq(get_lines(), { "  <# hello world #>", "  second" })
   eq(get_selection(), { { 0, 5, 0, 9 }, "v" }) -- content-only "hello", not expanded
+end
+
+T["keep_selection"]["o-swapped charwise keeps cursor at the start"] = function()
+  child.bo.filetype = "cpp"
+  local lines = { "  first line", "  second line" }
+
+  -- accurate: cursor keeps the shifted start-side position
+  set_lines(lines)
+  selection(1, 2, 2, 5) -- v top-down: cursor (1,5), anchor (0,2)
+  feed("o") -- swap: cursor (0,2), anchor (1,5)
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  seco */nd line" })
+  eq(get_cursor(), { 1, 5 })
+  eq(get_selection(), { { 1, 5, 0, 5 }, "v" })
+
+  -- expand_block: cursor stays at the LHS marker
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
+  feed("<Esc>")
+  set_lines(lines)
+  selection(1, 2, 2, 5)
+  feed("o")
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  seco */nd line" })
+  eq(get_cursor(), { 1, 2 })
+  eq(get_selection(), { { 1, 8, 0, 2 }, "v" })
+end
+
+T["keep_selection"]["o-swapped V with horizontal move does not collapse"] = function()
+  child.bo.filetype = "cpp"
+  local lines = { "  first line", "  second line" }
+
+  -- bottom-up selection then o: cursor stays at the bottom
+  set_lines(lines)
+  selection(2, 4, 1, 5, "V")
+  feed("o") -- swap endpoints
+  feed("l") -- horizontal move
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  second line */" })
+  eq(get_cursor(), { 2, 5 })
+  eq(get_selection(), { { 0, 8, 1, 5 }, "V" })
+
+  -- top-down selection then o: cursor stays at the top
+  feed("<Esc>")
+  set_lines(lines)
+  selection(1, 5, 2, 4, "V")
+  feed("o")
+  feed("l")
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  second line */" })
+  eq(get_cursor(), { 1, 9 })
+  eq(get_selection(), { { 1, 4, 0, 9 }, "V" })
+
+  -- top-down + o + gc (line comment)
+  feed("<Esc>")
+  set_lines(lines)
+  selection(1, 5, 2, 4, "V")
+  feed("o")
+  feed("l")
+  feed("gc")
+  eq(get_lines(), { "  // first line", "  // second line" })
+  eq(get_cursor(), { 1, 9 })
+  eq(get_selection(), { { 1, 7, 0, 9 }, "V" })
+end
+
+T["keep_selection"]["backward V selection restores cursor at the top"] = function()
+  child.bo.filetype = "cpp"
+  set_lines({ "  first line", "  second line" })
+  selection(2, 4, 1, 3, "V") -- backward: cursor ends at the top
+  feed("gc")
+  eq(get_lines(), { "  // first line", "  // second line" })
+  eq(get_cursor(), { 1, 6 })
+  eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
+end
+
+T["keep_selection"]["o-swapped charwise keeps cursor at the start with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.bo.filetype = "cpp"
+  local lines = { "  first line", "  second line" }
+
+  -- accurate
+  set_lines(lines)
+  selection(1, 2, 2, 5)
+  feed("o")
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  sec */ond line" })
+  eq(get_cursor(), { 1, 5 })
+  eq(get_selection(), { { 1, 5, 0, 5 }, "v" })
+
+  -- expand_block
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
+  feed("<Esc>")
+  set_lines(lines)
+  selection(1, 2, 2, 5)
+  feed("o")
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  sec */ond line" })
+  eq(get_cursor(), { 1, 2 })
+  eq(get_selection(), { { 1, 8, 0, 2 }, "v" })
+end
+
+T["keep_selection"]["o-swapped V with horizontal move does not collapse with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.bo.filetype = "cpp"
+  local lines = { "  first line", "  second line" }
+
+  -- bottom-up + o: cursor stays at the bottom
+  set_lines(lines)
+  selection(2, 4, 1, 5, "V")
+  feed("o")
+  feed("l")
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  second line */" })
+  eq(get_cursor(), { 2, 5 })
+  eq(get_selection(), { { 0, 8, 1, 5 }, "V" })
+
+  -- top-down + o: cursor stays at the top
+  feed("<Esc>")
+  set_lines(lines)
+  selection(1, 5, 2, 4, "V")
+  feed("o")
+  feed("l")
+  feed("gb")
+  eq(get_lines(), { "  /* first line", "  second line */" })
+  eq(get_cursor(), { 1, 9 })
+  eq(get_selection(), { { 1, 4, 0, 9 }, "V" })
+
+  -- top-down + o + gc
+  feed("<Esc>")
+  set_lines(lines)
+  selection(1, 5, 2, 4, "V")
+  feed("o")
+  feed("l")
+  feed("gc")
+  eq(get_lines(), { "  // first line", "  // second line" })
+  eq(get_cursor(), { 1, 9 })
+  eq(get_selection(), { { 1, 7, 0, 9 }, "V" })
+end
+
+T["keep_selection"]["backward V selection restores cursor at the top with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.bo.filetype = "cpp"
+  set_lines({ "  first line", "  second line" })
+  selection(2, 4, 1, 3, "V")
+  feed("gc")
+  eq(get_lines(), { "  // first line", "  // second line" })
+  eq(get_cursor(), { 1, 6 })
+  eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
 end
 
 -- PreCommitEdits tests ───────────────────────────────────────────────────────

@@ -95,9 +95,9 @@ INSTALLATION                                    *celeste_comment-installation*
 
 
   [!IMPORTANT]
-  - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-  - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-  - `Pinning to a specific version or commit is recommended.`
+- Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
+- PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
+- `Pinning to a specific version or commit is recommended.`
 
 VIM.PACK (NEOVIM 0.12+) ~
 
@@ -277,7 +277,7 @@ With `commentstring = "# %s"` and line `" "` (2 spaces, no content):
 
 
   [!NOTE] `"mixed"` has no VSCode equivalent — it’s unique to
-  celeste_comment.
+celeste_comment.
 
 fallback_to_block                   *celeste_comment-config-fallback_to_block*
 
@@ -489,6 +489,21 @@ mappings.
       return "."
     end, { expr = true })
 <
+
+The tracked state is exposed to hooks as `ctx.state_track`:
+
+>lua
+    ---@class Celeste.Comment.StateTrack
+    ---@field cursor?     vim.Pos  original cursor, never modified
+    ---@field end_pos?    vim.Pos  original visual-start mark, never modified
+    ---@field mode?       string   visual mode at track time ("v"/"V"/"\22")
+    ---@field adj_cursor? vim.Pos  adjusted cursor after edits (keep_cursor target)
+    ---@field adj_end_pos? vim.Pos adjusted selection anchor after edits
+<
+
+`cursor`/`end_pos` are the raw pre-edit positions; `adj_cursor`/`adj_end_pos`
+are the same positions shifted by the applied edits (and, with `keep_selection
+= "expand_block"`, extended to the block comment markers).
 
 
 ACTION ENUM ~
