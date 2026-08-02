@@ -136,7 +136,9 @@ require("celeste_comment").setup({})
   keep_cursor            = true,
 
   -- Restore selection after commenting.
-  keep_selection         = false,
+  -- See `:help celeste_comment-config-keep_selection`
+  -- Possible values: "never" | "accurate" | "expand_block"
+  keep_selection         = "never",
 
   -- Insert space between comment marker and text.
   insert_space           = true,

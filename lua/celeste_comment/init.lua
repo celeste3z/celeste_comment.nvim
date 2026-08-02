@@ -47,6 +47,17 @@ M.FBK2BLOCK = {
   kIfLineCmsWrapped = "if_line_cms_wrapped",
 }
 
+---@enum Celeste.Comment.KeepSel
+M.KEEP_SEL = {
+  --- Do not restore the visual selection.
+  kNever = "never",
+  --- Restore the selection with precise per-edit tracking.
+  kAccurate = "accurate",
+  --- Restore the selection and additionally extend it to cover the just-added
+  --- block comment markers (e.g. select `/* hello */` instead of `hello`).
+  kExpandBlock = "expand_block",
+}
+
 ---@enum Celeste.Comment.Action
 M.ACTION = {
   --- Toggle: if all lines commented → uncomment; else → comment.
@@ -170,7 +181,7 @@ M.ACTION = {
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor?                boolean default true
----@field keep_selection?             boolean default false
+---@field keep_selection?             Celeste.Comment.KeepSel default "never"
 ---@field insert_space?               boolean default true
 ---@field line_comment_no_indent?     boolean default false
 ---@field case_insensitive?           boolean default false
@@ -194,7 +205,7 @@ H.state_track = nil
 ---@type Celeste.Comment.Opts
 H.config = {
   keep_cursor               = true,
-  keep_selection            = false,
+  keep_selection            = M.KEEP_SEL.kNever,
   insert_space              = true,
   line_comment_no_indent    = false,
   case_insensitive          = false,
@@ -1513,11 +1524,28 @@ function H.make_state_track()
 end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
+function H.post_commit_expand_block(ctx)
+  if ctx.cfg.keep_selection ~= M.KEEP_SEL.kExpandBlock then return end
+  local st = ctx.state_track
+  if not st or st.mode ~= "v" or ctx.ctype ~= M.CMT.kBlock or ctx.motion ~= "char" then return end
+
+  local lcs, rcs = ctx.edits[1], ctx.edits[2]
+  if not lcs or not rcs then return end
+  if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
+
+  local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
+  st.end_pos = H.make_pos(0, lcs.range[1], lcs.range[2])
+  local rcs_end = rcs.range[2] + shift + #rcs.text[1]
+  if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
+  st.cursor = H.make_pos(0, rcs.range[1], rcs_end)
+end
+
+---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
 function H.restore_state(ctx)
   local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
-  if cfg.keep_selection and state.mode then
+  if cfg.keep_selection ~= M.KEEP_SEL.kNever and state.mode then
     local range ---@type Celeste.Comment.Range4
     if state.mode == "\22" then
       vim.cmd.normal({ "gv", bang = true })
@@ -1592,7 +1620,8 @@ end
 ---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
 function H.compute_cursor_state(ctx)
   local state = ctx.state_track
-  if not (ctx.cfg.keep_cursor or ctx.cfg.keep_selection) or not state then return end
+  if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL.kNever then return end
+  if not state then return end
   state.cursor = H.compute_cursor_pos(state.cursor, ctx)
   if state.end_pos then state.end_pos = H.compute_cursor_pos(state.end_pos, ctx) end
 end
@@ -1607,7 +1636,7 @@ end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
 function H.invoke_post_commit_chainably(ctx)
-  local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.restore_state }
+  local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.post_commit_expand_block, H.restore_state }
   for _, hook in ipairs(hooks) do
     if vim.is_callable(hook) and hook(ctx) == true then break end
   end
@@ -2121,7 +2150,11 @@ end
 function M.setup(config)
   config = vim.tbl_deep_extend("force", vim.deepcopy(H.config), config or {})
   vim.validate("keep_cursor", config.keep_cursor, "boolean", true, "boolean")
-  vim.validate("keep_selection", config.keep_selection, "boolean", true, "boolean")
+  vim.validate("keep_selection", config.keep_selection, function(v)
+    if type(v) ~= "string" then return false, ("expected string but got type:%s"):format(type(v)) end
+    return vim.iter({ "never", "accurate", "expand_block" }):any(function(z) return z == v end),
+      ("expected 'never'|'accurate'|'expand_block' but got %s"):format(vim.inspect(v))
+  end, true, "string")
   vim.validate("insert_space", config.insert_space, "boolean", true, "boolean")
   vim.validate("line_comment_no_indent", config.line_comment_no_indent, "boolean", true, "boolean")
   vim.validate("ignore_empty_lines", config.ignore_empty_lines, function(v)
@@ -2133,7 +2166,7 @@ function M.setup(config)
     if type(v) ~= "string" then return false, "expected string" end
     return vim.iter({ "never", "if_line_cms_wrapped" }):any(function(z) return z == v end),
       ("expected 'never'|'if_line_cms_wrapped' but got %s"):format(v)
-  end)
+  end, true, "string")
   vim.validate("case_insensitive", config.case_insensitive, "boolean", true, "boolean")
   vim.validate("block_relaxed_detect", config.block_relaxed_detect, "boolean", true, "boolean")
   vim.validate("block_textobj_nlines", config.block_textobj_nlines, "number", true, "number")

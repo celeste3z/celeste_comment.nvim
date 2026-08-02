@@ -84,7 +84,7 @@ require("celeste_comment").setup()
 ```lua
 {
   keep_cursor            = true,  -- Restore cursor position after commenting
-  keep_selection         = false, -- Restore visual selection after commenting
+  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"
   insert_space           = true,  -- Insert space between comment marker and text
   line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
   case_insensitive       = false, -- Match comment markers case-insensitively
@@ -137,11 +137,28 @@ edit.
 
 #### `keep_selection` {doc="celeste_comment-config-keep_selection"}
 
-Default: `false`.
-Restores the visual selection to its computed position after commenting.
-The plugin tracks the original cursor and selection end positions, adjusts them
-through each edit operation, and restores the visual selection. When `false`,
-the selection is not restored (default behavior).
+Default: `"never"`.
+Controls how the visual selection is restored after commenting. The plugin
+tracks the original cursor and selection end positions and adjusts them
+through each edit operation.
+
+- `"never"` — do not restore the selection.
+- `"accurate"` — restore the selection to its computed position.
+- `"expand_block"` — restore the selection and additionally extend it to cover
+  the just-added block comment markers:
+
+```lua
+require("celeste_comment").setup({ keep_selection = "expand_block" })
+```
+
+Selecting `hello world` and pressing `gb` now keeps the whole
+`/* hello world */` (markers included) selected. Toggling back (uncommenting)
+restores the content-only selection, since there are no markers to expand.
+
+`"expand_block"` applies to charwise block comments only (e.g. `gb`). It does
+not expand when `gc` falls back to block on a wrapping line comment string,
+nor for line comments. It respects the current `selection` mode
+(`inclusive`/`exclusive`).
 
 #### `insert_space` {doc="celeste_comment-config-insert_space"}
 
@@ -558,43 +575,6 @@ vim.b.celeste_comment_config = {
 ```
 
 Buffer-local, combine with a `FileType` autocmd to scope this hook to specific filetypes.
-
-### Keep selection including the outer comment markers
-
-With `keep_selection`, the selection is restored to the original content-only
-range after a toggle. To also include the comment markers that were just
-added, hook `post_commit_edits` and extend `state_track` (it is already
-shifted by `compute_cursor_state`).
-
-Block-comment add edits are deterministic: `edits[1]` is the LHS marker insert
-(text == `csi.olcs`) and `edits[2]` is the RHS marker insert (text ==
-`csi.orcs`). Reading the marker positions straight from the edits works for
-both plain charwise `gb` and `fallback_to_block` (e.g. `gc` on a wrapped line
-comment string, where `motion` is forced to `"line"`):
-
-```lua
-vim.b.celeste_comment_config = {
-  keep_selection = true,
-  hooks = {
-    ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
-    post_commit_edits = function(ctx)
-      local st = ctx.state_track
-      if not st then return end
-      local lcs, rcs = ctx.edits[1], ctx.edits[2]
-      if not lcs or not rcs then return end
-      if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
-      local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
-      st.end_pos = vim.pos(0, lcs.range[1], lcs.range[2])
-      local rcs_end = rcs.range[2] + shift + #rcs.text[1]
-      if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
-      st.cursor = vim.pos(0, rcs.range[1], rcs_end)
-    end,
-  },
-}
-```
-
-Selecting `hello world` and pressing `gb` now keeps the whole
-`/* hello world */` (markers included) selected.
 
 ## Limitations
 

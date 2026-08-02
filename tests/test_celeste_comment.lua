@@ -3530,7 +3530,7 @@ T["keep_selection"] = new_set({
   hooks = {
     pre_case = function()
       child.lua_func(function()
-        vim.b.celeste_comment_config = { keep_selection = true }
+        vim.b.celeste_comment_config = { keep_selection = "accurate" }
         vim.bo.filetype = "cpp"
         vim.bo.tabstop = 2
       end)
@@ -3702,7 +3702,7 @@ T["keep_selection"]["works with multibyte marker and selection=exclusive"] = fun
   child.bo.filetype = "unknown"
   child.bo.tabstop = 2
   child.b.celeste_comment_block_commentstring = "※%s※"
-  child.b.celeste_comment_config = { keep_selection = true }
+  child.b.celeste_comment_config = { keep_selection = "accurate" }
   set_lines({ "  hello你好  tail" })
   selection(1, 2, 1, 13)
   feed("d")
@@ -3737,28 +3737,8 @@ T["keep_selection"]["works with multibyte marker and selection=exclusive"] = fun
   eq(get_lines(), { "    tail" })
 end
 
-T["keep_selection"]["post_commit_edits extends selection to include block markers"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      keep_selection = true,
-      hooks = {
-        post_commit_edits = function(ctx)
-          local st = ctx.state_track
-          local HH = require("celeste_comment").H
-          if not st then return end
-          -- block-add edits are fixed: [1] = LHS (olcs), [2] = RHS (orcs)
-          local lcs, rcs = ctx.edits[1], ctx.edits[2]
-          if not lcs or not rcs then return end
-          if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
-          local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
-          st.end_pos = HH.make_pos(0, lcs.range[1], lcs.range[2])
-          local rcs_end = rcs.range[2] + shift + #rcs.text[1]
-          if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
-          st.cursor = HH.make_pos(0, rcs.range[1], rcs_end)
-        end,
-      },
-    }
-  end)
+T["keep_selection"]["expand_block includes block comment markers"] = function()
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
 
   -- with selection == 'inclusive'
   child.o.selection = "inclusive"
@@ -3766,6 +3746,7 @@ T["keep_selection"]["post_commit_edits extends selection to include block marker
   selection(1, 2, 1, 13)
   feed("gb")
   eq(get_lines(), { "  /* hello world */", "  second" })
+  eq(get_selection(), { { 0, 2, 0, 18 }, "v" })
   feed('"zy')
   eq(child.fn.getreg("z"), "/* hello world */")
 
@@ -3820,26 +3801,12 @@ T["keep_selection"]["post_commit_edits extends selection to include block marker
   eq(get_lines(), { "  hello world", "  second" })
 end
 
-T["keep_selection"]["post_commit_edits extends selection including fallback-to-block"] = function()
+T["keep_selection"]["expand_block does not expand fallback-to-block"] = function()
   child.lua_func(function()
     vim.b.celeste_comment_config = {
-      keep_selection = true,
+      keep_selection = "expand_block",
       cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
-      hooks = {
-        post_commit_edits = function(ctx)
-          local st = ctx.state_track
-          local HH = require("celeste_comment").H
-          if not st then return end
-          local lcs, rcs = ctx.edits[1], ctx.edits[2]
-          if not lcs or not rcs then return end
-          if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
-          local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
-          st.end_pos = HH.make_pos(0, lcs.range[1], lcs.range[2])
-          local rcs_end = rcs.range[2] + shift + #rcs.text[1]
-          if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
-          st.cursor = HH.make_pos(0, rcs.range[1], rcs_end)
-        end,
-      },
+      fallback_to_block = "if_line_cms_wrapped",
     }
     -- wrapped line comment string: `gc` falls back to block (motion forced to "line")
     vim.bo.commentstring = "<#%s#>"
@@ -3851,19 +3818,35 @@ T["keep_selection"]["post_commit_edits extends selection including fallback-to-b
   selection(1, 2, 1, 6) -- charwise "hello"
   feed("gc")
   eq(get_lines(), { "  <# hello world #>", "  second" })
-  eq(get_selection(), { { 0, 2, 0, 18 }, "v" }) -- inclusive: cursor on `>`
-  feed('"zy')
-  eq(child.fn.getreg("z"), "<# hello world #>")
+  eq(get_selection(), { { 0, 5, 0, 9 }, "v" }) -- content-only "hello", not expanded
+  feed("<Esc>")
 
-  -- exclusive: cursor sits one-past the RHS marker
+  -- exclusive also stays content-only
   child.o.selection = "exclusive"
   set_lines({ "  hello world", "  second" })
   selection(1, 2, 1, 6)
   feed("gc")
   eq(get_lines(), { "  <# hello world #>", "  second" })
-  eq(get_selection(), { { 0, 2, 0, 19 }, "v" })
-  feed('"zy')
-  eq(child.fn.getreg("z"), "<# hello world #>")
+  eq(get_selection(), { { 0, 5, 0, 9 }, "v" })
+end
+
+T["keep_selection"]["expand_block does not expand wrapped line comment"] = function()
+  child.lua_func(function()
+    vim.b.celeste_comment_config = {
+      keep_selection = "expand_block",
+      cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
+      fallback_to_block = "never", -- use the wrapped line comment directly (ctype=kLine)
+    }
+    vim.bo.commentstring = "<#%s#>"
+    vim.b.celeste_comment_block_commentstring = "<%#%s%#>"
+  end)
+
+  child.o.selection = "inclusive"
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 6) -- charwise "hello"
+  feed("gc")
+  eq(get_lines(), { "  <# hello world #>", "  second" })
+  eq(get_selection(), { { 0, 5, 0, 9 }, "v" }) -- content-only "hello", not expanded
 end
 
 -- PreCommitEdits tests ───────────────────────────────────────────────────────
