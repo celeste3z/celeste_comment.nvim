@@ -478,13 +478,14 @@ Initialize the plugin with configuration. Must be called once.
 <
 
 
-M.TRACK_CURSOR() ~
+M.TRACK_STATE() ~
 
-Tracks cursor position for the next edit operation. Useful in custom mappings.
+Tracks cursor and selection state for the next edit operation. Useful in custom
+mappings.
 
 >lua
     vim.keymap.set("n", ".", function()
-      require("celeste_comment").track_cursor()
+      require("celeste_comment").track_state()
       return "."
     end, { expr = true })
 <

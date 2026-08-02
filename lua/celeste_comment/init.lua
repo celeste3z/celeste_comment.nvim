@@ -2110,8 +2110,8 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
   H.make_actionx(cfg, n_ctype, action, lines, csi, range, motion, cursor, opts)
 end
 
---- Track cursor position
-function M.track_cursor() H.state_track = H.make_state_track() end
+--- Track cursor and selection state
+function M.track_state() H.state_track = H.make_state_track() end
 
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.ExecutionOpts

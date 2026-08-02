@@ -398,13 +398,13 @@ Initialize the plugin with configuration. Must be called once.
 require("celeste_comment").setup({ keep_cursor = true })
 ```
 
-### `M.track_cursor()`
+### `M.track_state()`
 
-Tracks cursor position for the next edit operation. Useful in custom mappings.
+Tracks cursor and selection state for the next edit operation. Useful in custom mappings.
 
 ```lua
 vim.keymap.set("n", ".", function()
-  require("celeste_comment").track_cursor()
+  require("celeste_comment").track_state()
   return "."
 end, { expr = true })
 ```
