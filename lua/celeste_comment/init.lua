@@ -523,6 +523,39 @@ function H.normalize_cms_conf(cms_conf)
   cms_conf[M.CMT.kBlock] = norm(cms_conf[M.CMT.kBlock])
 end
 
+---@param comments string
+---@return string[]
+function H.split_comments_parts(comments)
+  if not H.__COMMENTS_PARTS_PATTERN then
+    local P, C, Ct = vim.lpeg.P, vim.lpeg.C, vim.lpeg.Ct
+    local part = C((P("\\") * P(1) + (1 - P(","))) ^ 0)
+    H.__COMMENTS_PARTS_PATTERN = Ct(part * (P(",") * part) ^ 0)
+  end
+  return H.__COMMENTS_PARTS_PATTERN:match(comments)
+end
+
+---@class Celeste.Comment.ExtractCommentsRes
+---@field s?    {str:string, flags:string}
+---@field m?    {str:string, flags:string}
+---@field e?    {str:string, flags:string}
+---@field line? {str:string, flags:string}
+
+---@param comments string
+---@return Celeste.Comment.ExtractCommentsRes
+function H.do_extract_comments(comments)
+  if type(comments) ~= "string" or comments == "" then return {} end
+
+  local res = {}
+  for _, part in ipairs(H.split_comments_parts(comments)) do
+    local flags, value = part:match("^([nbfsmelrOx0-9%-]*):(.*)$")
+    if flags and value then
+      value = value:gsub("\\([,: ])", "%1")
+      if not flags:find("O", 1, true) then res[flags:match("[sme]") or "line"] = { str = value, flags = flags } end
+    end
+  end
+  return res
+end
+
 ---@param ltree vim.treesitter.LanguageTree
 ---@param pos vim.Pos
 ---@return boolean
@@ -552,11 +585,22 @@ end
 ---Based on https://github.com/neovim/neovim/blob/master/runtime/lua/vim/_comment.lua
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
 function H.nvim_builtin_like_cms_conf_resolver(ctx)
+  local function get_cms_opt(filetype)
+    local cs = vim.filetype.get_option(filetype, "commentstring")
+    if type(cs) == "string" and cs ~= "" then return cs end
+  end
+
+  local function get_bcms_opt(filetype)
+    local bcs = H.do_extract_comments(vim.filetype.get_option(filetype, "comments"))
+    if bcs.s and bcs.e and bcs.s.str ~= "" and bcs.e.str ~= "" then return ("%s%%s%s"):format(bcs.s.str, bcs.e.str) end
+  end
+
   local pos = H.adjust_to_start_column_pos(ctx.cursor)
+  local filetype = vim.bo[pos.buf].filetype
 
   ctx.o_cms_conf = {
-    [M.CMT.kLine] = vim.bo[pos.buf].commentstring,
-    [M.CMT.kBlock] = vim.b[pos.buf].celeste_comment_block_commentstring,
+    [M.CMT.kLine] = vim.bo[pos.buf].commentstring or get_cms_opt(filetype),
+    [M.CMT.kBlock] = vim.b[pos.buf].celeste_comment_block_commentstring or get_bcms_opt(filetype),
   }
 
   local ok, parser = pcall(vim.treesitter.get_parser, pos.buf, "")
@@ -572,7 +616,7 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
     end
   end
 
-  local ts_cs, res_level = nil, 0
+  local ts_lcs, ts_bcs, ts_ft, res_level = nil, nil, nil, 0
 
   ---@param ltree vim.treesitter.LanguageTree
   ---@param level integer
@@ -581,9 +625,10 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
     local lang = ltree:lang()
     local filetypes = vim.treesitter.language.get_filetypes(lang)
     for _, ft in ipairs(filetypes) do
-      local cs = vim.filetype.get_option(ft, "commentstring")
-      if type(cs) == "string" and cs ~= "" and level > res_level then
-        ts_cs, res_level = cs, level
+      local cs = get_cms_opt(ft)
+      local bcs = get_bcms_opt(ft)
+      if cs and level > res_level then
+        ts_lcs, ts_bcs, ts_ft, res_level = cs, bcs, ft, level
       end
     end
 
@@ -594,7 +639,8 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
 
   walk(parser, 1)
 
-  if ts_cs then ctx.o_cms_conf[M.CMT.kLine] = ts_cs end
+  if ts_lcs and ts_ft ~= filetype then ctx.o_cms_conf[M.CMT.kLine] = ts_lcs end
+  if ts_bcs and ts_ft ~= filetype then ctx.o_cms_conf[M.CMT.kBlock] = ts_bcs end
 end
 
 ---@param cms_conf Celeste.Comment.CommentStringConf

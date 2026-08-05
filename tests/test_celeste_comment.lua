@@ -779,6 +779,123 @@ T["base"]["make_csi"] = function()
   eq(H.make_csi({ { "", "" } }), nil)
 end
 
+T["base"]["split_comments_parts"] = function()
+  local f = H.split_comments_parts
+  eq(f(""), { "" })
+  eq(f("abc"), { "abc" })
+  eq(f("s1:/*,mb:*,ex:*/"), { "s1:/*", "mb:*", "ex:*/" })
+  eq(f([[s:a\,b,e:c\,d]]), { [[s:a\,b]], [[e:c\,d]] })
+  eq(f("s:/*,"), { "s:/*", "" })
+  eq(f(","), { "", "" })
+  eq(f([[n:#,s:<!--,e:-->]]), { "n:#", "s:<!--", "e:-->" })
+  eq(f([[a\\b]]), { [[a\\b]] })
+  eq(f([[a\\,b]]), { [[a\\]], "b" })
+end
+
+T["base"]["extract_comments_option"] = function()
+  local p = function(str, flags) return { str = str, flags = flags } end
+  local f = H.do_extract_comments
+
+  -- global default
+  eq(
+    f([[s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-,fb:•]]),
+    { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex"), line = p("•", "fb") }
+  )
+
+  -- c.vim:37 (same as arduino/jsonc/soy)
+  eq(
+    f([[sO:*\ -,mO:*\ \ ,exO:*/,s1:/*,mb:*,ex:*/,:///,://]]),
+    { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex"), line = p("//", "") }
+  )
+
+  -- nim.vim:11 (s flag not first: `fs1`)
+  eq(f([[exO:]#,fs1:#[,mb:*,ex:]#,:#]]), { s = p("#[", "fs1"), m = p("*", "mb"), e = p("]#", "ex"), line = p("#", "") })
+
+  -- sway.vim:13 (duplicate s sections, last wins)
+  eq(
+    f([[s0:/*!,ex:*/,s1:/*,mb:*,ex:*/,:///,://!,://]]),
+    { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex"), line = p("//", "") }
+  )
+
+  -- mediawiki.vim:28 (last s/e; `\:` and `\ ` unescaped)
+  eq(
+    f([[n:#,n:*,n:\:,s:{\|,m:\|,ex:\|},s:<!--,m:\ \ \ \ ,e:-->]]),
+    { line = p(":", "n"), s = p("<!--", "s"), m = p("    ", "m"), e = p("-->", "e") }
+  )
+
+  -- xml.vim:21
+  eq(f([[s:<!--,e:-->]]), { s = p("<!--", "s"), e = p("-->", "e") })
+
+  -- sml.vim:20 (r flag)
+  eq(f([[sr:(*,mb:*,ex:*)]]), { s = p("(*", "sr"), m = p("*", "mb"), e = p("*)", "ex") })
+
+  -- rust.vim:38 (duplicate s/m/e, last wins, `\ ` unescaped)
+  eq(
+    f([[s1:/*,mb:*,ex:*/,s0:/*,mb:\ ,ex:*/,:///,://!,://]]),
+    { s = p("/*", "s0"), m = p(" ", "mb"), e = p("*/", "ex"), line = p("//", "") }
+  )
+
+  -- ld.vim:17 (minimal C-style block)
+  eq(f([[s1:/*,mb:*,ex:*/]]), { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex") })
+
+  -- idris2.vim:28 (`\|` not unescaped)
+  eq(
+    f([[s1:{-,mb:-,ex:-},:\|\|\|,:--]]),
+    { s = p("{-", "s1"), m = p("-", "mb"), e = p("-}", "ex"), line = p("--", "") }
+  )
+
+  -- tera.vim:19
+  eq(f([[s:{#,e:#}]]), { s = p("{#", "s"), e = p("#}", "e") })
+
+  -- wat.vim:13
+  eq(f([[s:(;,e:;),:;;]]), { s = p("(;", "s"), e = p(";)", "e"), line = p(";;", "") })
+
+  -- scheme.vim:19
+  eq(
+    f([[:;;;;,:;;;,:;;,:;,sr:#\|,mb:\|,ex:\|#]]),
+    { line = p(";", ""), s = p("#\\|", "sr"), m = p("\\|", "mb"), e = p("\\|#", "ex") }
+  )
+
+  -- modula3.vim:15 (count flag s0)
+  eq(f([[s0:(*,mb:\ ,ex:*)]]), { s = p("(*", "s0"), m = p(" ", "mb"), e = p("*)", "ex") })
+
+  -- aap.vim:25 (`\ ` unescaped in s/m)
+  eq(f([[s:#\ -,m:#\ \ ,e:#,n:#,fb:-]]), { s = p("# -", "s"), m = p("#  ", "m"), e = p("#", "e"), line = p("-", "fb") })
+
+  -- purescript.vim:11
+  eq(
+    f([[s1f:{-,mb:\ ,ex:-},:--\ \|,:--]]),
+    { s = p("{-", "s1f"), m = p(" ", "mb"), e = p("-}", "ex"), line = p("--", "") }
+  )
+
+  -- org.vim:20 (`\:` unescaped)
+  eq(f([[b:\:]]), { line = p(":", "b") })
+
+  -- hgcommit.vim:17 (`\:` unescaped)
+  eq(f([[:HG\:]]), { line = p("HG:", "") })
+
+  -- clojure.vim:31
+  eq(f([[n:;]]), { line = p(";", "n") })
+
+  -- text.vim:17 (line only, last wins)
+  eq(f([[fb:-,fb:*,n:>]]), { line = p(">", "n") })
+
+  -- spec.vim:19
+  eq(f([[b:#]]), { line = p("#", "b") })
+
+  -- synthetic: s-only (no e)
+  eq(f([[s:/*]]), { s = p("/*", "s") })
+
+  -- synthetic: escaped comma
+  eq(f([[s:a\,b,e:c\,d]]), { s = p("a,b", "s"), e = p("c,d", "e") })
+
+  -- synthetic: trailing comma
+  eq(f([[s:/*,]]), { s = p("/*", "s") })
+
+  -- empty
+  eq(f(""), {})
+end
+
 T["base"]["block_comment_info"] = function()
   local function f(lines, lcs, rcs, scol, ecol, motion, relaxed)
     local cfg = relaxed and { block_relaxed_detect = true } or nil
@@ -4499,6 +4616,65 @@ T["treesitter"]["works across combined injections"] = function()
     'vim.cmd([[" some more text]])',
   })
   eq(get_cursor(), { 2, 3 })
+end
+
+-- extract from options comments ──────────────────────────────────────────────
+
+T["from_options_comments"] = new_set()
+
+T["from_options_comments"]["works"] = function()
+  child.bo.filetype = "haskell"
+  child.b.celeste_comment_config = { cms_confs = false }
+  set_lines({ "  some text" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "--   some text" })
+  feed(".")
+  eq(get_lines(), { "  some text" })
+
+  feed("gbc")
+  eq(get_lines(), { "  {- some text -}" })
+end
+
+T["from_options_comments"]["works with injection"] = function()
+  child.lua_func(function()
+    vim.bo.filetype = "markdown"
+    vim.bo.tabstop = 2
+    vim.bo.expandtab = false
+    vim.treesitter.language.add("cpp")
+    vim.treesitter.language.add("bash")
+    vim.treesitter.start()
+    vim.b.celeste_comment_config = { cms_confs = false }
+  end)
+
+  set_lines({
+    "# H1",
+    "```cpp",
+    '  printf("hello");',
+    "```",
+    "",
+    "```bash",
+    "echo hello",
+    "```",
+  })
+
+  set_cursor(3, 0)
+  feed("gcc")
+  eq(get_lines(3, 3), { '  // printf("hello");' })
+  feed(".")
+  eq(get_lines(3, 3), { '  printf("hello");' })
+  feed("gbc")
+  eq(get_lines(3, 3), { '  /* printf("hello"); */' })
+  feed(".")
+  eq(get_lines(3, 3), { '  printf("hello");' })
+
+  set_cursor(7, 0)
+  feed(".")
+  eq(get_lines(7, 7), { "echo hello" })
+  feed("gcc")
+  eq(get_lines(7, 7), { "# echo hello" })
+  feed(".")
+  eq(get_lines(7, 7), { "echo hello" })
 end
 
 -- markdown injected language tests ───────────────────────────────────────────
