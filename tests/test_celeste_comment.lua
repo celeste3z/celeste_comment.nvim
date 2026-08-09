@@ -5003,6 +5003,37 @@ T["warning"]["no available"] = function()
   eq(child_msg(), {})
 end
 
+T["warning"]["unmodifiable"] = function()
+  child.bo.filetype = "lua"
+  set_lines({ "a" })
+  set_cursor(1, 0)
+  child.bo.modifiable = false
+
+  local f = function(k, msg)
+    msg = msg or { "celeste_comment.nvim buffer unmodifiable" }
+    feed(k)
+    eq(get_lines(), { "a" })
+    eq(child_msg(), msg)
+    clear_child_msg()
+  end
+
+  f("gcc")
+  f("gbc")
+  f("gcu")
+  f("vga", {})
+end
+
+T["warning"]["disabled"] = function()
+  child.b.celeste_comment_disable = true
+  feed("gcc")
+  eq(child_msg(), { "celeste_comment.nvim disabled" })
+  clear_child_msg()
+  child.b.celeste_comment_disable = false
+  child.g.celeste_comment_disable = true
+  feed("gcc")
+  eq(child_msg(), { "celeste_comment.nvim disabled" })
+end
+
 -- Referenced from vscode ─────────────────────────────────────────────────────
 
 T["referenced_from_vscode"] = new_set({

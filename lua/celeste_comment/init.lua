@@ -262,18 +262,6 @@ local log_level_to_name = {
 
 H.__has_nvim_012 = vim.fn.has("nvim-0.12") == 1
 H.__has_nvim_013 = vim.fn.has("nvim-0.13") == 1
----@param silent? boolean
----@return boolean
-function H.supported(silent)
-  if not H.__has_nvim_012 and not silent then
-    vim.api.nvim_echo(
-      { { "celeste_comment.nvim", "DiagnosticSignHint" }, { " requires nvim-0.12", "WarningMsg" } },
-      true,
-      {}
-    )
-  end
-  return H.__has_nvim_012
-end
 
 ---TODO: delete this if we drop support for nvim-0.12
 ---@diagnostic disable
@@ -494,9 +482,22 @@ H.comment_string_confs = {
   zig = { { "//%s", "///%s", "//!%s" }, nil },
 }
 
+---@param opt? table<string, any>
 ---@return boolean
-function H.is_disabled()
-  return vim.g.celeste_comment_disable == true or vim.b.celeste_comment_disable == true or not H.supported()
+function H.is_disabled(opt)
+  opt = opt or {}
+  local chunks = { { "celeste_comment.nvim", "DiagnosticSignHint" } }
+  if not H.__has_nvim_012 then
+    chunks[#chunks + 1] = { " requires nvim-0.12", "WarningMsg" }
+  elseif vim.g.celeste_comment_disable == true or vim.b.celeste_comment_disable == true then
+    chunks[#chunks + 1] = { " disabled", "WarningMsg" }
+  elseif opt.check_modifiable and not vim.bo.modifiable then
+    chunks[#chunks + 1] = { " buffer unmodifiable", "WarningMsg" }
+  end
+
+  if not opt.silent and #chunks > 1 then vim.api.nvim_echo(chunks, true, {}) end
+
+  return #chunks > 1
 end
 
 ---@return boolean
@@ -2066,7 +2067,7 @@ end
 
 --- Auto-detect and remove comment
 function H.uncomment_auto()
-  if H.is_disabled() then return end
+  if H.is_disabled({ check_modifiable = true }) then return end
 
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
@@ -2116,7 +2117,7 @@ end
 
 ---@param kind 'above'|'below'|'eol'
 function H.insert_comment(kind)
-  if H.is_disabled() then return end
+  if H.is_disabled({ check_modifiable = true }) then return end
 
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
@@ -2154,7 +2155,7 @@ end
 ---@param motion Celeste.Comment.Motion
 ---@param opts?  Celeste.Comment.ExecutionOpts
 function H.make_action_range(cursor, range, ctype, action, motion, opts)
-  if H.is_disabled() then return end
+  if H.is_disabled({ check_modifiable = true }) then return end
   opts = opts or {}
 
   local cfg = H.buf_config(opts.cfg)
@@ -2194,7 +2195,7 @@ function H.make_operator(ctype, opts)
   end
 
   return function()
-    if H.is_disabled() then return "" end
+    if H.is_disabled({ check_modifiable = true }) then return "" end
     H.state_track = H.make_state_track()
 
     if H.__has_nvim_013 then
