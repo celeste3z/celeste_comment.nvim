@@ -541,7 +541,6 @@ end
 ---@field e?    {str:string, flags:string}
 ---@field line? {str:string, flags:string}
 
----@param comments string
 ---@return Celeste.Comment.ExtractCommentsRes
 function H.do_extract_comments(comments)
   if type(comments) ~= "string" or comments == "" then return {} end
@@ -1007,9 +1006,159 @@ function H.next_visible_column(cur_visible_col, byte, indent_size)
   return cur_visible_col + 1
 end
 
---- Walk up to `limit` chars of `line` counting visible columns,
---- return the 0-indexed offset where visible column first reaches `min_visible_col`.
---- If visible column overshoots, backtrack by 1
+---Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/model/indentationGuesser.ts
+---@param a        string
+---@param alen     integer
+---@param b        string
+---@param blen     integer
+---@return boolean looks_like_alignment
+---@return integer spaces_diff
+function H.spaces_diff(a, alen, b, blen)
+  local spaces_diff = 0
+  local looks_like_alignment = false
+
+  local i = 0
+  while i < alen and i < blen do
+    if a:byte(i + 1) ~= b:byte(i + 1) then break end
+    i = i + 1
+  end
+
+  local a_spaces_cnt, a_tabs_count = 0, 0
+  for j = i + 1, alen do
+    if a:byte(j) == 32 then
+      a_spaces_cnt = a_spaces_cnt + 1
+    else
+      a_tabs_count = a_tabs_count + 1
+    end
+  end
+
+  local b_spaces_cnt, b_tabs_count = 0, 0
+  for j = i + 1, blen do
+    if b:byte(j) == 32 then
+      b_spaces_cnt = b_spaces_cnt + 1
+    else
+      b_tabs_count = b_tabs_count + 1
+    end
+  end
+
+  if a_spaces_cnt > 0 and a_tabs_count > 0 then return false, 0 end
+  if b_spaces_cnt > 0 and b_tabs_count > 0 then return false, 0 end
+
+  local tabs_diff = math.abs(a_tabs_count - b_tabs_count)
+  local spaces_diff_abs = math.abs(a_spaces_cnt - b_spaces_cnt)
+
+  if tabs_diff == 0 then
+    spaces_diff = spaces_diff_abs
+    if
+      spaces_diff > 0
+      and 0 <= b_spaces_cnt - 1
+      and b_spaces_cnt - 1 < #a
+      and b_spaces_cnt < #b
+      and b:byte(b_spaces_cnt + 1) ~= 32
+      and a:byte(b_spaces_cnt) == 32
+      and a:byte(#a) == 44
+    then
+      looks_like_alignment = true
+    end
+    return looks_like_alignment, spaces_diff
+  end
+
+  if spaces_diff_abs % tabs_diff == 0 then spaces_diff = spaces_diff_abs / tabs_diff end
+  return looks_like_alignment, spaces_diff
+end
+
+H.ALLOWED_TAB_SIZE_GUESSES = { 2, 4, 6, 8, 3, 5, 7 }
+H.MAX_ALLOWED_TAB_SIZE_GUESS = 8
+
+---@class Celeste.Comment.GuessIndent.Res
+---@field insert_spaces boolean
+---@field tab_size integer
+
+---Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/model/indentationGuesser.ts
+---@param lines string[]
+---@param default_tab_size integer
+---@param default_insert_spaces boolean
+---@return Celeste.Comment.GuessIndent.Res
+---@overload fun(buf: integer, default_tab_size: integer, default_insert_spaces: boolean): Celeste.Comment.GuessIndent.Res
+function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
+  if type(lines) == "number" then
+    local n = math.min(vim.api.nvim_buf_line_count(lines), 1000)
+    lines = vim.api.nvim_buf_get_lines(lines, 0, n, false)
+  end
+  local lcnt = math.min(#lines, 1000)
+
+  local indented_with_tab_lcnt = 0 -- number of lines that contain at least one tab in indentation
+  local indented_with_spc_cnt = 0 -- number of lines that contain only spaces in indentation
+
+  local prev_ln_text = ""
+  local prev_ln_indent = 0
+
+  local spc_diff_cnt = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+
+  for l = 1, lcnt do
+    local cur_ln = lines[l]
+    local cur_ln_len = #cur_ln
+
+    local cur_ln_has_content = false
+    local cur_ln_indent = 0
+    local cur_ln_spc_cnt = 0
+    local cur_ln_tab_cnt = 0
+    for j = 1, cur_ln_len do
+      local char_code = cur_ln:byte(j)
+      if char_code == 9 then
+        cur_ln_tab_cnt = cur_ln_tab_cnt + 1
+      elseif char_code == 32 then
+        cur_ln_spc_cnt = cur_ln_spc_cnt + 1
+      else
+        cur_ln_has_content = true
+        cur_ln_indent = j - 1
+        break
+      end
+    end
+
+    -- Ignore empty or only whitespace lines
+    if cur_ln_has_content then
+      if cur_ln_tab_cnt > 0 then
+        indented_with_tab_lcnt = indented_with_tab_lcnt + 1
+      elseif cur_ln_spc_cnt > 1 then
+        indented_with_spc_cnt = indented_with_spc_cnt + 1
+      end
+
+      local looks_like_alignment, spc_diff = H.spaces_diff(prev_ln_text, prev_ln_indent, cur_ln, cur_ln_indent)
+
+      local skip = looks_like_alignment and not (default_insert_spaces and default_tab_size == spc_diff)
+      if not skip then
+        if spc_diff <= H.MAX_ALLOWED_TAB_SIZE_GUESS then spc_diff_cnt[spc_diff + 1] = spc_diff_cnt[spc_diff + 1] + 1 end
+        prev_ln_text = cur_ln
+        prev_ln_indent = cur_ln_indent
+      end
+    end
+  end
+
+  local insert_spaces = default_insert_spaces
+  if indented_with_tab_lcnt ~= indented_with_spc_cnt then
+    insert_spaces = indented_with_tab_lcnt < indented_with_spc_cnt
+  end
+
+  local tab_size = default_tab_size
+  if insert_spaces then
+    local tab_size_score = 0
+    for _, possible_tab_size in ipairs(H.ALLOWED_TAB_SIZE_GUESSES) do
+      local possible_tab_size_score = spc_diff_cnt[possible_tab_size + 1]
+      if possible_tab_size_score > tab_size_score then
+        tab_size_score = possible_tab_size_score
+        tab_size = possible_tab_size
+      end
+    end
+
+    if tab_size == 4 and spc_diff_cnt[5] > 0 and spc_diff_cnt[3] > 0 and spc_diff_cnt[3] >= spc_diff_cnt[5] * 2 / 3 then
+      tab_size = 2
+    end
+  end
+
+  return { insert_spaces = insert_spaces, tab_size = tab_size }
+end
+
 ---@param line            string
 ---@param limit           integer
 ---@param min_visible_col integer
