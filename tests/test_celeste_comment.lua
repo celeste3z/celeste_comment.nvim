@@ -60,6 +60,8 @@ local T = new_set({
     pre_case = function()
       child.setup()
       child.bo.tabstop = 4
+      child.bo.shiftwidth = 0
+      child.bo.expandtab = true
       child.bo.commentstring = "# %s"
       child.lua_func(
         function()
@@ -145,6 +147,7 @@ local make_line_info = function(opts)
     lcs_pos = opts.lcs_pos,
     rcs_pos = opts.rcs_pos,
     row = opts.row or 0,
+    indent = opts.indent or { indent_size = 8, indent_style = "space" },
   }
 end
 
@@ -1063,6 +1066,18 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
+T["base"]["make_indent_padding"] = function()
+  eq(H.make_indent_padding(0, 4, 4, "space"), "    ")
+  eq(H.make_indent_padding(0, 4, 4, "tab"), "\t")
+  eq(H.make_indent_padding(0, 8, 4, "tab"), "\t\t")
+  eq(H.make_indent_padding(3, 8, 4, "tab"), "\t\t")
+  eq(H.make_indent_padding(0, 2, 4, "tab"), "  ")
+  eq(H.make_indent_padding(0, 0, 4, "tab"), "")
+  eq(H.make_indent_padding(2, 6, 4, "space"), "    ")
+  eq(H.make_indent_padding(4, 8, 4, "tab"), "\t")
+  eq(H.make_indent_padding(1, 4, 4, "tab"), "\t")
+end
+
 T["base"]["extract_comments_option"] = function()
   local p = function(str, flags) return { str = str, flags = flags } end
   local f = H.do_extract_comments
@@ -1753,7 +1768,7 @@ end
 T["edits"]["compute_line_edits_actions"] = function()
   local ACT = M.ACTION
   local csi = H.make_csi({ { "// ", "" } })
-  local cfg = {}
+  local cfg = { hooks = {} }
 
   -- kToggle: all uncommented → all comment
   local lines = { "hello", "world" }
@@ -5353,13 +5368,15 @@ end
 T["referenced_from_vscode"]["normalize_insertion_point"] = function()
   local orig_ts = vim.bo.tabstop
   local function run(mixed, tabstop, expected, cfg)
+    cfg = cfg or {}
+    cfg.hooks = {}
     vim.bo.tabstop = tabstop
     local lines = {}
     for i = 1, #mixed, 2 do
       lines[#lines + 1] = mixed[i]
     end
     local csi = H.make_csi({ { "# ", "" } })
-    local info = H.line_comment_info(lines, csi, cfg or {}, { 0 }, 1)
+    local info = H.line_comment_info(lines, csi, cfg, { 0 }, 1)
     local off = vim.tbl_map(function(li) return li.offset end, info.lines)
     eq(off, expected)
   end
@@ -7085,6 +7102,7 @@ T["jsx/tsx"]["works in markdown"] = function()
   set_lines(lines)
   child.bo.filetype = "markdown"
   child.bo.tabstop = 2
+  child.bo.shiftwidth = 2
   child.lua_func(function() vim.treesitter.start() end)
   set_cursor(1, 0)
   feed("gcc")
@@ -7292,6 +7310,120 @@ T["jsx/tsx"]["special case1"] = function()
     '      propF="propF"',
     "    >",
   })
+end
+
+-- detect_indent integration ──────────────────────────────────────────────────
+
+T["detect_indent"] = new_set()
+
+T["detect_indent"]["off: shiftwidth grid for space files"] = function()
+  child.bo.tabstop = 8
+  child.bo.shiftwidth = 8
+  child.bo.expandtab = true
+  child.bo.commentstring = "#%s"
+  child.b.celeste_comment_config = {}
+  set_lines({ "    code", "    code" })
+  set_cursor(1, 0)
+  feed("gcc")
+  -- floor(4 / 8) * 8 = 0
+  eq(get_lines(), { "#     code", "    code" })
+end
+
+T["detect_indent"]["off: shiftwidth=4 grid for space files"] = function()
+  child.bo.tabstop = 8
+  child.bo.shiftwidth = 4
+  child.bo.expandtab = true
+  child.bo.commentstring = "#%s"
+  child.b.celeste_comment_config = {}
+  set_lines({ "    code", "    code" })
+  set_cursor(1, 0)
+  feed("gcc")
+  -- floor(4 / 4) * 4 = 4
+  eq(get_lines(), { "    # code", "    code" })
+end
+
+T["detect_indent"]["on: guessed 4-space grid"] = function()
+  child.bo.tabstop = 8
+  child.bo.expandtab = true
+  child.bo.commentstring = "#%s"
+  child.b.celeste_comment_config = { detect_indent = true }
+  set_lines({ "    code", "    code" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "    # code", "    code" })
+end
+
+T["detect_indent"]["on: tab file blank-line padding uses tabs"] = function()
+  child.bo.tabstop = 4
+  child.bo.expandtab = false
+  child.bo.commentstring = "#%s"
+  child.b.celeste_comment_config = { detect_indent = true, ignore_empty_lines = "mixed" }
+  set_lines({ "\t\taa", "", "\t\tbb" })
+  set_cursor(1, 0)
+  feed("gc", "2j")
+  eq(get_lines(), { "\t\t# aa", "\t\t# ", "\t\t# bb" })
+  feed("gc", "2j")
+  eq(get_lines(), { "\t\taa", "\t\t", "\t\tbb" })
+end
+
+T["detect_indent"]["on: tab file toggle does not accumulate blank-line padding"] = function()
+  child.bo.tabstop = 4
+  child.bo.expandtab = false
+  child.bo.commentstring = "//%s"
+  child.b.celeste_comment_config = { detect_indent = true, ignore_empty_lines = "mixed" }
+  set_lines({ "\t\taa", "", "\t\tbb" })
+  set_cursor(1, 0)
+  feed("gc", "2j")
+  eq(get_lines(), { "\t\t// aa", "\t\t// ", "\t\t// bb" })
+  feed("gc", "2j")
+  eq(get_lines(), { "\t\taa", "\t\t", "\t\tbb" })
+  feed("gc", "2j")
+  eq(get_lines(), { "\t\t// aa", "\t\t// ", "\t\t// bb" })
+end
+
+T["detect_indent"]["on: tab file non-empty line comment placement"] = function()
+  child.bo.tabstop = 4
+  child.bo.expandtab = false
+  child.bo.commentstring = "//%s"
+  child.b.celeste_comment_config = { detect_indent = true }
+  set_lines({ "\t\tfoo", "\t\tbar" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "\t\t// foo", "\t\tbar" })
+  feed("gcc")
+  eq(get_lines(), { "\t\tfoo", "\t\tbar" })
+end
+
+T["detect_indent"]["on: user hook overrides detection"] = function()
+  child.bo.tabstop = 8
+  child.bo.expandtab = true
+  child.bo.commentstring = "//%s"
+  child.lua_func(function()
+    vim.b.celeste_comment_config = {
+      detect_indent = true,
+      hooks = {
+        indent_resolver = function(ctx) ctx.o_indent = { indent_size = 2, indent_style = "space" } end,
+      },
+    }
+  end)
+  set_lines({ "    foo", "    bar" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "    // foo", "    bar" })
+end
+
+T["detect_indent"]["on: blank line whitespace at and above aligned offset"] = function()
+  child.bo.tabstop = 4
+  child.bo.expandtab = false
+  child.bo.commentstring = "//%s"
+  child.b.celeste_comment_config = { detect_indent = true, ignore_empty_lines = "mixed" }
+  -- blank lines: 3tabs(exceeds), 2tabs(equals), 1tab+4spaces(equals), 2tabs+4spaces(exceeds)
+  set_lines({ "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" })
+  set_cursor(1, 0)
+  feed("gc", "5j")
+  eq(get_lines(), { "\t\t// foo", "\t\t// \t", "\t\t// ", "\t    // ", "\t\t//     ", "\t\t// bar" })
+  feed("gc", "5j")
+  eq(get_lines(), { "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" })
 end
 
 return T

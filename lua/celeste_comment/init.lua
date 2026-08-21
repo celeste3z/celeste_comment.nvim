@@ -105,20 +105,32 @@ M.ACTION = {
 ---@field pairs       Celeste.Comment.CommentStringInfo.Pairs[]
 
 ---@class Celeste.Comment.LineCommentInfo.Line
----@field row         integer real row in buffer
----@field lead_ws_len integer leading whitespace len
----@field offset      integer 0-indexed column where comment marker should be inserted
----@field ignore      boolean should thie line be ignored?
----@field csi         Celeste.Comment.CommentStringInfo comment string info
----@field lcs_pos     Celeste.Comment.Range3? position of lcs
----@field rcs_pos     Celeste.Comment.Range3? position of rcs
----@field commented?  boolean
----@field all_blank?  boolean blank line
----@field will_blank? boolean not blank, but will be blank after remove lcs and rcs, current only available with ignore_empty_lines = kMixed
+---@field row              integer real row in buffer
+---@field lead_ws_len      integer leading whitespace len
+---@field offset           integer 0-indexed byte position where comment marker should be inserted
+---@field ignore           boolean should thie line be ignored?
+---@field lcs_pos          Celeste.Comment.Range3? position of lcs
+---@field rcs_pos          Celeste.Comment.Range3? position of rcs
+---@field csi              Celeste.Comment.CommentStringInfo comment string info
+---@field indent           Celeste.Comment.IndentInfo resolved indent info (shared across lines)
+---@field visible_col      integer visible column count of leading whitespace
+---@field min_visible_col? integer aligned target visible column (for padding calculation)
+---@field commented?       boolean commented or not
+---@field all_blank?       boolean blank line
+---@field will_blank?      boolean not blank, but will be blank after remove lcs and rcs, current only available with ignore_empty_lines = kMixed
 
 ---@class Celeste.Comment.LineCommentInfo
 ---@field lines         Celeste.Comment.LineCommentInfo.Line[]
 ---@field should_remove boolean
+
+---@class Celeste.Comment.IndentInfo
+---@field indent_size  integer
+---@field indent_style "space"|"tab"
+
+---@class Celeste.Comment.Hooks.IndentResolver.Ctx
+---@field cfg       Celeste.Comment.Opts
+---@field buf       integer
+---@field o_indent? Celeste.Comment.IndentInfo
 
 ---@class Celeste.Comment.BlockCommentInfo
 ---@field lcs_pos Celeste.Comment.Range3
@@ -159,6 +171,7 @@ M.ACTION = {
 ---@field pre_commit_edits?  fun(ctx:Celeste.Comment.Hooks.PreCommitEdits.Ctx):boolean?
 ---@field post_commit_edits? fun(ctx:Celeste.Comment.Hooks.PostCommitEdits.Ctx):boolean?
 ---@field cms_conf_resolver? fun(ctx:Celeste.Comment.Hooks.CmsConfResolver.Ctx)
+---@field indent_resolver?   fun(ctx:Celeste.Comment.Hooks.IndentResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
 ---@field line_toggle?           string|string[] mode 'n', operator, default 'gc'
@@ -190,6 +203,7 @@ M.ACTION = {
 ---@field block_textobj_nlines?       integer default 200
 ---@field block_relaxed_detect?       boolean default false
 ---@field ignore_empty_lines?         Celeste.Comment.Opts.IgnoreEmptyLines default "never"
+---@field detect_indent?              boolean default false
 ---@field fallback_to_block?          Celeste.Comment.Opts.FallbackToBlock
 ---@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean
 ---@field mappings?                   Celeste.Comment.Opts.Mapping
@@ -214,6 +228,7 @@ H.config = {
   textobj_treesitter_detect = false,
   block_textobj_nlines      = 200,
   ignore_empty_lines        = M.IGN_EMT.kAlways,
+  detect_indent             = false,
   fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
   log_level                 = vim.log.levels.OFF,
   cms_confs                 = nil,
@@ -247,7 +262,8 @@ H.config = {
   hooks = {
     pre_commit_edits        = nil,
     post_commit_edits       = nil,
-    cms_conf_resolver       = nil
+    cms_conf_resolver       = nil,
+    indent_resolver         = nil
   }
 }
 
@@ -1069,6 +1085,7 @@ end
 
 H.ALLOWED_TAB_SIZE_GUESSES = { 2, 4, 6, 8, 3, 5, 7 }
 H.MAX_ALLOWED_TAB_SIZE_GUESS = 8
+H.GUESS_INDENTATION_MAX_LINES = 1000
 
 ---@class Celeste.Comment.GuessIndent.Res
 ---@field insert_spaces boolean
@@ -1082,10 +1099,10 @@ H.MAX_ALLOWED_TAB_SIZE_GUESS = 8
 ---@overload fun(buf: integer, default_tab_size: integer, default_insert_spaces: boolean): Celeste.Comment.GuessIndent.Res
 function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
   if type(lines) == "number" then
-    local n = math.min(vim.api.nvim_buf_line_count(lines), 1000)
+    local n = math.min(vim.api.nvim_buf_line_count(lines), H.GUESS_INDENTATION_MAX_LINES)
     lines = vim.api.nvim_buf_get_lines(lines, 0, n, false)
   end
-  local lcnt = math.min(#lines, 1000)
+  local lcnt = math.min(#lines, H.GUESS_INDENTATION_MAX_LINES)
 
   local indented_with_tab_lcnt = 0 -- number of lines that contain at least one tab in indentation
   local indented_with_spc_cnt = 0 -- number of lines that contain only spaces in indentation
@@ -1159,6 +1176,48 @@ function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
   return { insert_spaces = insert_spaces, tab_size = tab_size }
 end
 
+---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
+function H.detect_indent_resolver(ctx)
+  if not ctx.cfg.detect_indent then return end
+  local buf = ctx.buf
+  ctx.o_indent = vim.b[buf].celeste_comment_guessed_indent
+  if not ctx.o_indent then
+    local gs = H.guess_indentation(buf, vim.bo[buf].tabstop, vim.bo[buf].expandtab)
+    ctx.o_indent = { indent_style = gs.insert_spaces and "space" or "tab", indent_size = gs.tab_size }
+    vim.b[buf].celeste_comment_guessed_indent = ctx.o_indent
+  end
+end
+
+---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
+function H.default_indent_resolver(ctx)
+  local buf = ctx.buf
+  local ts = vim.bo[buf].tabstop
+  local sw = vim.bo[buf].shiftwidth > 0 and vim.bo[buf].shiftwidth or ts
+  ctx.o_indent = {
+    indent_size = vim.bo[buf].expandtab and sw or ts,
+    indent_style = vim.bo[buf].expandtab and "space" or "tab",
+  }
+end
+
+---@param cursor vim.Pos?
+---@param cfg    Celeste.Comment.Opts
+---@return Celeste.Comment.IndentInfo
+function H.compute_indent_chainably(cursor, cfg)
+  local buf = cursor and cursor.buf or vim.api.nvim_get_current_buf()
+  local chains = { cfg.hooks.indent_resolver or "", H.detect_indent_resolver, H.default_indent_resolver }
+  for _, resolver in ipairs(chains) do
+    if vim.is_callable(resolver) then
+      ---@type Celeste.Comment.Hooks.IndentResolver.Ctx
+      local ctx = { cfg = cfg, buf = buf }
+      resolver(ctx)
+      if type(ctx.o_indent) == "table" then return ctx.o_indent end
+    end
+  end
+
+  assert(false, "unreachable")
+  return {} -- unreachable
+end
+
 ---@param line            string
 ---@param limit           integer
 ---@param min_visible_col integer
@@ -1229,27 +1288,29 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
   range = range or { 0 }
   ---@type Celeste.Comment.LineCommentInfo
   local all_info = { lines = {}, should_remove = true }
-  local indent_size = vim.bo.tabstop
+  local indent = H.compute_indent_chainably(cursor, cfg)
+  local indent_size = indent.indent_size
   local only_whitespace_lines = true
   local min_visible_col = math.huge
-
-  ---@param line string
-  ---@param info_line Celeste.Comment.LineCommentInfo.Line
-  local function update_min_visible_col(line, info_line)
-    local cur_visible_col = 0
-    for j = 1, info_line.offset do
-      if cur_visible_col >= min_visible_col then break end
-      cur_visible_col = H.next_visible_column(cur_visible_col, line:byte(j), indent_size)
-    end
-    if cur_visible_col < min_visible_col then min_visible_col = cur_visible_col end
-  end
 
   for i, line in ipairs(lines) do
     local row = range[1] + i - 1
     ---@type Celeste.Comment.LineCommentInfo.Line
-    local info = { lead_ws_len = 0, offset = 0, ignore = false, csi = csi, row = row }
+    local info = {
+      lead_ws_len = 0,
+      visible_col = 0,
+      offset = 0,
+      ignore = false,
+      csi = csi,
+      row = row,
+      indent = indent,
+    }
     local ws = line:match("^(%s*)")
     local ws_len = #ws
+
+    for j = 1, ws_len do
+      info.visible_col = H.next_visible_column(info.visible_col, line:byte(j), indent_size)
+    end
 
     if ws_len == #line then
       info.ignore = cfg.ignore_empty_lines == M.IGN_EMT.kAlways
@@ -1275,7 +1336,9 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
     end
 
     if not info.ignore and not cfg.line_comment_no_indent then
-      if not info.all_blank or cfg.ignore_empty_lines ~= M.IGN_EMT.kMixed then update_min_visible_col(line, info) end
+      if not info.all_blank or cfg.ignore_empty_lines ~= M.IGN_EMT.kMixed then
+        min_visible_col = math.min(min_visible_col, info.visible_col)
+      end
     end
 
     all_info.lines[#all_info.lines + 1] = info
@@ -1291,10 +1354,10 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
       need_align_indent_for_blank = true
     end
 
-    for i, info in ipairs(all_info.lines) do
+    for _, info in ipairs(all_info.lines) do
       info.ignore = false
 
-      if need_align_indent_for_blank then update_min_visible_col(lines[i], info) end
+      if need_align_indent_for_blank then min_visible_col = math.min(min_visible_col, info.visible_col) end
     end
   end
 
@@ -1305,17 +1368,35 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
       for i, line in ipairs(lines) do
         local info = all_info.lines[i]
         if not info.ignore then
-          if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed then
-            info.offset = min_visible_col
-          else
-            info.offset = H.find_insert_offset(line, info.offset, min_visible_col, indent_size)
-          end
+          info.offset = H.find_insert_offset(line, info.offset, min_visible_col, indent_size)
+          info.min_visible_col = min_visible_col
         end
       end
     end
   end
 
   return all_info
+end
+
+---Referenced from https://github.com/neovim/neovim/blob/master/src/nvim/indent.c (`tabstop_fromto`)
+---@param from         integer
+---@param to           integer
+---@param indent_size  integer
+---@param indent_style "space"|"tab"
+---@return string
+function H.make_indent_padding(from, to, indent_size, indent_style)
+  if indent_style ~= "tab" then return string.rep(" ", to - from) end
+  local spaces = to - from
+  local tabs = 0
+  local initspc = indent_size - (from % indent_size)
+  if spaces >= initspc then
+    spaces = spaces - initspc
+    tabs = 1
+  end
+  local full = math.floor(spaces / indent_size)
+  tabs = tabs + full
+  spaces = spaces - full * indent_size
+  return string.rep("\t", tabs) .. string.rep(" ", spaces)
 end
 
 ---@param info  Celeste.Comment.LineCommentInfo.Line
@@ -1336,10 +1417,12 @@ function H.make_comment_edits(info, line, cfg, range, opts)
     return edits
   end
 
-  if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed and info.offset > info.lead_ws_len then
+  if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed and info.visible_col < info.min_visible_col then
+    local pad =
+      H.make_indent_padding(info.visible_col, info.min_visible_col, info.indent.indent_size, info.indent.indent_style)
     edits[#edits + 1] = {
       range = { row, info.lead_ws_len, row, info.lead_ws_len },
-      text = { string.rep(" ", info.offset - info.lead_ws_len) .. csi.olcs },
+      text = { pad .. csi.olcs },
     }
   else
     edits[#edits + 1] = { range = { row, info.offset, row, info.offset }, text = { csi.olcs } }
@@ -2379,6 +2462,7 @@ function M.setup(config)
       ("expected 'never'|'if_line_cms_wrapped' but got %s"):format(v)
   end, true, "string")
   vim.validate("case_insensitive", config.case_insensitive, "boolean", true, "boolean")
+  vim.validate("detect_indent", config.detect_indent, "boolean", true, "boolean")
   vim.validate("block_relaxed_detect", config.block_relaxed_detect, "boolean", true, "boolean")
   vim.validate("block_textobj_nlines", config.block_textobj_nlines, "number", true, "number")
   vim.validate("mappings", config.mappings, "table", true, "table")
@@ -2391,6 +2475,7 @@ function M.setup(config)
   vim.validate("pre_commit_edits", config.hooks.pre_commit_edits, "callable", true, "callable")
   vim.validate("post_commit_edits", config.hooks.post_commit_edits, "callable", true, "callable")
   vim.validate("cms_conf_resolver", config.hooks.cms_conf_resolver, "callable", true, "callable")
+  vim.validate("indent_resolver", config.hooks.indent_resolver, "callable", true, "callable")
 
   H.config = config
 

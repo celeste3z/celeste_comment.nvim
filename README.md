@@ -149,6 +149,11 @@ require("celeste_comment").setup({})
   -- Match comment markers case-insensitively (e.g. `@REM` vs `@rem` vs `@rEm`)
   case_insensitive       = false,
 
+  -- Detect indent size and indent style (tabs vs spaces) from buffer content.
+  -- Does not modify any buffer options. See `:help celeste_comment-config-detect_indent`
+  -- for more details.
+  detect_indent          = false,
+
   -- Trim whitespace before detecting block tokens.
   block_relaxed_detect   = true,
 
@@ -222,6 +227,8 @@ require("celeste_comment").setup({})
     post_commit_edits    = nil,
     -- Custom comment string resolver function
     cms_conf_resolver    = nil,
+    -- Custom indent resolver function
+    indent_resolver      = nil,
   },
 }
 ```

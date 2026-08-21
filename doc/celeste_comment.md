@@ -88,6 +88,7 @@ require("celeste_comment").setup()
   insert_space           = true,  -- Insert space between comment marker and text
   line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
   case_insensitive       = false, -- Match comment markers case-insensitively
+  detect_indent          = false, -- Detect indent size/style from buffer content
   block_relaxed_detect   = true,  -- Trim whitespace before detecting block tokens
   block_textobj_nlines   = 200,   -- Max lines to search for block comment pairs
   ignore_empty_lines     = "always", -- How to handle empty lines
@@ -118,6 +119,7 @@ require("celeste_comment").setup()
   hooks = {
     pre_commit_edits     = nil,
     cms_conf_resolver    = nil,
+    indent_resolver      = nil,
   },
 }
 ```
@@ -189,6 +191,39 @@ With `commentstring = "@REM %s"`:
 
 - `false` → `"@REM"` matches only
 - `true` → `"@REM"`, `"@rem"`, `"@rEm"` all match
+
+#### `detect_indent` {doc="celeste_comment-config-detect_indent"}
+
+Default: `false`.
+When `true`, the indent size and style used for comment placement are detected
+from the buffer content, instead of relying on the buffer's indent options.
+This lets mixed-indent or non-tabstop files align comments to the actual
+indentation. This option does not modify any buffer options; it only detects
+the indent size and whether tab indentation is used.
+
+When `false`, `indent_size` and `indent_style` are taken from the buffer's
+options (no buffer content is inspected):
+
+- `indent_style` is `"space"` when `expandtab` is on, `"tab"` when it is off
+  (blank-line padding matches the buffer's indentation style).
+- `indent_size` (the alignment grid unit) is:
+  - `shiftwidth` for space-indented files (`expandtab` on, the indent level
+    width); when `shiftwidth` is `0` it falls back to `tabstop`.
+  - `tabstop` for tab-indented files (`expandtab` off), since a tab renders
+    `tabstop` columns wide.
+
+With `tabstop = 8`, `shiftwidth = 4` and a 4-space indented line:
+- `false` → `indent_size = 4`, `indent_style = "space"` → comment at column 4
+  (`    # code`)
+- `true` → comment at column 4 (`    # code`)
+
+When `true`, tab-indented files use `tabstop` as the width and blank-line
+padding between indents is filled with tabs.
+- Buffer options set by editorconfig/modeline are honored implicitly (they
+  already write `tabstop`/`expandtab`/`shiftwidth`); no explicit parsing is
+  done.
+- The detected indent is cached in `b:celeste_comment_guessed_indent` and never
+  expires during the buffer's lifetime.
 
 #### `block_relaxed_detect` {doc="celeste_comment-config-block_relaxed_detect"}
 
@@ -346,6 +381,36 @@ vim.b.celeste_comment_config = {
   }
 }
 ```
+
+#### `indent_resolver` {doc="celeste_comment-hooks-indent_resolver"}
+
+Custom indent resolver. Called to resolve the indent size and style used for
+comment placement. Runs before the built-in content-based detection
+(`detect_indent`); set `ctx.o_indent` to take full control:
+
+```lua
+---@class Celeste.Comment.Hooks.IndentResolver.Ctx
+---@field cfg       Celeste.Comment.Opts
+---@field buf       integer
+---@field o_indent? Celeste.Comment.IndentInfo
+```
+
+Example:
+
+```lua
+vim.b.celeste_comment_config = {
+  hooks = {
+    ---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
+    indent_resolver = function(ctx)
+      ctx.o_indent = { indent_size = 2, indent_style = "space" }
+    end
+  }
+}
+```
+
+The built-in detection (`detect_indent`) only runs when `detect_indent` is
+enabled in the config; the default resolver always falls back to the buffer
+options (`tabstop`/`shiftwidth`/`expandtab`).
 
 ### Buffer-local configuration
 
