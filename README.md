@@ -5,12 +5,12 @@
 
 - [Features](#features)
 - [Comparison](#comparison)
-- [Showcase](#showcase)
 - [Requirements](#requirements)
 - [Installation](#installation)
   - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
   - [lazy.nvim](#lazynvim)
 - [Default Configuration](#default-configuration)
+- [Showcase](#showcase)
 - [What it doesn't do](#what-it-doesnt-do)
 - [Limitations](#limitations)
 - [Future work](#future-work)
@@ -52,48 +52,6 @@
 | **Block textobject**     | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Textobject auto**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Uncomment auto**       | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ✅                                                        |
-
-## Showcase
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/c4255b81-926a-4ab7-ac3e-d49b77e980a1" alt="Line/Block comment toggle, textobjects, gcu">
-<p><em>Line/Block comment toggle, textobjects, gcu</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/49812f9f-5f1b-44d7-b52a-e46fdccd322f" alt="Commenting in insert mode with keep cursor">
-<p><em>Commenting in insert mode with keep cursor</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/58a8e554-cf6b-40c0-aa1b-13110bbd1dba" alt="Context-aware comment string resolution via Tree-sitter">
-<p><em>Context-aware comment string resolution via Tree-sitter</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/42deb618-74c2-4589-9c7c-2f1b8441f487" alt="Keep selection when toggle comments in visual mode">
-<p><em>Keep selection when toggle comments in visual mode</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/8cf4583c-7dcc-4794-9c18-3df36d070991" alt="Force add/remove comment and dot-repeat">
-<p><em>Force add/remove comment and dot-repeat</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/557ef444-96ee-4352-9d60-759b97153e89" alt="Invert comment status per-line">
-<p><em>Invert comment status per-line</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813" alt="Cursor sticky and Dot-repeat">
-<p><em>Cursor sticky + Dot-repeat</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517" alt="With multicursor.nvim">
-<p><em>With <a href="https://github.com/jake-stewart/multicursor.nvim">multicursor.nvim</a></em></p>
-</div>
 
 ## Requirements
 
@@ -268,6 +226,48 @@ See `:help celeste_comment-configuration` for details.
 > For advanced comment string resolution, see `:help celeste_comment`.
 
 **If you like this plugin, give it a ⭐!**
+
+## Showcase
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/c4255b81-926a-4ab7-ac3e-d49b77e980a1" alt="Line/Block comment toggle, textobjects, gcu">
+<p><em>Line/Block comment toggle, textobjects, gcu</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/49812f9f-5f1b-44d7-b52a-e46fdccd322f" alt="Commenting in insert mode with keep cursor">
+<p><em>Commenting in insert mode with keep cursor</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/58a8e554-cf6b-40c0-aa1b-13110bbd1dba" alt="Context-aware comment string resolution via Tree-sitter">
+<p><em>Context-aware comment string resolution via Tree-sitter</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/42deb618-74c2-4589-9c7c-2f1b8441f487" alt="Keep selection when toggle comments in visual mode">
+<p><em>Keep selection when toggle comments in visual mode</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/8cf4583c-7dcc-4794-9c18-3df36d070991" alt="Force add/remove comment and dot-repeat">
+<p><em>Force add/remove comment and dot-repeat</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/557ef444-96ee-4352-9d60-759b97153e89" alt="Invert comment status per-line">
+<p><em>Invert comment status per-line</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813" alt="Cursor sticky and Dot-repeat">
+<p><em>Cursor sticky + Dot-repeat</em></p>
+</div>
+
+<div align="center">
+<img src="https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517" alt="With multicursor.nvim">
+<p><em>With <a href="https://github.com/jake-stewart/multicursor.nvim">multicursor.nvim</a></em></p>
+</div>
 
 ## What it doesn't do
 
