@@ -1,6 +1,15 @@
 <h1 align="center">celeste_comment.nvim</h1>
 <p align="center"><b>Batteries-included</b> commenting plugin — line/block comment, textobjects, real sticky cursor, and more!</p>
 
+<div align="center">
+
+[![Version](https://img.shields.io/github/v/release/celeste3z/celeste_comment.nvim?style=for-the-badge&label=version)](https://github.com/celeste3z/celeste_comment.nvim/releases)
+[![License](https://img.shields.io/github/license/celeste3z/celeste_comment.nvim?style=for-the-badge)](LICENSE)
+[![Neovim](https://img.shields.io/badge/Neovim-%3E%3D0.12.0-green?style=for-the-badge)](https://neovim.io)
+[![Maintained](https://img.shields.io/badge/maintenance-actively--developed-brightgreen?style=for-the-badge)](https://github.com/celeste3z/celeste_comment.nvim)
+
+</div>
+
 <!--toc:start-->
 
 - [Features](#features)
