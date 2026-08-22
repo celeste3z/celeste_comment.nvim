@@ -1,0 +1,22 @@
+name: Nix
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - run: nix build .
+
+      - name: Smoke test
+        run: |
+          nix shell nixpkgs#neovim --command nvim --headless \
+            --cmd "set rtp+=." \
+            -c "lua require('celeste_comment').setup({})" \
+            -c "qa!"
