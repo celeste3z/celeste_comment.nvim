@@ -54,14 +54,17 @@ M.KEEP_SEL_FLAG = {
   kAccurate = 1,
   --- Extend the selection to cover the just-added block comment markers.
   kExpandBlock = 2,
+  --- Force line comments to use V mode for restore.
+  kExpandLine = 4,
   --- Only update marks without staying in visual mode; use `gv` to restore.
-  kOnlyChangeMarks = 4,
+  kOnlyChangeMarks = 8,
 }
 
 H.KEEP_SEL_MAP = {
   never = 0,
   accurate = M.KEEP_SEL_FLAG.kAccurate,
   expand_block = M.KEEP_SEL_FLAG.kExpandBlock,
+  expand_line = M.KEEP_SEL_FLAG.kExpandLine,
   only_change_marks = M.KEEP_SEL_FLAG.kOnlyChangeMarks,
 }
 
@@ -219,18 +222,18 @@ M.ACTION = {
 ---@field log_level                  vim.log.levels
 
 ---@class Celeste.Comment.PartialOpts
----@field keep_cursor?                boolean
----@field keep_selection?             string|number
----@field insert_space?               boolean
----@field line_comment_no_indent?     boolean
----@field case_insensitive?           boolean
----@field textobj_treesitter_detect?  boolean
----@field block_textobj_nlines?       integer
----@field block_relaxed_detect?       boolean
----@field ignore_empty_lines?         string
----@field detect_indent?              boolean
----@field fallback_to_block?          string
----@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean
+---@field keep_cursor?                boolean default true
+---@field keep_selection?             string|number default 'never'
+---@field insert_space?               boolean default true
+---@field line_comment_no_indent?     boolean default false
+---@field case_insensitive?           boolean default false
+---@field textobj_treesitter_detect?  boolean default false
+---@field block_textobj_nlines?       integer default 200
+---@field block_relaxed_detect?       boolean default true
+---@field ignore_empty_lines?         Celeste.Comment.Opts.IgnoreEmptyLines default 'always'
+---@field detect_indent?              boolean default false
+---@field fallback_to_block?          Celeste.Comment.Opts.FallbackToBlock default 'if_line_cms_wrapped'
+---@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean default nil
 ---@field mappings?                   Celeste.Comment.Opts.Mapping
 ---@field hooks?                      Celeste.Comment.Hooks
 ---@field log_level?                  vim.log.levels
@@ -565,8 +568,8 @@ function H.coerce_flags(v, map, name)
     return 0, ("expected string|number for '%s' but got %s"):format(name, type(v))
   end
 
-  local valid_mask = vim.iter(map):fold(0, function(acc, _, f) return bit.bor(acc, f) end)
-  flags = bit.band(flags, valid_mask)
+  local mask = vim.iter(map):fold(0, function(acc, _, f) return bit.bor(acc, f) end)
+  flags = bit.band(flags, mask)
 
   return flags, nil
 end
@@ -1902,20 +1905,22 @@ function H.restore_state(ctx)
   local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
-  if cfg.keep_selection == M.KEEP_SEL_FLAG.kNone then
-    if cfg.keep_cursor and state.adj_cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.adj_cursor)) end
-    return
-  end
+  if cfg.keep_selection ~= M.KEEP_SEL_FLAG.kNone then
+    local only_change_marks = (bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kOnlyChangeMarks) ~= 0)
 
-  if state.mode == "\22" then
-    vim.cmd.normal({ "gv", bang = true })
-  elseif state.mode == "V" or state.mode == "v" then
-    local exit = bit.band(cfg.keep_selection --[[@as integer]], M.KEEP_SEL_FLAG.kOnlyChangeMarks) ~= 0
-    H.select_range(
-      { state.adj_end_pos[1], state.adj_end_pos[2], state.adj_cursor[1], state.adj_cursor[2] },
-      { mode = state.mode, exit = exit }
-    )
-    return
+    if state.mode == "\22" then
+      -- not handle C-v mode, use multiple cursor is the right way
+      if not only_change_marks then vim.cmd.normal({ "gv", bang = true }) end
+    elseif state.mode == "V" or state.mode == "v" then
+      local mode = state.mode
+      if ctx.ctype == M.CMT.kLine and bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kExpandLine) ~= 0 then mode = "V" end
+
+      H.select_range(
+        { state.adj_end_pos[1], state.adj_end_pos[2], state.adj_cursor[1], state.adj_cursor[2] },
+        { mode = mode, exit = only_change_marks }
+      )
+      return
+    end
   end
 
   if cfg.keep_cursor and state.adj_cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.adj_cursor)) end

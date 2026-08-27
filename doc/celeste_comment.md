@@ -84,7 +84,7 @@ require("celeste_comment").setup()
 ```lua
 {
   keep_cursor            = true,  -- Restore cursor position after commenting
-  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"only_change_marks"
+  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"only_change_marks"|"expand_line"
   insert_space           = true,  -- Insert space between comment marker and text
   line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
   case_insensitive       = false, -- Match comment markers case-insensitively
@@ -148,6 +148,7 @@ through each edit operation.
 - `"accurate"` — restore the selection to its computed position.
 - `"expand_block"` — restore the selection and additionally extend it to cover
   the just-added block comment markers.
+- `"expand_line"` — force line comments to use V mode for restore.
 - `"only_change_marks"` — only update the marks without staying in visual
   mode; use `gv` to restore the selection.
 
@@ -158,21 +159,21 @@ Can also combine with `|`:
 | `"never"` | Do not restore selection |
 | `"accurate"` | Restore selection with precise per-edit tracking |
 | `"expand_block"` | Extend selection to include block comment markers |
+| `"expand_line"` | Force line comments to use V mode for restore |
 | `"only_change_marks"` | Exit visual mode after commenting; `gv` restores selection |
-| `"accurate \| only_change_marks"` | Precise tracking + exit visual mode |
-| `"expand_block \| only_change_marks"` | Extend to block markers + exit visual mode |
+| `"expand_block \| only_changeMarks"` | Extend to block markers + exit visual mode |
+| `"expand_line \| only_changeMarks"` | Force V for line comments + exit visual mode |
+| `"expand_block \| expand_line"` | Extend to block markers + force V for line comments |
+| `"expand_block \| expand_line \| only_changeMarks"` | All three combined |
+| `"accurate \| only_changeMarks"` | Precise tracking + exit visual mode |
 
 ```lua
-require("celeste_comment").setup({ keep_selection = "expand_block | only_change_marks" })
+require("celeste_comment").setup({ keep_selection = "expand_line | only_change_marks" })
 ```
 
-Selecting `hello world` and pressing `gb` now keeps the whole
-`/* hello world */` (markers included) selected. Toggling back (uncommenting)
-restores the content-only selection, since there are no markers to expand.
-
-With `"only_change_marks"`, the visual mode exits after commenting, and `gv`
-restores the selection. This is useful for quickly commenting code and then
-moving on without manually exiting visual mode.
+Selecting `hello world` and pressing `gc` now restores the selection in V mode
+(linewise) instead of v mode (charwise). With `"only_change_marks"`, the visual
+mode exits after commenting, and `gv` restores the selection.
 
 `"expand_block"` applies to charwise block comments only (e.g. `gb`). It does
 not expand when `gc` falls back to block on a wrapping line comment string,

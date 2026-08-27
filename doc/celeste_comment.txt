@@ -1,5 +1,5 @@
 *celeste_comment.txt*                 MIT License Copyright (c) 2026 celeste3z
-                               For NVIM v0.12.0    Last change: 2026 August 21
+                               For NVIM v0.12.0    Last change: 2026 August 27
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
@@ -95,9 +95,9 @@ INSTALLATION                                    *celeste_comment-installation*
 
 
   [!IMPORTANT]
-  - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-  - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-  - `Pinning to a specific version or commit is recommended.`
+- Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
+- PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
+- `Pinning to a specific version or commit is recommended.`
 
 VIM.PACK (NEOVIM 0.12+) ~
 
@@ -128,7 +128,7 @@ DEFAULT CONFIG ~
 >lua
     {
       keep_cursor            = true,  -- Restore cursor position after commenting
-      keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"
+      keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"only_change_marks"|"expand_line"
       insert_space           = true,  -- Insert space between comment marker and text
       line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
       case_insensitive       = false, -- Match comment markers case-insensitively
@@ -192,15 +192,50 @@ and adjusts them through each edit operation.
 - `"never"` — do not restore the selection.
 - `"accurate"` — restore the selection to its computed position.
 - `"expand_block"` — restore the selection and additionally extend it to cover
-    the just-added block comment markers:
+    the just-added block comment markers.
+- `"expand_line"` — force line comments to use V mode for restore.
+- `"only_change_marks"` — only update the marks without staying in visual
+    mode; use `gv` to restore the selection.
 
+Can also combine with `|`:
+
+  ---------------------------------------------------------------------------------------------
+  Value                                               Behavior
+  --------------------------------------------------- -----------------------------------------
+  "never"                                             Do not restore selection
+
+  "accurate"                                          Restore selection with precise per-edit
+                                                      tracking
+
+  "expand_block"                                      Extend selection to include block comment
+                                                      markers
+
+  "expand_line"                                       Force line comments to use V mode for
+                                                      restore
+
+  "only_change_marks"                                 Exit visual mode after commenting; gv
+                                                      restores selection
+
+  "expand_block \| only_changeMarks"                  Extend to block markers + exit visual
+                                                      mode
+
+  "expand_line \| only_changeMarks"                   Force V for line comments + exit visual
+                                                      mode
+
+  "expand_block \| expand_line"                       Extend to block markers + force V for
+                                                      line comments
+
+  "expand_block \| expand_line \| only_changeMarks"   All three combined
+
+  "accurate \| only_changeMarks"                      Precise tracking + exit visual mode
+  ---------------------------------------------------------------------------------------------
 >lua
-    require("celeste_comment").setup({ keep_selection = "expand_block" })
+    require("celeste_comment").setup({ keep_selection = "expand_line | only_change_marks" })
 <
 
-Selecting `hello world` and pressing `gb` now keeps the whole `/* hello world
-*/` (markers included) selected. Toggling back (uncommenting) restores the
-content-only selection, since there are no markers to expand.
+Selecting `hello world` and pressing `gc` now restores the selection in V mode
+(linewise) instead of v mode (charwise). With `"only_change_marks"`, the visual
+mode exits after commenting, and `gv` restores the selection.
 
 `"expand_block"` applies to charwise block comments only (e.g. `gb`). It does
 not expand when `gc` falls back to block on a wrapping line comment string, nor
@@ -310,7 +345,7 @@ With `commentstring = "# %s"` and line `" "` (2 spaces, no content):
 
 
   [!NOTE] `"mixed"` has no VSCode equivalent — it’s unique to
-  celeste_comment.
+celeste_comment.
 
 fallback_to_block                   *celeste_comment-config-fallback_to_block*
 
@@ -567,7 +602,8 @@ The tracked state is exposed to hooks as `ctx.state_track`:
 
 `cursor`/`end_pos` are the raw pre-edit positions; `adj_cursor`/`adj_end_pos`
 are the same positions shifted by the applied edits (and, with `keep_selection
-= "expand_block"`, extended to the block comment markers).
+= "expand_block"` or `"expand_block | only_change_marks"`, extended to the
+block comment markers).
 
 
 ACTION ENUM ~

@@ -104,9 +104,9 @@ require("celeste_comment").setup({})
   keep_cursor            = true,
 
   -- Restore selection after commenting.
-  -- Possible values: "never" | "accurate" | "expand_block" | "only_change_marks"
-  -- Can also combine, e.g. "expand_block | only_change_marks" which means: extend
-  -- selection to block markers + exit visual mode, you can use `gv` to restore
+  -- Possible values: "never" | "accurate" | "expand_block" | "expand_line" | "only_change_marks"
+  -- Can also combine, e.g. "expand_line | only_change_marks" which means: force line comments to
+  -- `V` mode and then exit visual mode, you can type `gv` to restore the selection
   -- See `:help celeste_comment-config-keep_selection` for more details
   keep_selection         = "never",
 
