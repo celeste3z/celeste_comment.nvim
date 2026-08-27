@@ -84,7 +84,7 @@ require("celeste_comment").setup()
 ```lua
 {
   keep_cursor            = true,  -- Restore cursor position after commenting
-  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"
+  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"only_change_marks"
   insert_space           = true,  -- Insert space between comment marker and text
   line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
   case_insensitive       = false, -- Match comment markers case-insensitively
@@ -147,15 +147,32 @@ through each edit operation.
 - `"never"` — do not restore the selection.
 - `"accurate"` — restore the selection to its computed position.
 - `"expand_block"` — restore the selection and additionally extend it to cover
-  the just-added block comment markers:
+  the just-added block comment markers.
+- `"only_change_marks"` — only update the marks without staying in visual
+  mode; use `gv` to restore the selection.
+
+Can also combine with `|`:
+
+| Value | Behavior |
+|-------|----------|
+| `"never"` | Do not restore selection |
+| `"accurate"` | Restore selection with precise per-edit tracking |
+| `"expand_block"` | Extend selection to include block comment markers |
+| `"only_change_marks"` | Exit visual mode after commenting; `gv` restores selection |
+| `"accurate \| only_change_marks"` | Precise tracking + exit visual mode |
+| `"expand_block \| only_change_marks"` | Extend to block markers + exit visual mode |
 
 ```lua
-require("celeste_comment").setup({ keep_selection = "expand_block" })
+require("celeste_comment").setup({ keep_selection = "expand_block | only_change_marks" })
 ```
 
 Selecting `hello world` and pressing `gb` now keeps the whole
 `/* hello world */` (markers included) selected. Toggling back (uncommenting)
 restores the content-only selection, since there are no markers to expand.
+
+With `"only_change_marks"`, the visual mode exits after commenting, and `gv`
+restores the selection. This is useful for quickly commenting code and then
+moving on without manually exiting visual mode.
 
 `"expand_block"` applies to charwise block comments only (e.g. `gb`). It does
 not expand when `gc` falls back to block on a wrapping line comment string,
@@ -487,7 +504,8 @@ The tracked state is exposed to hooks as `ctx.state_track`:
 
 `cursor`/`end_pos` are the raw pre-edit positions; `adj_cursor`/`adj_end_pos`
 are the same positions shifted by the applied edits (and, with
-`keep_selection = "expand_block"`, extended to the block comment markers).
+`keep_selection = "expand_block"` or `"expand_block | only_change_marks"`,
+extended to the block comment markers).
 
 ### Action enum
 

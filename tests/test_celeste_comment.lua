@@ -4425,6 +4425,53 @@ T["keep_selection"]["backward V selection restores cursor at the top with select
   eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
 end
 
+T["keep_selection"]["only_change_marks exits visual mode"] = function()
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "only_change_marks" } end)
+
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 13)
+  feed("gc")
+  eq(get_lines(), { "  // hello world", "  second" })
+  eq(child.fn.mode(), "n")
+  feed("gv")
+  eq(get_selection(), { { 0, 5, 0, 16 }, "v" })
+  feed("<Esc>")
+
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 13)
+  feed("gb")
+  eq(get_lines(), { "  /* hello world */", "  second" })
+  eq(child.fn.mode(), "n")
+  feed("gv")
+  eq(get_selection(), { { 0, 5, 0, 16 }, "v" })
+  feed("<Esc>")
+
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 2, 0, "V")
+  feed("gc")
+  eq(get_lines(), { "  // hello world", "  // second" })
+  eq(child.fn.mode(), "n")
+  feed("gv")
+  eq(get_selection(), { { 0, 5, 1, 0 }, "V" })
+  feed("<Esc>")
+end
+
+T["keep_selection"]["expand_block | only_change_marks exits visual mode"] = function()
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | only_change_marks" } end)
+
+  child.o.selection = "inclusive"
+  set_lines({ "  hello world", "  second" })
+  selection(1, 2, 1, 13)
+  feed("gb")
+  eq(get_lines(), { "  /* hello world */", "  second" })
+  eq(child.fn.mode(), "n")
+
+  feed("gv")
+  eq(get_selection(), { { 0, 2, 0, 18 }, "v" })
+  feed('"zy')
+  eq(child.fn.getreg("z"), "/* hello world */")
+end
+
 -- PreCommitEdits tests ───────────────────────────────────────────────────────
 
 T["pre_commit_edits"] = new_set()

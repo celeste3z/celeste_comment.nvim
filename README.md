@@ -98,13 +98,16 @@ require("celeste_comment").setup({})
 ## Default Configuration
 
 ```lua
+---@type Celeste.Comment.PartialOpts
 {
   -- Restore cursor position after commenting.
   keep_cursor            = true,
 
   -- Restore selection after commenting.
-  -- See `:help celeste_comment-config-keep_selection`
-  -- Possible values: "never" | "accurate" | "expand_block"
+  -- Possible values: "never" | "accurate" | "expand_block" | "only_change_marks"
+  -- Can also combine, e.g. "expand_block | only_change_marks" which means: extend
+  -- selection to block markers + exit visual mode, you can use `gv` to restore
+  -- See `:help celeste_comment-config-keep_selection` for more details
   keep_selection         = "never",
 
   -- Insert space between comment marker and text.

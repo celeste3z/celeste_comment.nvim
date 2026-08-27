@@ -46,15 +46,23 @@ M.FBK2BLOCK = {
   kIfLineCmsWrapped = "if_line_cms_wrapped",
 }
 
----@enum Celeste.Comment.KeepSel
-M.KEEP_SEL = {
+---@enum Celeste.Comment.KeepSelFlag
+M.KEEP_SEL_FLAG = {
   --- Do not restore the visual selection.
-  kNever = "never",
+  kNone = 0,
   --- Restore the selection with precise per-edit tracking.
-  kAccurate = "accurate",
-  --- Restore the selection and additionally extend it to cover the just-added
-  --- block comment markers (e.g. select `/* hello */` instead of `hello`).
-  kExpandBlock = "expand_block",
+  kAccurate = 1,
+  --- Extend the selection to cover the just-added block comment markers.
+  kExpandBlock = 2,
+  --- Only update marks without staying in visual mode; use `gv` to restore.
+  kOnlyChangeMarks = 4,
+}
+
+H.KEEP_SEL_MAP = {
+  never = 0,
+  accurate = M.KEEP_SEL_FLAG.kAccurate,
+  expand_block = M.KEEP_SEL_FLAG.kExpandBlock,
+  only_change_marks = M.KEEP_SEL_FLAG.kOnlyChangeMarks,
 }
 
 ---@enum Celeste.Comment.Action
@@ -194,21 +202,38 @@ M.ACTION = {
 ---@field dot_repeat?            string|string[] mode 'n', default '.'
 
 ---@class Celeste.Comment.Opts
----@field keep_cursor?                boolean default true
----@field keep_selection?             Celeste.Comment.KeepSel default "never"
----@field insert_space?               boolean default true
----@field line_comment_no_indent?     boolean default false
----@field case_insensitive?           boolean default false
----@field textobj_treesitter_detect?  boolean default true
----@field block_textobj_nlines?       integer default 200
----@field block_relaxed_detect?       boolean default false
----@field ignore_empty_lines?         Celeste.Comment.Opts.IgnoreEmptyLines default "never"
----@field detect_indent?              boolean default false
----@field fallback_to_block?          Celeste.Comment.Opts.FallbackToBlock
+---@field keep_cursor                boolean
+---@field keep_selection             integer
+---@field insert_space               boolean
+---@field line_comment_no_indent     boolean
+---@field case_insensitive           boolean
+---@field textobj_treesitter_detect  boolean
+---@field block_textobj_nlines       integer
+---@field block_relaxed_detect       boolean
+---@field ignore_empty_lines         Celeste.Comment.Opts.IgnoreEmptyLines
+---@field detect_indent              boolean
+---@field fallback_to_block          Celeste.Comment.Opts.FallbackToBlock
+---@field cms_confs?                 Celeste.Comment.CommentStringConfs|boolean
+---@field mappings                   Celeste.Comment.Opts.Mapping
+---@field hooks                      Celeste.Comment.Hooks
+---@field log_level                  vim.log.levels
+
+---@class Celeste.Comment.PartialOpts
+---@field keep_cursor?                boolean
+---@field keep_selection?             string|number
+---@field insert_space?               boolean
+---@field line_comment_no_indent?     boolean
+---@field case_insensitive?           boolean
+---@field textobj_treesitter_detect?  boolean
+---@field block_textobj_nlines?       integer
+---@field block_relaxed_detect?       boolean
+---@field ignore_empty_lines?         string
+---@field detect_indent?              boolean
+---@field fallback_to_block?          string
 ---@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean
 ---@field mappings?                   Celeste.Comment.Opts.Mapping
 ---@field hooks?                      Celeste.Comment.Hooks
----@field log_level?                  vim.log.levels default `vim.log.levels.OFF`
+---@field log_level?                  vim.log.levels
 
 ---@class Celeste.Comment.ExecutionOpts
 ---@field [string] any
@@ -220,7 +245,7 @@ H.state_track = nil
 ---@type Celeste.Comment.Opts
 H.config = {
   keep_cursor               = true,
-  keep_selection            = M.KEEP_SEL.kNever,
+  keep_selection            = M.KEEP_SEL_FLAG.kNone,
   insert_space              = true,
   line_comment_no_indent    = false,
   case_insensitive          = false,
@@ -366,14 +391,15 @@ function H.log(level, ...)
 end
 ---@diagnostic enable
 
----@param cfg? Celeste.Comment.Opts
+---@param cfg? Celeste.Comment.PartialOpts
 ---@return Celeste.Comment.Opts
 function H.buf_config(cfg)
   local bcfg = vim.b.celeste_comment_config
   local tb_bcfg = type(bcfg) == "table"
   local tb_cfg = type(cfg) == "table"
   if not tb_bcfg and not tb_cfg then return H.config end
-  return vim.tbl_deep_extend("force", H.config, tb_bcfg and bcfg or {}, tb_cfg and cfg or {})
+  local result = vim.tbl_deep_extend("force", H.config, tb_bcfg and bcfg or {}, tb_cfg and cfg or {})
+  return H.normalize_config(result)
 end
 
 ---NOTE:
@@ -543,6 +569,13 @@ function H.coerce_flags(v, map, name)
   flags = bit.band(flags, valid_mask)
 
   return flags, nil
+end
+
+---@param cfg Celeste.Comment.Opts
+---@return Celeste.Comment.Opts
+function H.normalize_config(cfg)
+  cfg.keep_selection = H.coerce_flags(cfg.keep_selection, H.KEEP_SEL_MAP, "keep_selection")
+  return cfg
 end
 
 ---@param cms_conf Celeste.Comment.CommentStringConf
@@ -1840,7 +1873,7 @@ end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
 function H.post_commit_expand_block(ctx)
-  if ctx.cfg.keep_selection ~= M.KEEP_SEL.kExpandBlock then return end
+  if bit.band(ctx.cfg.keep_selection, M.KEEP_SEL_FLAG.kExpandBlock) == 0 then return end
   local st = ctx.state_track
   if not st or st.mode ~= "v" or ctx.ctype ~= M.CMT.kBlock or ctx.motion ~= "char" then return end
 
@@ -1869,17 +1902,20 @@ function H.restore_state(ctx)
   local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
-  if cfg.keep_selection ~= M.KEEP_SEL.kNever and state.mode then
-    if state.mode == "\22" then
-      -- not handle `C-V` mode, use multiple cursor is the right way
-      vim.cmd.normal({ "gv", bang = true })
-    elseif state.mode == "V" or state.mode == "v" then
-      H.select_range(
-        { state.adj_end_pos[1], state.adj_end_pos[2], state.adj_cursor[1], state.adj_cursor[2] },
-        { mode = state.mode }
-      )
-      return
-    end
+  if cfg.keep_selection == M.KEEP_SEL_FLAG.kNone then
+    if cfg.keep_cursor and state.adj_cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.adj_cursor)) end
+    return
+  end
+
+  if state.mode == "\22" then
+    vim.cmd.normal({ "gv", bang = true })
+  elseif state.mode == "V" or state.mode == "v" then
+    local exit = bit.band(cfg.keep_selection --[[@as integer]], M.KEEP_SEL_FLAG.kOnlyChangeMarks) ~= 0
+    H.select_range(
+      { state.adj_end_pos[1], state.adj_end_pos[2], state.adj_cursor[1], state.adj_cursor[2] },
+      { mode = state.mode, exit = exit }
+    )
+    return
   end
 
   if cfg.keep_cursor and state.adj_cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.adj_cursor)) end
@@ -1945,7 +1981,7 @@ end
 function H.compute_cursor_state(ctx)
   local state = ctx.state_track
   if not state then return end
-  if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL.kNever then return end
+  if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL_FLAG.kNone then return end
   state.adj_cursor = H.compute_cursor_pos(state.adj_cursor, ctx)
   state.adj_end_pos = H.compute_cursor_pos(state.adj_end_pos, ctx)
 end
@@ -2254,7 +2290,7 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range)
 end
 
 ---@param range? Celeste.Comment.Range4
----@param opts? { mode?: 'V'|'v', end_inclusive?: boolean }
+---@param opts? { mode?: 'V'|'v', end_inclusive?: boolean, exit?: boolean }
 function H.select_range(range, opts)
   if not range then return end
   opts = opts or {}
@@ -2274,6 +2310,8 @@ function H.select_range(range, opts)
   vim.cmd.normal({ "zv", bang = true })
 
   vim.fn.winrestview({ leftcol = sv.leftcol, topline = sv.topline })
+
+  if opts.exit then vim.cmd.normal({ "\27", bang = true }) end
 end
 
 ---@param cfg Celeste.Comment.Opts
@@ -2466,15 +2504,15 @@ function H.make_operator(ctype, opts)
   end
 end
 
----@param config? Celeste.Comment.Opts
+---@param config? Celeste.Comment.PartialOpts
 function M.setup(config)
+  ---@diagnostic disable-next-line: cast-local-type
   config = vim.tbl_deep_extend("force", vim.deepcopy(H.config), config or {})
   vim.validate("keep_cursor", config.keep_cursor, "boolean", true, "boolean")
   vim.validate("keep_selection", config.keep_selection, function(v)
-    if type(v) ~= "string" then return false, ("expected string but got type:%s"):format(type(v)) end
-    return vim.iter({ "never", "accurate", "expand_block" }):any(function(z) return z == v end),
-      ("expected 'never'|'accurate'|'expand_block' but got %s"):format(vim.inspect(v))
-  end, true, "string")
+    local _, err = H.coerce_flags(v, H.KEEP_SEL_MAP, "keep_selection")
+    return err == nil, err
+  end, true, "string|number")
   vim.validate("insert_space", config.insert_space, "boolean", true, "boolean")
   vim.validate("line_comment_no_indent", config.line_comment_no_indent, "boolean", true, "boolean")
   vim.validate("ignore_empty_lines", config.ignore_empty_lines, function(v)
@@ -2503,7 +2541,7 @@ function M.setup(config)
   vim.validate("cms_conf_resolver", config.hooks.cms_conf_resolver, "callable", true, "callable")
   vim.validate("indent_resolver", config.hooks.indent_resolver, "callable", true, "callable")
 
-  H.config = config
+  H.config = H.normalize_config(config)
 
   local m = H.config.mappings --[[@as Celeste.Comment.Opts.Mapping]]
 
@@ -2569,6 +2607,7 @@ function M.setup(config)
     { desc = "Auto line/block textobject" }
   )
 
+  -- TODO: eliminate this keymap by `CmdAtom`?
   map("n", m.dot_repeat, function()
     H.state_track = H.make_state_track()
     return "."
