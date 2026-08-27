@@ -1,6 +1,6 @@
 ## Introduction
 
-celeste_comment.nvim — a **batteries-included** commenting plugin for Neovim with
+celeste_comment.nvim — a batteries-included commenting plugin for Neovim with
 line/block comment toggle, textobjects, force add/remove, real cursor tracking,
 Tree-sitter context-aware comment resolution, and more.
 
@@ -12,18 +12,18 @@ edits and full dot-repeat support.
 
 ## Features
 
-- **Line/block comment toggle** -- fully dot-repeatable with count support
-- **Truly accurate keep cursor** -- precise row/column tracking across `TextEdits`, adjusted per edit
-- **Truly accurate keep selection** -- selection range tracks each `TextEdit` precisely when toggling comments in visual mode
-- **VSCode-style indent algorithm** -- handles mixed tabs and spaces
-- **Invert/Force add/Force remove** -- per-line comment action control
-- **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
-- **Insert mode line comment toggle** -- with cursor sticky support
-- **Insert comment above / below / at end of line**
-- **Case insensitive comment detection** -- e.g. `@REM` vs `@rem` vs `@rEm`
-- **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
-- **Multi-variant comment string detection** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
-- **`TextEdits` edit-model** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
+- Line/block comment toggle -- fully dot-repeatable with count support
+- Truly accurate keep cursor -- precise row/column tracking across `TextEdits`, adjusted per edit
+- Truly accurate keep selection -- selection range tracks each `TextEdit` precisely when toggling comments in visual mode
+- VSCode-style indent algorithm -- handles mixed tabs and spaces
+- Invert/Force add/Force remove -- per-line comment action control
+- Textobjects -- line, block, and auto textobjects, works without Tree-sitter
+- Insert mode line comment toggle -- with cursor sticky support
+- Insert comment above / below / at end of line
+- Case insensitive comment detection -- e.g. `@REM` vs `@rem` vs `@rEm`
+- Context-aware comment string resolution via Tree-sitter -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
+- Multi-variant comment string detection — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
+- `TextEdits` edit-model -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
 
 ## Comparison
 
@@ -84,7 +84,7 @@ require("celeste_comment").setup()
 ```lua
 {
   keep_cursor            = true,  -- Restore cursor position after commenting
-  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"only_change_marks"|"expand_line"
+  keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"expand_line"|"only_change_marks"
   insert_space           = true,  -- Insert space between comment marker and text
   line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
   case_insensitive       = false, -- Match comment markers case-insensitively
@@ -148,37 +148,32 @@ through each edit operation.
 - `"accurate"` — restore the selection to its computed position.
 - `"expand_block"` — restore the selection and additionally extend it to cover
   the just-added block comment markers.
-- `"expand_line"` — force line comments to use V mode for restore.
+- `"expand_line"` — force line comments to use V mode.
 - `"only_change_marks"` — only update the marks without staying in visual
   mode; use `gv` to restore the selection.
 
-Can also combine with `|`:
+Can also combine with `|`, e.g. `"expand_block | only_change_marks"`:
 
-| Value | Behavior |
-|-------|----------|
-| `"never"` | Do not restore selection |
-| `"accurate"` | Restore selection with precise per-edit tracking |
-| `"expand_block"` | Extend selection to include block comment markers |
-| `"expand_line"` | Force line comments to use V mode for restore |
+| Value                 | Behavior                                                   |
+| --------------------- | ---------------------------------------------------------- |
+| `"never"`             | Do not restore selection                                   |
+| `"accurate"`          | Restore selection with precise per-edit tracking           |
+| `"expand_block"`      | Extend selection to include block comment markers          |
+| `"expand_line"`       | Force line comments to use V mode for restore              |
 | `"only_change_marks"` | Exit visual mode after commenting; `gv` restores selection |
-| `"expand_block \| only_changeMarks"` | Extend to block markers + exit visual mode |
-| `"expand_line \| only_changeMarks"` | Force V for line comments + exit visual mode |
-| `"expand_block \| expand_line"` | Extend to block markers + force V for line comments |
-| `"expand_block \| expand_line \| only_changeMarks"` | All three combined |
-| `"accurate \| only_changeMarks"` | Precise tracking + exit visual mode |
 
-```lua
-require("celeste_comment").setup({ keep_selection = "expand_line | only_change_marks" })
-```
+Common combinations:
 
-Selecting `hello world` and pressing `gc` now restores the selection in V mode
-(linewise) instead of v mode (charwise). With `"only_change_marks"`, the visual
-mode exits after commenting, and `gv` restores the selection.
-
-`"expand_block"` applies to charwise block comments only (e.g. `gb`). It does
-not expand when `gc` falls back to block on a wrapping line comment string,
-nor for line comments. It respects the current `selection` mode
-(`inclusive`/`exclusive`).
+- `"expand_block | only_change_marks"` — extend to block markers + exit visual mode.
+  Selecting `hello` and pressing `gb` keeps `/* hello */` selected and then exit visual mode,
+  you can use `gv` to restore the visual selection.
+- `"expand_line | only_change_marks"` — force Visual-Line mode for line comments + exit visual mode.
+  Selecting `hello` in `v` mode and pressing `gc`, the mode will change to `V` mode and then exit
+  visual mode, you can use `gv` restore the visual selection.
+- `"expand_block | expand_line"` — extend to block markers + force V for line comments.
+  `gb` extends to markers, `gc` restores in V mode.
+- `"expand_block | expand_line | only_change_marks"` — all three combined.
+- `"accurate | only_change_marks"` — precise tracking + exit visual mode.
 
 #### `insert_space` {doc="celeste_comment-config-insert_space"}
 
@@ -213,33 +208,38 @@ With `commentstring = "@REM %s"`:
 #### `detect_indent` {doc="celeste_comment-config-detect_indent"}
 
 Default: `false`.
-When `true`, the indent size and style used for comment placement are detected
-from the buffer content, instead of relying on the buffer's indent options.
+When `true`, the indent size and indent style used for comment are detected
+from the buffer content, instead of relying on the buffer's options.
+
 This lets mixed-indent or non-tabstop files align comments to the actual
-indentation. This option does not modify any buffer options; it only detects
-the indent size and whether tab indentation is used.
+indentation.
+
+This option does not modify any buffer options, it only detects the indent size
+and whether tab indentation is used. If you use plugins like `guess-indent.nvim`
+or `vim-sleuth`, you don't need to use this option.
 
 When `false`, `indent_size` and `indent_style` are taken from the buffer's
-options (no buffer content is inspected):
+options, the default indent resolver algorithm is:
 
-- `indent_style` is `"space"` when `expandtab` is on, `"tab"` when it is off
-  (blank-line padding matches the buffer's indentation style).
-- `indent_size` (the alignment grid unit) is:
-  - `shiftwidth` for space-indented files (`expandtab` on, the indent level
-    width); when `shiftwidth` is `0` it falls back to `tabstop`.
-  - `tabstop` for tab-indented files (`expandtab` off), since a tab renders
-    `tabstop` columns wide.
+```lua
+---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
+function H.default_indent_resolver(ctx)
+  local buf = ctx.buf
+  local ex, ts, sw = vim.bo[buf].expandtab, vim.bo[buf].tabstop, vim.bo[buf].shiftwidth
+  sw = sw > 0 and sw or ts
+  ctx.o_indent = {
+    indent_size = ex and sw or ts,
+    indent_style = ex and "space" or "tab",
+  }
+end
+```
 
-With `tabstop = 8`, `shiftwidth = 4` and a 4-space indented line:
-- `false` → `indent_size = 4`, `indent_style = "space"` → comment at column 4
-  (`    # code`)
-- `true` → comment at column 4 (`    # code`)
+When `true`, uses VSCode's indentGuesser algorithm to detect `indent_style`
+(space or tab) and `indent_size` by scanning up to 1000 lines from the
+start of the file.
 
-When `true`, tab-indented files use `tabstop` as the width and blank-line
-padding between indents is filled with tabs.
 - Buffer options set by editorconfig/modeline are honored implicitly (they
-  already write `tabstop`/`expandtab`/`shiftwidth`); no explicit parsing is
-  done.
+  already change the buffer option `tabstop`/`expandtab`/`shiftwidth`)
 - The detected indent is cached in `b:celeste_comment_guessed_indent` and never
   expires during the buffer's lifetime.
 
@@ -257,7 +257,7 @@ With selection `"  /* hello */  "` (extra spaces around the comment):
 
 Default: `200`.
 Maximum number of lines to search in each direction when using the block
-textobject. Only used when no treesitter query is available for the buffer.
+textobject.
 
 #### `ignore_empty_lines` {doc="celeste_comment-config-ignore_empty_lines"}
 
@@ -278,9 +278,6 @@ With `commentstring = "# %s"` and line `"  "` (2 spaces, no content):
   VSCode equivalent: `editor.comments.ignoreEmptyLines`.
 - `false` → `"never"` (toggle and align empty lines)
 - `true` → `"always"` (skip empty lines entirely)
-
-> [!NOTE]
-> `"mixed"` has no VSCode equivalent — it's unique to celeste_comment.
 
 #### `fallback_to_block` {doc="celeste_comment-config-fallback_to_block"}
 
@@ -425,10 +422,6 @@ vim.b.celeste_comment_config = {
   }
 }
 ```
-
-The built-in detection (`detect_indent`) only runs when `detect_indent` is
-enabled in the config; the default resolver always falls back to the buffer
-options (`tabstop`/`shiftwidth`/`expandtab`).
 
 ### Buffer-local configuration
 
@@ -677,33 +670,33 @@ Buffer-local, combine with a `FileType` autocmd to scope this hook to specific f
 
 ## Limitations
 
-- **Auto-detect textobject accuracy** — `textobject_auto()` first checks
+- Auto-detect textobject accuracy — `textobject_auto()` first checks
   whether the current line contains a line comment. In languages like Lua
   where `--` is used for both line comments (`--`) and block comments
   (`--[[ ]]`), a line starting with `--` may be misidentified as a line
   comment, leading to incorrect textobject selection.
 
-- **Regex-based textobject range** — Pattern matching can produce false
+- Regex-based textobject range — Pattern matching can produce false
   positives in certain scenarios. For example, comment-like tokens inside
   strings may be mistakenly treated as actual comments. Additionally, the
   scan range is capped by `block_textobj_nlines` (default 200), so
   textobject detection may not work beyond that limit.
 
-- **Visual block mode (`<C-v>`)** — Selection is treated as linewise; the
+- Visual block mode (`<C-v>`) — Selection is treated as linewise; the
   entire selected lines are block-commented rather than inserting comment
   markers per column. For column-wise comment operations, consider using
   a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
 
 ## Acknowledgments
 
-- [**VSCode**](https://github.com/microsoft/vscode) — The indent algorithm
+- [VSCode](https://github.com/microsoft/vscode) — The indent algorithm
   is ported from VSCode's comment implementation. Most of its test cases
   have also been ported to this plugin's test suite. This plugin is highly
   inspired by it.
 
-- [**mini.comment**](https://github.com/nvim-mini/mini.nvim) — Its code
+- [mini.comment](https://github.com/nvim-mini/mini.nvim) — Its code
   style and linewise textobject implementation served as a reference for
   this plugin's development.
 
-- [**Comment.nvim**](https://github.com/numToStr/Comment.nvim) — Part of
+- [Comment.nvim](https://github.com/numToStr/Comment.nvim) — Part of
   the built-in language comment string table was adapted from Comment.nvim.

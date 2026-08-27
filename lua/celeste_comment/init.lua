@@ -1241,6 +1241,7 @@ end
 ---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
 function H.detect_indent_resolver(ctx)
   if not ctx.cfg.detect_indent then return end
+  -- TODO: guess indent if have editorconfig, so that can fallback to default indent resolver
   local buf = ctx.buf
   ctx.o_indent = vim.b[buf].celeste_comment_guessed_indent
   if not ctx.o_indent then
@@ -1253,11 +1254,11 @@ end
 ---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
 function H.default_indent_resolver(ctx)
   local buf = ctx.buf
-  local ts = vim.bo[buf].tabstop
-  local sw = vim.bo[buf].shiftwidth > 0 and vim.bo[buf].shiftwidth or ts
+  local ex, ts, sw = vim.bo[buf].expandtab, vim.bo[buf].tabstop, vim.bo[buf].shiftwidth
+  sw = sw > 0 and sw or ts
   ctx.o_indent = {
-    indent_size = vim.bo[buf].expandtab and sw or ts,
-    indent_style = vim.bo[buf].expandtab and "space" or "tab",
+    indent_size = ex and sw or ts,
+    indent_style = ex and "space" or "tab",
   }
 end
 
@@ -1350,6 +1351,8 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
   range = range or { 0 }
   ---@type Celeste.Comment.LineCommentInfo
   local all_info = { lines = {}, should_remove = true }
+  -- TODO: consider not rely on cursor(include buf) here, so that can use
+  -- `make_actionx` directly for non-buf lines?
   local indent = H.compute_indent_chainably(cursor, cfg)
   local indent_size = indent.indent_size
   local only_whitespace_lines = true

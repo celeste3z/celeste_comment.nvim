@@ -29,18 +29,21 @@
 
 ## Features
 
+- **`TextEdits`** -- unlike Noevim's built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
+  hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
+  for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - **Line/block comment toggle** -- fully dot-repeatable with count support
-- **Truly accurate keep cursor** -- precise row/column tracking across `TextEdits`, adjusted per edit
-- **Truly accurate keep selection** -- selection range tracks each `TextEdit` precisely when toggling comments in visual mode
+- **Truly accurate keep cursor** -- cursor position tracks each `TextEdit` precisely
+- **Truly accurate keep selection** -- selection range tracks each `TextEdit` precisely in visual mode
+- **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter. e.g. supports
+  `JSX/TSX` out of the box
+- **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
 - **Invert/Force add/Force remove comment** -- per-line comment action control
-- **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
 - **Insert mode line comment toggle** -- with cursor sticky support
 - **Insert comment above / below / at end of line**
 - **Case insensitive comment detection** -- e.g. `@REM` vs `@rem` vs `@rEm`
-- **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
 - **Multi-variant comment string detection** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
-- **`TextEdits`** -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
 
 ## Comparison
 
@@ -86,7 +89,7 @@ vim.pack.add({
   }
 })
 
-require("celeste_comment").setup({})
+require("celeste_comment").setup()
 ```
 
 ### lazy.nvim
@@ -206,34 +209,43 @@ require("celeste_comment").setup({})
 See `:help celeste_comment-configuration` for details.
 
 > [!TIP]
-> If a language has **just one** comment style (e.g. `vim`, `asm`) and Neovim already
-> can sets its `commentstring` natively, you don't have to define anything here, we can
-> fully fall back to Neovim's built-in `commentstring` resolution.
+> Recommend set `vim.o.commentstring = ""` and `vim.o.comments = ""`
+
+> [!TIP]
+> If a language has built-in support for option `commentstring` and `comments` (e.g. `vim`, `asm`).
+> you don't have to define anything here, we can fully fall back to Neovim's built-in
+> `commentstring` and `comments` resolution
 >
 > This plugin already has built-in block comment support for most common languages.
 >
-> If your filetype isn't included, the fastest and simplest way to add it is:
->
-> - Put the code below in your `ftplugin/<filetype>.lua` (see `:help filetype-plugin`)
-> - Use `FileType` autocommand (`:help FileType`)
+> If some filetype isn't included, you can use `cms_confs`:
 >
 > ```lua
-> -- for example
-> vim.b.celeste_comment_block_commentstring = "{-%s-}"
-> ```
->
-> Or, you can use `cms_confs`:
->
-> ```lua
-> -- for example, `xxx` should be the Tree-sitter parser name or filetype
+> -- for example, `lang` should be the Tree-sitter parser name or filetype
 > require("celeste_comment").setup({
 >   cms_confs = {
->     "xxx" = {"//%s", "/*%s*/"}
+>     ["lang"] = {"//%s", "/*%s*/"}
 >   }
 > })
 > ```
 >
-> Line comments are configured via `vim.bo.commentstring` (the standard Neovim option).
+> Or, you can use options `comments` (`:help 'comments'`) to specify block comment string, for example,
+> put this code:
+>
+> ```lua
+> vim.cmd([[setlocal comments=s1:/*,ex:*/]])
+> ```
+>
+> in your `after/ftplugin/<filetype>.lua`. we can retrieve the block comment string from option `comments`.
+>
+> And also you can use options `commentstring` (`:help 'commentstring'`) to specify line comment string,
+> for example, put this code:
+>
+> ```lua
+> vim.cmd([[setlocal commentstring=//\%s]])
+> ```
+>
+> in your `after/ftplugin/<filetype>.lua`.
 >
 > For advanced comment string resolution, see `:help celeste_comment`.
 
