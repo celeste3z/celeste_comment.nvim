@@ -519,6 +519,32 @@ end
 ---@return boolean
 function H.is_visual() return vim.fn.mode():match("[vV\22]") ~= nil end
 
+---@param v string|number
+---@param map table<string, integer>
+---@param name string
+---@return integer flags
+---@return string? error
+function H.coerce_flags(v, map, name)
+  local flags = 0
+
+  if type(v) == "number" then
+    flags = v
+  elseif type(v) == "string" then
+    for part in v:gmatch("[^|]+") do
+      local word = vim.trim(part)
+      if not map[word] then return 0, ("invalid part '%s' of '%s'"):format(word, name) end
+      flags = bit.bor(flags, map[word])
+    end
+  else
+    return 0, ("expected string|number for '%s' but got %s"):format(name, type(v))
+  end
+
+  local valid_mask = vim.iter(map):fold(0, function(acc, _, f) return bit.bor(acc, f) end)
+  flags = bit.band(flags, valid_mask)
+
+  return flags, nil
+end
+
 ---@param cms_conf Celeste.Comment.CommentStringConf
 function H.normalize_cms_conf(cms_conf)
   assert(type(cms_conf) == "table", "invalid cms_conf, must be a table value")

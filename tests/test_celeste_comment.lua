@@ -795,277 +795,6 @@ T["base"]["split_comments_parts"] = function()
   eq(f([[a\\,b]]), { [[a\\]], "b" })
 end
 
--- Guess indentation───────────────────────────────────────────────────────────
-
-T["guess_indentation"] = new_set()
-
-T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
-  local function tg(di, dt, ei, et, lines, msg)
-    local r = H.guess_indentation(lines, dt, di)
-    eq(r.insert_spaces, ei, msg)
-    eq(r.tab_size, et, msg)
-  end
-  local function ag(ei, et, lines, msg)
-    if ei == nil then
-      -- cannot guess insertSpaces
-      if et == nil then
-        -- cannot guess tabSize
-        tg(true, 13370, true, 13370, lines, msg)
-        tg(false, 13371, false, 13371, lines, msg)
-      elseif type(et) == "number" then
-        -- can guess tabSize
-        tg(true, 13370, true, et, lines, msg)
-        tg(false, 13371, false, et, lines, msg)
-      else
-        -- can only guess tabSize when insertSpaces is true
-        tg(true, 13370, true, et[1], lines, msg)
-        tg(false, 13371, false, 13371, lines, msg)
-      end
-    else
-      -- can guess insertSpaces
-      if et == nil then
-        tg(true, 13370, ei, 13370, lines, msg)
-        tg(false, 13371, ei, 13371, lines, msg)
-      elseif type(et) == "number" then
-        tg(true, 13370, ei, et, lines, msg)
-        tg(false, 13371, ei, et, lines, msg)
-      else
-        -- can only guess tabSize when insertSpaces is true
-        if ei == true then
-          tg(true, 13370, ei, et[1], lines, msg)
-          tg(false, 13371, ei, et[1], lines, msg)
-        else
-          tg(true, 13370, ei, 13370, lines, msg)
-          tg(false, 13371, ei, 13371, lines, msg)
-        end
-      end
-    end
-  end
-
-  -- guess indentation 1 (ported from VSCode textModel.test.ts)
-  ag(nil, nil, { "x", "x", "x", "x", "x", "x", "x" }, "no clues")
-  ag(false, nil, { "\tx", "x", "x", "x", "x", "x", "x" }, "no spaces, 1xTAB")
-  ag(true, 2, { "  x", "x", "x", "x", "x", "x", "x" }, "1x2")
-  ag(false, nil, { "\tx", "\tx", "\tx", "\tx", "\tx", "\tx", "\tx" }, "7xTAB")
-  ag(nil, { 2 }, { "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, "4x2, 4xTAB")
-  ag(false, nil, { "\tx", " x", "\tx", " x", "\tx", " x", "\tx", " x" }, "4x1, 4xTAB")
-  ag(false, nil, { "\tx", "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, "4x2, 5xTAB")
-  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "  x" }, "1x2, 5xTAB")
-  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "    x" }, "1x4, 5xTAB")
-  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "  x", "\tx", "    x" }, "1x2, 1x4, 5xTAB")
-  ag(nil, nil, { "x", " x", " x", " x", " x", " x", " x", " x" }, "7x1 - 1 space is never guessed as an indentation")
-  ag(true, nil, { "x", "          x", " x", " x", " x", " x", " x", " x" }, "1x10, 6x1")
-  ag(
-    nil,
-    nil,
-    { "", "  ", "    ", "      ", "        ", "          ", "            ", "              " },
-    "whitespace lines don't count"
-  )
-  ag(true, 3, { "x", "   x", "   x", "    x", "x", "   x", "   x", "    x", "x", "   x", "   x", "    x" }, "6x3, 3x4")
-  ag(
-    true,
-    5,
-    { "x", "     x", "     x", "    x", "x", "     x", "     x", "    x", "x", "     x", "     x", "    x" },
-    "6x5, 3x4"
-  )
-  ag(true, 7, {
-    "x",
-    "       x",
-    "       x",
-    "     x",
-    "x",
-    "       x",
-    "       x",
-    "    x",
-    "x",
-    "       x",
-    "       x",
-    "    x",
-  }, "6x7, 1x5, 2x4")
-  ag(true, 2, { "x", "  x", "  x", "  x", "  x", "x", "  x", "  x", "  x", "  x" }, "8x2")
-  ag(true, 2, { "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x" }, "8x2")
-  ag(true, 2, { "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x" }, "4x2, 4x4")
-  ag(true, 2, { "x", "  x", "  x", "    x", "x", "  x", "  x", "    x", "x", "  x", "  x", "    x" }, "6x2, 3x4")
-  ag(true, 2, { "x", "  x", "  x", "    x", "    x", "x", "  x", "  x", "    x", "    x" }, "4x2, 4x4")
-  ag(true, 2, { "x", "  x", "    x", "    x", "x", "  x", "    x", "    x" }, "2x2, 4x4")
-  ag(true, 4, { "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x" }, "8x4")
-  ag(true, 2, { "x", "  x", "    x", "    x", "      x", "x", "  x", "    x", "    x", "      x" }, "2x2, 4x4, 2x6")
-  ag(true, 2, { "x", "  x", "    x", "    x", "      x", "      x", "        x" }, "1x2, 2x4, 2x6, 1x8")
-  ag(true, 4, {
-    "x",
-    "    x",
-    "    x",
-    "    x",
-    "     x",
-    "        x",
-    "x",
-    "    x",
-    "    x",
-    "    x",
-    "     x",
-    "        x",
-  }, "6x4, 2x5, 2x8")
-  ag(true, 4, { "x", "    x", "    x", "    x", "     x", "        x", "        x" }, "3x4, 1x5, 2x8")
-  ag(true, 4, {
-    "x",
-    "x",
-    "    x",
-    "    x",
-    "     x",
-    "        x",
-    "        x",
-    "x",
-    "x",
-    "    x",
-    "    x",
-    "     x",
-    "        x",
-    "        x",
-  }, "6x4, 2x5, 4x8")
-  ag(true, 3, { "x", " x", " x", " x", " x", " x", "x", "   x", "    x", "    x" }, "5x1, 2x0, 1x3, 2x4")
-  ag(false, nil, { "\t x", " \t x", "\tx" }, "mixed whitespace 1")
-  ag(false, nil, { "\tx", "\t    x" }, "mixed whitespace 2")
-
-  -- issue #44991
-  ag(true, 4, {
-    "a = 10             # 0 space indent",
-    "b = 5              # 0 space indent",
-    "if a > 10:         # 0 space indent",
-    "    a += 1         # 4 space indent      delta 4 spaces",
-    "    if b > 5:      # 4 space indent",
-    "        b += 1     # 8 space indent      delta 4 spaces",
-    "        b += 1     # 8 space indent",
-    "        b += 1     # 8 space indent",
-    "# comment line 1   # 0 space indent      delta 8 spaces",
-    "# comment line 2   # 0 space indent",
-    "# comment line 3   # 0 space indent",
-    "        b += 1     # 8 space indent      delta 8 spaces",
-    "        b += 1     # 8 space indent",
-    "        b += 1     # 8 space indent",
-  })
-  -- issue #55818
-  ag(true, 2, {
-    "",
-    "/* REQUIRE */",
-    "",
-    "const foo = require ( 'foo' ),",
-    "      bar = require ( 'bar' );",
-    "",
-    "/* MY FN */",
-    "",
-    "function myFn () {",
-    "",
-    "  const asd = 1,",
-    "        dsa = 2;",
-    "",
-    "  return bar ( foo ( asd ) );",
-    "",
-    "}",
-    "",
-    "/* EXPORT */",
-    "",
-    "module.exports = myFn;",
-    "",
-  })
-  -- issue #70832
-  ag(false, nil, {
-    "x",
-    "x",
-    "x",
-    "x",
-    "\tx",
-    "\t\tx",
-    "    x",
-    "\t\tx",
-    "\tx",
-    "\t\tx",
-    "\tx",
-    "\tx",
-    "\tx",
-    "\tx",
-    "x",
-  })
-  -- issue #62143
-  ag(true, 2, { "x", "x", "  x", "  x" })
-  ag(true, 2, { "x", "  - item2", "  - item3" })
-  tg(true, 2, true, 2, { "x x", "  x", "  x" })
-  tg(true, 2, true, 2, { "x x", "  x", "  x", "    x" })
-  tg(true, 2, true, 2, { "<!--test1.md -->", "- item1", "  - item2", "    - item3" })
-  -- issue #84217
-  ag(true, 4, { "def main():", "    print('hello')" })
-  ag(true, 4, { "def main():", "    with open('foo') as fp:", "        print(fp.read())" })
-  -- issue #65668 (YAML 2 spaces)
-  ag(true, 2, {
-    "version: 2",
-    "",
-    "jobs:",
-    "  build:",
-    "    docker:",
-    "      - circleci/golang:1.11",
-    "",
-    "  environment:",
-    "    TEST_RESULTS: /tmp/test-results",
-    "",
-    "  steps:",
-    "    - checkout",
-    "    - run: mkdir -p $TEST_RESULTS",
-    "",
-    "    - restore_cache:",
-    "        keys:",
-    "          - v1-pkg-cache",
-    "",
-    "    - run:",
-    "        name: dep ensure",
-    "        command: dep ensure -v",
-    "",
-    "    - run:",
-    "        name: Run unit tests",
-    "        command: |",
-    '          trap "go-junit-report <${TEST_RESULTS}/go-test.out > ${TEST_RESULTS}/go-test-report.xml" EXIT',
-    "          go test -v ./... | tee ${TEST_RESULTS}/go-test.out",
-    "",
-    "    - run:",
-    "        name: Build",
-    "        command: go build -v",
-    "",
-    "    - save_cache:",
-    "        key: v1-pkg-cache",
-    "        paths:",
-    '          - "/go/pkg"',
-    "",
-    "    - store_artifacts:",
-    "        path: /tmp/test-results",
-    "        destination: raw-test-output",
-    "",
-    "    - store_test_results:",
-    "        path: /tmp/test-results",
-  })
-  -- issue #249040 (4-space wins over 2-space when predominant)
-  ag(true, 4, {
-    "function foo() {",
-    "    let a = 1;",
-    "    let b = 2;",
-    "    if (true) {",
-    "        console.log(a);",
-    "        console.log(b);",
-    "    }",
-    "    const obj = {",
-    "      x: 1,",
-    "      y: 2",
-    "    };",
-    "    return obj;",
-    "}",
-  })
-
-  -- bufnr path
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "x", "  x", "  x", "  x" })
-  local r = H.guess_indentation(buf, 13370, true)
-  eq(r.insert_spaces, true)
-  eq(r.tab_size, 2)
-  vim.api.nvim_buf_delete(buf, { force = true })
-end
-
 T["base"]["make_indent_padding"] = function()
   eq(H.make_indent_padding(0, 4, 4, "space"), "    ")
   eq(H.make_indent_padding(0, 4, 4, "tab"), "\t")
@@ -1367,6 +1096,32 @@ T["base"]["resolve"] = function()
   eq(f("html", "<!-- %s -->", 2), { "<!--", "-->" })
   eq(f("cpp", "// %s", 2, false), { "/*", "*/" })
   vim.api.nvim_buf_delete(buf, { force = true })
+end
+
+T["base"]["coerce_flags"] = function()
+  local map = { a = 1, b = 2, c = 4 }
+  local f = function(v) return { H.coerce_flags(v, map, "test") } end
+
+  eq(f("a"), { 1 })
+  eq(f("b"), { 2 })
+  eq(f("c"), { 4 })
+  eq(f("a | b"), { 3 })
+  eq(f("a | b | c"), { 7 })
+  eq(f("a  |  b  |  c"), { 7 })
+  eq(f(" a | b | c "), { 7 })
+  eq(f(0), { 0 })
+  eq(f(1), { 1 })
+  eq(f(5), { 5 })
+  eq(f(7), { 7 })
+  eq(f(99), { 3 })
+  eq(f(-1), { 7 })
+  eq(f(""), { 0 })
+  eq(f("a | invalid"), { 0, "invalid part 'invalid' of 'test'" })
+  eq(f("invalid | a"), { 0, "invalid part 'invalid' of 'test'" })
+  eq(f("a | b | invalid"), { 0, "invalid part 'invalid' of 'test'" })
+  eq(f("x"), { 0, "invalid part 'x' of 'test'" })
+  eq(f({}), { 0, "expected string|number for 'test' but got table" })
+  eq(f(true), { 0, "expected string|number for 'test' but got boolean" })
 end
 
 -- Edits tests ────────────────────────────────────────────────────────────────
@@ -1846,6 +1601,277 @@ T["edits"]["compute_block_edits_actions"] = function()
   lines = { "hello" }
   edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kForceRemove)
   eq(edits, nil)
+end
+
+-- Guess indentation───────────────────────────────────────────────────────────
+
+T["guess_indentation"] = new_set()
+
+T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
+  local function tg(di, dt, ei, et, lines, msg)
+    local r = H.guess_indentation(lines, dt, di)
+    eq(r.insert_spaces, ei, msg)
+    eq(r.tab_size, et, msg)
+  end
+  local function ag(ei, et, lines, msg)
+    if ei == nil then
+      -- cannot guess insertSpaces
+      if et == nil then
+        -- cannot guess tabSize
+        tg(true, 13370, true, 13370, lines, msg)
+        tg(false, 13371, false, 13371, lines, msg)
+      elseif type(et) == "number" then
+        -- can guess tabSize
+        tg(true, 13370, true, et, lines, msg)
+        tg(false, 13371, false, et, lines, msg)
+      else
+        -- can only guess tabSize when insertSpaces is true
+        tg(true, 13370, true, et[1], lines, msg)
+        tg(false, 13371, false, 13371, lines, msg)
+      end
+    else
+      -- can guess insertSpaces
+      if et == nil then
+        tg(true, 13370, ei, 13370, lines, msg)
+        tg(false, 13371, ei, 13371, lines, msg)
+      elseif type(et) == "number" then
+        tg(true, 13370, ei, et, lines, msg)
+        tg(false, 13371, ei, et, lines, msg)
+      else
+        -- can only guess tabSize when insertSpaces is true
+        if ei == true then
+          tg(true, 13370, ei, et[1], lines, msg)
+          tg(false, 13371, ei, et[1], lines, msg)
+        else
+          tg(true, 13370, ei, 13370, lines, msg)
+          tg(false, 13371, ei, 13371, lines, msg)
+        end
+      end
+    end
+  end
+
+  -- guess indentation 1 (ported from VSCode textModel.test.ts)
+  ag(nil, nil, { "x", "x", "x", "x", "x", "x", "x" }, "no clues")
+  ag(false, nil, { "\tx", "x", "x", "x", "x", "x", "x" }, "no spaces, 1xTAB")
+  ag(true, 2, { "  x", "x", "x", "x", "x", "x", "x" }, "1x2")
+  ag(false, nil, { "\tx", "\tx", "\tx", "\tx", "\tx", "\tx", "\tx" }, "7xTAB")
+  ag(nil, { 2 }, { "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, "4x2, 4xTAB")
+  ag(false, nil, { "\tx", " x", "\tx", " x", "\tx", " x", "\tx", " x" }, "4x1, 4xTAB")
+  ag(false, nil, { "\tx", "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, "4x2, 5xTAB")
+  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "  x" }, "1x2, 5xTAB")
+  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "    x" }, "1x4, 5xTAB")
+  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "  x", "\tx", "    x" }, "1x2, 1x4, 5xTAB")
+  ag(nil, nil, { "x", " x", " x", " x", " x", " x", " x", " x" }, "7x1 - 1 space is never guessed as an indentation")
+  ag(true, nil, { "x", "          x", " x", " x", " x", " x", " x", " x" }, "1x10, 6x1")
+  ag(
+    nil,
+    nil,
+    { "", "  ", "    ", "      ", "        ", "          ", "            ", "              " },
+    "whitespace lines don't count"
+  )
+  ag(true, 3, { "x", "   x", "   x", "    x", "x", "   x", "   x", "    x", "x", "   x", "   x", "    x" }, "6x3, 3x4")
+  ag(
+    true,
+    5,
+    { "x", "     x", "     x", "    x", "x", "     x", "     x", "    x", "x", "     x", "     x", "    x" },
+    "6x5, 3x4"
+  )
+  ag(true, 7, {
+    "x",
+    "       x",
+    "       x",
+    "     x",
+    "x",
+    "       x",
+    "       x",
+    "    x",
+    "x",
+    "       x",
+    "       x",
+    "    x",
+  }, "6x7, 1x5, 2x4")
+  ag(true, 2, { "x", "  x", "  x", "  x", "  x", "x", "  x", "  x", "  x", "  x" }, "8x2")
+  ag(true, 2, { "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x" }, "8x2")
+  ag(true, 2, { "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x" }, "4x2, 4x4")
+  ag(true, 2, { "x", "  x", "  x", "    x", "x", "  x", "  x", "    x", "x", "  x", "  x", "    x" }, "6x2, 3x4")
+  ag(true, 2, { "x", "  x", "  x", "    x", "    x", "x", "  x", "  x", "    x", "    x" }, "4x2, 4x4")
+  ag(true, 2, { "x", "  x", "    x", "    x", "x", "  x", "    x", "    x" }, "2x2, 4x4")
+  ag(true, 4, { "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x" }, "8x4")
+  ag(true, 2, { "x", "  x", "    x", "    x", "      x", "x", "  x", "    x", "    x", "      x" }, "2x2, 4x4, 2x6")
+  ag(true, 2, { "x", "  x", "    x", "    x", "      x", "      x", "        x" }, "1x2, 2x4, 2x6, 1x8")
+  ag(true, 4, {
+    "x",
+    "    x",
+    "    x",
+    "    x",
+    "     x",
+    "        x",
+    "x",
+    "    x",
+    "    x",
+    "    x",
+    "     x",
+    "        x",
+  }, "6x4, 2x5, 2x8")
+  ag(true, 4, { "x", "    x", "    x", "    x", "     x", "        x", "        x" }, "3x4, 1x5, 2x8")
+  ag(true, 4, {
+    "x",
+    "x",
+    "    x",
+    "    x",
+    "     x",
+    "        x",
+    "        x",
+    "x",
+    "x",
+    "    x",
+    "    x",
+    "     x",
+    "        x",
+    "        x",
+  }, "6x4, 2x5, 4x8")
+  ag(true, 3, { "x", " x", " x", " x", " x", " x", "x", "   x", "    x", "    x" }, "5x1, 2x0, 1x3, 2x4")
+  ag(false, nil, { "\t x", " \t x", "\tx" }, "mixed whitespace 1")
+  ag(false, nil, { "\tx", "\t    x" }, "mixed whitespace 2")
+
+  -- issue #44991
+  ag(true, 4, {
+    "a = 10             # 0 space indent",
+    "b = 5              # 0 space indent",
+    "if a > 10:         # 0 space indent",
+    "    a += 1         # 4 space indent      delta 4 spaces",
+    "    if b > 5:      # 4 space indent",
+    "        b += 1     # 8 space indent      delta 4 spaces",
+    "        b += 1     # 8 space indent",
+    "        b += 1     # 8 space indent",
+    "# comment line 1   # 0 space indent      delta 8 spaces",
+    "# comment line 2   # 0 space indent",
+    "# comment line 3   # 0 space indent",
+    "        b += 1     # 8 space indent      delta 8 spaces",
+    "        b += 1     # 8 space indent",
+    "        b += 1     # 8 space indent",
+  })
+  -- issue #55818
+  ag(true, 2, {
+    "",
+    "/* REQUIRE */",
+    "",
+    "const foo = require ( 'foo' ),",
+    "      bar = require ( 'bar' );",
+    "",
+    "/* MY FN */",
+    "",
+    "function myFn () {",
+    "",
+    "  const asd = 1,",
+    "        dsa = 2;",
+    "",
+    "  return bar ( foo ( asd ) );",
+    "",
+    "}",
+    "",
+    "/* EXPORT */",
+    "",
+    "module.exports = myFn;",
+    "",
+  })
+  -- issue #70832
+  ag(false, nil, {
+    "x",
+    "x",
+    "x",
+    "x",
+    "\tx",
+    "\t\tx",
+    "    x",
+    "\t\tx",
+    "\tx",
+    "\t\tx",
+    "\tx",
+    "\tx",
+    "\tx",
+    "\tx",
+    "x",
+  })
+  -- issue #62143
+  ag(true, 2, { "x", "x", "  x", "  x" })
+  ag(true, 2, { "x", "  - item2", "  - item3" })
+  tg(true, 2, true, 2, { "x x", "  x", "  x" })
+  tg(true, 2, true, 2, { "x x", "  x", "  x", "    x" })
+  tg(true, 2, true, 2, { "<!--test1.md -->", "- item1", "  - item2", "    - item3" })
+  -- issue #84217
+  ag(true, 4, { "def main():", "    print('hello')" })
+  ag(true, 4, { "def main():", "    with open('foo') as fp:", "        print(fp.read())" })
+  -- issue #65668 (YAML 2 spaces)
+  ag(true, 2, {
+    "version: 2",
+    "",
+    "jobs:",
+    "  build:",
+    "    docker:",
+    "      - circleci/golang:1.11",
+    "",
+    "  environment:",
+    "    TEST_RESULTS: /tmp/test-results",
+    "",
+    "  steps:",
+    "    - checkout",
+    "    - run: mkdir -p $TEST_RESULTS",
+    "",
+    "    - restore_cache:",
+    "        keys:",
+    "          - v1-pkg-cache",
+    "",
+    "    - run:",
+    "        name: dep ensure",
+    "        command: dep ensure -v",
+    "",
+    "    - run:",
+    "        name: Run unit tests",
+    "        command: |",
+    '          trap "go-junit-report <${TEST_RESULTS}/go-test.out > ${TEST_RESULTS}/go-test-report.xml" EXIT',
+    "          go test -v ./... | tee ${TEST_RESULTS}/go-test.out",
+    "",
+    "    - run:",
+    "        name: Build",
+    "        command: go build -v",
+    "",
+    "    - save_cache:",
+    "        key: v1-pkg-cache",
+    "        paths:",
+    '          - "/go/pkg"',
+    "",
+    "    - store_artifacts:",
+    "        path: /tmp/test-results",
+    "        destination: raw-test-output",
+    "",
+    "    - store_test_results:",
+    "        path: /tmp/test-results",
+  })
+  -- issue #249040 (4-space wins over 2-space when predominant)
+  ag(true, 4, {
+    "function foo() {",
+    "    let a = 1;",
+    "    let b = 2;",
+    "    if (true) {",
+    "        console.log(a);",
+    "        console.log(b);",
+    "    }",
+    "    const obj = {",
+    "      x: 1,",
+    "      y: 2",
+    "    };",
+    "    return obj;",
+    "}",
+  })
+
+  -- bufnr path
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "x", "  x", "  x", "  x" })
+  local r = H.guess_indentation(buf, 13370, true)
+  eq(r.insert_spaces, true)
+  eq(r.tab_size, 2)
+  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 -- line_comment_no_indent tests ───────────────────────────────────────────────
