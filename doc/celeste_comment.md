@@ -246,8 +246,8 @@ start of the file.
 #### `block_relaxed_detect` {doc="celeste_comment-config-block_relaxed_detect"}
 
 Default: `true`.
-When `true`, leading and trailing whitespace is trimmed from the selection
-range before matching block comment tokens.
+When `true`, relaxed block comment detection is enabled — leading and trailing
+whitespace around the selection is ignored when matching block comment tokens.
 With selection `"  /* hello */  "` (extra spaces around the comment):
 
 - `true` → comment detected, remove succeeds
@@ -358,7 +358,7 @@ Called before edits are applied to the buffer. Receives a context table:
 ---@field state_track?    Celeste.Comment.StateTrack
 ```
 
-Example — force use `nvim_buf_set_text` instead of `lockmarks + nvim_buf_set_lines`:
+Example — use `nvim_buf_set_text` instead of `nvim_buf_set_lines` + `lockmarks`:
 
 ```lua
 vim.b.celeste_comment_config = {
@@ -647,14 +647,11 @@ require("celeste_comment").setup({
 
 ### Preserve extmarks during edits
 
-By default, `commit_edits` replaces the whole comment range with a single
-`nvim_buf_set_lines` call (under `lockmarks`). This displaces extmarks
-(tree-sitter nodes, diagnostics, highlights, ...) sitting on the content lines
-inside the range — they are moved to the end of the replaced region.
+By default, `commit_edits` uses `nvim_buf_set_lines` + `lockmarks` to replace
+whole lines. This has better performance but only preserves regular marks.
 
-Forcing per-edit `nvim_buf_set_text` instead leaves untouched content lines
-alone, so extmarks on them survive (and only shift naturally on lines where a
-marker is inserted):
+Use `nvim_buf_set_text` instead only modifies parts of lines, preserving
+regular marks and extmarks on non-modified parts:
 
 ```lua
 vim.b.celeste_comment_config = {

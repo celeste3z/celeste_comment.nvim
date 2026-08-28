@@ -103,7 +103,7 @@ require("celeste_comment").setup()
 ```lua
 ---@type Celeste.Comment.PartialOpts
 {
-  -- Restore cursor position after commenting.
+  -- Restore cursor position after comment/uncomment.
   keep_cursor            = true,
 
   -- Restore selection after commenting.
@@ -127,7 +127,14 @@ require("celeste_comment").setup()
   -- for more details.
   detect_indent          = false,
 
-  -- Trim whitespace before detecting block tokens.
+  -- Whether to use `vim.api.nvim_buf_set_text` to commit edits.
+  -- `nvim_buf_set_text` only modifies parts of lines, preserving regular marks and
+  -- extmarks on non-modified parts.
+  -- `nvim_buf_set_lines` + `lockmarks` replaces whole lines, has better performance
+  -- but only preserves regular marks.
+  use_set_text           = false,
+
+  -- Relaxed block comment detection: ignore whitespace around markers.
   block_relaxed_detect   = true,
 
   -- Max lines to search for block comment pairs.
@@ -189,7 +196,10 @@ require("celeste_comment").setup()
     -- Force remove line comment (n, x), example `gCU`
     line_force_remove    = "",
 
-    -- Cursor sticky dot-repeat
+    -- Cursor sticky dot-repeat.
+    -- NOTE: If you have your own dot keymap, you can set this to "" and add
+    -- `require("celeste_comment").track_state()` to your dot keymap.
+    -- See `:help celeste_comment-api` for more details.
     dot_repeat           = ".",
   },
 

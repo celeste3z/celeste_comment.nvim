@@ -215,6 +215,7 @@ M.ACTION = {
 ---@field block_relaxed_detect       boolean
 ---@field ignore_empty_lines         Celeste.Comment.Opts.IgnoreEmptyLines
 ---@field detect_indent              boolean
+---@field use_set_text               boolean
 ---@field fallback_to_block          Celeste.Comment.Opts.FallbackToBlock
 ---@field cms_confs?                 Celeste.Comment.CommentStringConfs|boolean
 ---@field mappings                   Celeste.Comment.Opts.Mapping
@@ -223,7 +224,7 @@ M.ACTION = {
 
 ---@class Celeste.Comment.PartialOpts
 ---@field keep_cursor?                boolean default true
----@field keep_selection?             string|number default 'never'
+---@field keep_selection?             string|integer default 'never'
 ---@field insert_space?               boolean default true
 ---@field line_comment_no_indent?     boolean default false
 ---@field case_insensitive?           boolean default false
@@ -232,6 +233,7 @@ M.ACTION = {
 ---@field block_relaxed_detect?       boolean default true
 ---@field ignore_empty_lines?         Celeste.Comment.Opts.IgnoreEmptyLines default 'always'
 ---@field detect_indent?              boolean default false
+---@field use_set_text?               boolean default false
 ---@field fallback_to_block?          Celeste.Comment.Opts.FallbackToBlock default 'if_line_cms_wrapped'
 ---@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean default nil
 ---@field mappings?                   Celeste.Comment.Opts.Mapping
@@ -257,6 +259,7 @@ H.config = {
   block_textobj_nlines      = 200,
   ignore_empty_lines        = M.IGN_EMT.kAlways,
   detect_indent             = false,
+  use_set_text              = false,
   fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
   log_level                 = vim.log.levels.OFF,
   cms_confs                 = nil,
@@ -2047,7 +2050,7 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
 
   H.invoke_pre_commit_chainably(ctx)
 
-  H.commit_edits(cursor.buf, ctx.range, ctx.lines, ctx.edits, ctx.o_use_set_text)
+  H.commit_edits(cursor.buf, ctx.range, ctx.lines, ctx.edits, ctx.o_use_set_text or cfg.use_set_text)
 
   H.invoke_post_commit_chainably(ctx --[[@as Celeste.Comment.Hooks.PostCommitEdits.Ctx]])
 end
