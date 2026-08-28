@@ -673,54 +673,54 @@ T["base"]["compute_cursor_state"] = function()
   cs = cr(0, 3)
   ccs(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
   eq(cs.adj_cursor, p(0, 0, 5))
-  eq(cs.adj_end_pos, nil)
+  eq(cs.adj_endpos, nil)
 
   -- cursor + end_pos on same line
-  local s2 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 0, 5) }
+  local s2 = { adj_cursor = p(0, 0, 2), adj_endpos = p(0, 0, 5) }
   ccs(s2, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
   eq(s2.adj_cursor, p(0, 0, 4))
-  eq(s2.adj_end_pos, p(0, 0, 7))
+  eq(s2.adj_endpos, p(0, 0, 7))
 
   -- cursor + end_pos on different lines, both shifted
-  local s3 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 1, 4) }
+  local s3 = { adj_cursor = p(0, 0, 2), adj_endpos = p(0, 1, 4) }
   ccs(s3, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello", "world" }, { 0, 0, 1, 5 }, { orcs = "" })
   eq(s3.adj_cursor, p(0, 0, 4))
-  eq(s3.adj_end_pos, p(0, 1, 4))
+  eq(s3.adj_endpos, p(0, 1, 4))
 
   -- cursor + end_pos with multiple edits
-  local s4 = { adj_cursor = p(0, 0, 3), adj_end_pos = p(0, 0, 5) }
+  local s4 = { adj_cursor = p(0, 0, 3), adj_endpos = p(0, 0, 5) }
   ccs(s4, {
     { range = { 0, 0, 0, 0 }, text = { "# " } },
     { range = { 0, 5, 0, 5 }, text = { " //" } },
   }, { "hello" }, { 0, 0, 0, 3 }, { orcs = " //" })
   eq(s4.adj_cursor, p(0, 0, 5))
-  eq(s4.adj_end_pos, p(0, 0, 7))
+  eq(s4.adj_endpos, p(0, 0, 7))
 
   -- cursor + end_pos where end_pos is on a different row with line insert
-  local s5 = { adj_cursor = p(0, 1, 0), adj_end_pos = p(0, 2, 0) }
+  local s5 = { adj_cursor = p(0, 1, 0), adj_endpos = p(0, 2, 0) }
   ccs(s5, { { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { "a", "b", "c" }, { 0, 0, 2, 0 }, { orcs = "" })
   eq(s5.adj_cursor, p(0, 2, 0))
-  eq(s5.adj_end_pos, p(0, 3, 0))
+  eq(s5.adj_endpos, p(0, 3, 0))
 
   -- block comment char-wise: RHS end_pos lands at content end
   -- `12--[[ 3456789\n123 ]]456789`, selection {0,2,1,5}, uncomment
-  local s6 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 1, 5) }
+  local s6 = { adj_cursor = p(0, 0, 2), adj_endpos = p(0, 1, 5) }
   ccs(s6, {
     { range = { 0, 2, 0, 7 }, text = { "" } },
     { range = { 1, 3, 1, 6 }, text = { "" } },
   }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "char")
   -- cursor on `--` → content start (col 2); end_pos on `]]` → last content char (col 2)
   eq(s6.adj_cursor, p(0, 0, 2))
-  eq(s6.adj_end_pos, p(0, 1, 2))
+  eq(s6.adj_endpos, p(0, 1, 2))
 
   -- same block uncomment but line-wise motion → RHS keeps default clamp
-  local s7 = { adj_cursor = p(0, 0, 2), adj_end_pos = p(0, 1, 5) }
+  local s7 = { adj_cursor = p(0, 0, 2), adj_endpos = p(0, 1, 5) }
   ccs(s7, {
     { range = { 0, 2, 0, 7 }, text = { "" } },
     { range = { 1, 3, 1, 6 }, text = { "" } },
   }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "line")
   eq(s7.adj_cursor, p(0, 0, 2))
-  eq(s7.adj_end_pos, p(0, 1, 3))
+  eq(s7.adj_endpos, p(0, 1, 3))
 end
 
 T["base"]["make_csi"] = function()

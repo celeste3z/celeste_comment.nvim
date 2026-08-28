@@ -490,13 +490,13 @@ The tracked state is exposed to hooks as `ctx.state_track`:
 ```lua
 ---@class Celeste.Comment.StateTrack
 ---@field cursor?     vim.Pos  original cursor, never modified
----@field end_pos?    vim.Pos  original visual-start mark, never modified
+---@field endpos?     vim.Pos  original visual-start mark, never modified
 ---@field mode?       string   visual mode at track time ("v"/"V"/"\22")
----@field adj_cursor? vim.Pos  adjusted cursor after edits (keep_cursor target)
----@field adj_end_pos? vim.Pos adjusted selection anchor after edits
+---@field adj_cursor? vim.Pos  adjusted cursor after edits
+---@field adj_endpos? vim.Pos adjusted selection anchor after edits
 ```
 
-`cursor`/`end_pos` are the raw pre-edit positions; `adj_cursor`/`adj_end_pos`
+`cursor`/`endpos` are the raw pre-edit positions; `adj_cursor`/`adj_endpos`
 are the same positions shifted by the applied edits (and, with
 `keep_selection = "expand_block"` or `"expand_block | only_change_marks"`,
 extended to the block comment markers).

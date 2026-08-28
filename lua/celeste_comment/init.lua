@@ -149,10 +149,10 @@ M.ACTION = {
 
 ---@class Celeste.Comment.StateTrack
 ---@field cursor?      vim.Pos original cursor captured by `make_state_track`, never modified
----@field end_pos?     vim.Pos original visual-start mark, never modified
+---@field endpos?      vim.Pos original visual-start mark, never modified
 ---@field mode?        string
----@field adj_cursor?  vim.Pos adjusted cursor (keep_cursor target)
----@field adj_end_pos? vim.Pos adjusted selection anchor
+---@field adj_cursor?  vim.Pos adjusted cursor
+---@field adj_endpos?  vim.Pos adjusted selection anchor
 
 ---@class Celeste.Comment.Hooks.PreCommitEdits.Ctx
 ---@field cursor          vim.Pos
@@ -1868,12 +1868,12 @@ function H.make_state_track()
   state.cursor = H.make_cursor(0)
   if H.is_visual() then
     state.mode = vim.fn.mode()
-    local end_pos = vim.fn.getpos("v")
-    state.end_pos = H.make_pos(end_pos[1], end_pos[2] - 1, end_pos[3] - 1)
+    local endpos = vim.fn.getpos("v")
+    state.endpos = H.make_pos(endpos[1], endpos[2] - 1, endpos[3] - 1)
   end
 
   state.adj_cursor = H.pos_clone(state.cursor)
-  state.adj_end_pos = H.pos_clone(state.end_pos)
+  state.adj_endpos = H.pos_clone(state.endpos)
   return state
 end
 
@@ -1891,14 +1891,13 @@ function H.post_commit_expand_block(ctx)
   local rcs_end = rcs.range[2] + shift + #rcs.text[1]
   if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
 
-  local backward = (st.cursor.row < st.end_pos.row)
-    or (st.cursor.row == st.end_pos.row and st.cursor.col < st.end_pos.col)
+  local backward = (st.cursor.row < st.endpos.row) or (st.cursor.row == st.endpos.row and st.cursor.col < st.endpos.col)
 
   if backward then
-    st.adj_end_pos = H.make_pos(0, rcs.range[1], rcs_end)
+    st.adj_endpos = H.make_pos(0, rcs.range[1], rcs_end)
     st.adj_cursor = H.make_pos(0, lcs.range[1], lcs.range[2])
   else
-    st.adj_end_pos = H.make_pos(0, lcs.range[1], lcs.range[2])
+    st.adj_endpos = H.make_pos(0, lcs.range[1], lcs.range[2])
     st.adj_cursor = H.make_pos(0, rcs.range[1], rcs_end)
   end
 end
@@ -1919,7 +1918,7 @@ function H.restore_state(ctx)
       if ctx.ctype == M.CMT.kLine and bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kExpandLine) ~= 0 then mode = "V" end
 
       H.select_range(
-        { state.adj_end_pos[1], state.adj_end_pos[2], state.adj_cursor[1], state.adj_cursor[2] },
+        { state.adj_endpos[1], state.adj_endpos[2], state.adj_cursor[1], state.adj_cursor[2] },
         { mode = mode, exit = only_change_marks }
       )
       return
@@ -1991,7 +1990,7 @@ function H.compute_cursor_state(ctx)
   if not state then return end
   if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL_FLAG.kNone then return end
   state.adj_cursor = H.compute_cursor_pos(state.adj_cursor, ctx)
-  state.adj_end_pos = H.compute_cursor_pos(state.adj_end_pos, ctx)
+  state.adj_endpos = H.compute_cursor_pos(state.adj_endpos, ctx)
 end
 
 ---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
