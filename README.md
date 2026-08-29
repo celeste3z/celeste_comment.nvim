@@ -197,8 +197,9 @@ require("celeste_comment").setup()
     line_force_remove    = "",
 
     -- Cursor sticky dot-repeat.
-    -- NOTE: If you have your own dot keymap, you can set this to "" and add
-    -- `require("celeste_comment").track_state()` to your dot keymap.
+    -- If a "." mapping already exists, this will not override it.
+    -- You can also call `require("celeste_comment").track_state()` in your
+    -- own dot-repeat keymap to enable sticky cursor behavior.
     -- See `:help celeste_comment-api` for more details.
     dot_repeat           = ".",
   },

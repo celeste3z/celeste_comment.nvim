@@ -2659,12 +2659,6 @@ function M.setup(config)
     { desc = "Auto line/block textobject" }
   )
 
-  -- TODO: eliminate this keymap by `CmdAtom`?
-  map("n", m.dot_repeat, function()
-    H.state_track = H.make_state_track()
-    return "."
-  end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
-
   map("i", m.line_toggle_insert, function()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
@@ -2673,6 +2667,14 @@ function M.setup(config)
       state_track = H.make_state_track(),
     })
   end, { desc = "Toggle line comment at insert mode" })
+
+  --TODO: eliminate this keymap by `CmdAtom`?
+  if vim.fn.maparg(".", "n") == "" then
+    map("n", m.dot_repeat, function()
+      H.state_track = H.make_state_track()
+      return "."
+    end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
+  end
 end
 
 -- test only
