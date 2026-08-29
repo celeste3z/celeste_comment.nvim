@@ -12,18 +12,21 @@ edits and full dot-repeat support.
 
 ## Features
 
+- `TextEdits` -- unlike Noevim's built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
+  hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
+  for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - Line/block comment toggle -- fully dot-repeatable with count support
-- Truly accurate keep cursor -- precise row/column tracking across `TextEdits`, adjusted per edit
-- Truly accurate keep selection -- selection range tracks each `TextEdit` precisely when toggling comments in visual mode
-- VSCode-style indent algorithm -- handles mixed tabs and spaces
-- Invert/Force add/Force remove -- per-line comment action control
+- Truly accurate keep cursor -- cursor position tracks each `TextEdit` precisely
+- Truly accurate keep selection -- selection range tracks each `TextEdit` precisely in visual mode
+- Context-aware comment string resolution via Tree-sitter -- comment string adapts to context via Tree-sitter. e.g. supports
+  `JSX/TSX` out of the box
 - Textobjects -- line, block, and auto textobjects, works without Tree-sitter
+- VSCode-style indent algorithm -- handles mixed tabs and spaces
+- Invert/Force add/Force remove comment -- per-line comment action control
 - Insert mode line comment toggle -- with cursor sticky support
 - Insert comment above / below / at end of line
 - Case insensitive comment detection -- e.g. `@REM` vs `@rem` vs `@rEm`
-- Context-aware comment string resolution via Tree-sitter -- comment string adapts to context via Tree-sitter, no extra plugins required. e.g. supports `JSX/TSX` out of the box
 - Multi-variant comment string detection — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
-- `TextEdits` edit-model -- unlike Neovim's built-in or other plugins, edits are modeled as `TextEdits`, making it more hackable and composable
 
 ## Comparison
 
@@ -667,22 +670,19 @@ Buffer-local, combine with a `FileType` autocmd to scope this hook to specific f
 
 ## Limitations
 
-- Auto-detect textobject accuracy — `textobject_auto()` first checks
-  whether the current line contains a line comment. In languages like Lua
-  where `--` is used for both line comments (`--`) and block comments
-  (`--[[ ]]`), a line starting with `--` may be misidentified as a line
-  comment, leading to incorrect textobject selection.
+- Ambiguous comment syntax — Languages where line and block comments
+  share the same prefix (e.g., Lua's `--` / `--[[ ]]`) may cause
+  `textobject_auto()` to misidentify block comments as line comments.
+  Use `line_textobject` or `block_textobject` explicitly instead.
 
-- Regex-based textobject range — Pattern matching can produce false
-  positives in certain scenarios. For example, comment-like tokens inside
-  strings may be mistakenly treated as actual comments. Additionally, the
-  scan range is capped by `block_textobj_nlines` (default 200), so
-  textobject detection may not work beyond that limit.
+- Textobject limitations
+  - Comment-like tokens inside strings or literals may be mistakenly
+    detected as comments (e.g., `char *s = "// not a comment";`).
+  - Scan range is limited to `block_textobj_nlines` (default 200 lines).
 
-- Visual block mode (`<C-v>`) — Selection is treated as linewise; the
-  entire selected lines are block-commented rather than inserting comment
-  markers per column. For column-wise comment operations, consider using
-  a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
+- Visual block mode (`<C-v>`) — Comments are applied per-line,
+  not per-column. For column-wise commenting, use a multicursor plugin
+  like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
 
 ## Acknowledgments
 
@@ -691,8 +691,11 @@ Buffer-local, combine with a `FileType` autocmd to scope this hook to specific f
   have also been ported to this plugin's test suite. This plugin is highly
   inspired by it.
 
+- [Zed](https://github.com/zed-industries/zed) — The capture-based overrides
+  paradigm for comment scope resolution.
+
 - [mini.comment](https://github.com/nvim-mini/mini.nvim) — Its code
-  style and linewise textobject implementation served as a reference for
+  style and linewise textobjects implementation served as a reference for
   this plugin's development.
 
 - [Comment.nvim](https://github.com/numToStr/Comment.nvim) — Part of

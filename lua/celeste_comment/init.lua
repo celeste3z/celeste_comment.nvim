@@ -166,7 +166,7 @@ M.ACTION = {
 ---@field csi             Celeste.Comment.CommentStringInfo
 ---@field lines           string[]
 ---@field state_track?    Celeste.Comment.StateTrack
----@field execution_opts? Celeste.Comment.ExecutionOpts
+---@field invoke_ctx?     Celeste.Comment.InvokeCtx
 ---@field comment_info?   Celeste.Comment.LineCommentInfo|Celeste.Comment.BlockCommentInfo
 ---@field o_use_set_text? boolean o: means output from user
 
@@ -241,7 +241,7 @@ M.ACTION = {
 ---@field hooks?                      Celeste.Comment.Hooks
 ---@field log_level?                  vim.log.levels
 
----@class Celeste.Comment.ExecutionOpts
+---@class Celeste.Comment.InvokeCtx
 ---@field [string] any
 
 ---@type Celeste.Comment.StateTrack?
@@ -1359,7 +1359,7 @@ end
 ---@param range  Celeste.Comment.Range4
 ---@param action Celeste.Comment.Action
 ---@param cursor? vim.Pos
----@param opts?   Celeste.Comment.ExecutionOpts
+---@param opts?   Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.LineCommentInfo
 function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
   opts = opts or {}
@@ -1483,7 +1483,7 @@ end
 ---@param line  string
 ---@param cfg   Celeste.Comment.Opts
 ---@param range? Celeste.Comment.Range4
----@param opts?  Celeste.Comment.ExecutionOpts
+---@param opts?  Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 function H.make_comment_edits(info, line, cfg, range, opts)
   local edits = {} ---@type Celeste.Comment.TextEdits
@@ -1538,7 +1538,7 @@ end
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cfg    Celeste.Comment.Opts
 ---@param action Celeste.Comment.Action
----@param opts?  Celeste.Comment.ExecutionOpts
+---@param opts?  Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 ---@return Celeste.Comment.LineCommentInfo?
 function H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
@@ -1585,7 +1585,7 @@ end
 ---@param lines string[]
 ---@param csi   Celeste.Comment.CommentStringInfo
 ---@param range Celeste.Comment.Range4
----@param opts? Celeste.Comment.ExecutionOpts
+---@param opts? Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 function H.make_block_comment_edits(lines, csi, range, opts)
   local n = #lines
@@ -1618,7 +1618,7 @@ end
 ---@param lines string[]
 ---@param csi   Celeste.Comment.CommentStringInfo
 ---@param range Celeste.Comment.Range4
----@param opts? Celeste.Comment.ExecutionOpts
+---@param opts? Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 function H.make_block_partial_edits(lines, csi, range, opts)
   local n = #lines
@@ -1810,7 +1810,7 @@ end
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cfg?   Celeste.Comment.Opts
 ---@param action Celeste.Comment.Action
----@param opts?  Celeste.Comment.ExecutionOpts
+---@param opts?  Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 ---@return Celeste.Comment.BlockCommentInfo?
 function H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
@@ -2062,7 +2062,7 @@ end
 ---@param range  Celeste.Comment.Range4
 ---@param motion Celeste.Comment.Motion
 ---@param cursor vim.Pos
----@param opts?  Celeste.Comment.ExecutionOpts
+---@param opts?  Celeste.Comment.InvokeCtx
 function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, opts)
   opts = opts or {}
   local edits ---@type Celeste.Comment.TextEdits
@@ -2087,7 +2087,7 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
     edits = edits,
     comment_info = info,
     state_track = opts.state_track,
-    execution_opts = opts,
+    invoke_ctx = opts,
   }
 
   H.invoke_pre_commit_chainably(ctx)
@@ -2501,7 +2501,7 @@ end
 ---@param ctype  Celeste.Comment.CommentType
 ---@param action Celeste.Comment.Action
 ---@param motion Celeste.Comment.Motion
----@param opts?  Celeste.Comment.ExecutionOpts
+---@param opts?  Celeste.Comment.InvokeCtx
 function H.make_action_range(cursor, range, ctype, action, motion, opts)
   if H.is_disabled({ check_modifiable = true }) then return end
   opts = opts or {}
@@ -2524,7 +2524,7 @@ end
 function M.track_state() H.state_track = H.make_state_track() end
 
 ---@param ctype Celeste.Comment.CommentType
----@param opts? Celeste.Comment.ExecutionOpts
+---@param opts? Celeste.Comment.InvokeCtx
 ---@return fun():string
 function H.make_operator(ctype, opts)
   opts = opts or {}
