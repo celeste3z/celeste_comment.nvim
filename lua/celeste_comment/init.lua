@@ -5,8 +5,9 @@ local H = {}
 
 ---@alias Celeste.Comment.Motion 'line'|'char'|'block'
 
+---@alias Celeste.Comment.Range2 [integer, integer] 0-indexed
 ---@alias Celeste.Comment.Range3 [integer, integer, integer] 0-indexed
----@alias Celeste.Comment.Range4 [integer, integer, integer, integer] 0-indexed { start_row, start_col, end_row, end_col }
+---@alias Celeste.Comment.Range4 [integer, integer, integer, integer] 0-indexed
 
 ---@enum Celeste.Comment.CommentType
 M.CMT = {
@@ -49,7 +50,7 @@ M.FBK2BLOCK = {
 ---@enum Celeste.Comment.KeepSelFlag
 M.KEEP_SEL_FLAG = {
   --- Do not restore the visual selection.
-  kNone = 0,
+  kNever = 0,
   --- Restore the selection with precise per-edit tracking.
   kAccurate = 1,
   --- Extend the selection to cover the just-added block comment markers.
@@ -61,7 +62,7 @@ M.KEEP_SEL_FLAG = {
 }
 
 H.KEEP_SEL_MAP = {
-  never = 0,
+  never = M.KEEP_SEL_FLAG.kNever,
   accurate = M.KEEP_SEL_FLAG.kAccurate,
   expand_block = M.KEEP_SEL_FLAG.kExpandBlock,
   expand_line = M.KEEP_SEL_FLAG.kExpandLine,
@@ -250,7 +251,7 @@ H.state_track = nil
 ---@type Celeste.Comment.Opts
 H.config = {
   keep_cursor               = true,
-  keep_selection            = M.KEEP_SEL_FLAG.kNone,
+  keep_selection            = M.KEEP_SEL_FLAG.kNever,
   insert_space              = true,
   line_comment_no_indent    = false,
   case_insensitive          = false,
@@ -298,7 +299,15 @@ H.config = {
   }
 }
 
-local log_level_to_name = {
+local CHAR_CODE = {
+  TAB     = 9,  -- \t
+  SPACE   = 32, -- (space)
+  COMMA   = 44, -- ,
+  UPPER_A = 65, -- A
+  UPPER_Z = 90, -- Z
+}
+
+local LOG_LEVEL2NAME = {
   [vim.log.levels.TRACE] = "trace",
   [vim.log.levels.DEBUG] = "debug",
   [vim.log.levels.INFO]  = "info",
@@ -307,8 +316,8 @@ local log_level_to_name = {
 }
 -- stylua: ignore end
 
-H.__has_nvim_012 = vim.fn.has("nvim-0.12") == 1
-H.__has_nvim_013 = vim.fn.has("nvim-0.13") == 1
+local HAS_NVIM_012 = vim.fn.has("nvim-0.12") == 1
+local HAS_NVIM_013 = vim.fn.has("nvim-0.13") == 1
 
 ---TODO: delete this if we drop support for nvim-0.12
 ---@diagnostic disable
@@ -354,7 +363,7 @@ do
     ---@param col integer 0-indexed
     function H.make_pos(buf, row, col) return vim.pos(buf, row, col) end
 
-    if H.__has_nvim_013 then
+    if HAS_NVIM_013 then
       ---@param pos vim.Pos
       ---@return [integer, integer]
       function H.pos_to_cursor(pos) return pos:to_cursor() end
@@ -386,14 +395,14 @@ end
 
 ---@param level vim.log.levels
 ---@return boolean
-function H.should_log(level) return level >= H.config.log_level and H.__has_nvim_013 end
+function H.should_log(level) return level >= H.config.log_level and HAS_NVIM_013 end
 
 ---@param level vim.log.levels
 ---@vararg any
 function H.log(level, ...)
   if not H.should_log(level) then return end
-  if not H._logger then H._logger = vim.log.new({ name = "celeste_comment", level = H.config.log_level }) end
-  if H._logger then H._logger[log_level_to_name[level]](...) end
+  if not H.logger then H.logger = vim.log.new({ name = "celeste_comment", level = H.config.log_level }) end
+  if H.logger then H.logger[LOG_LEVEL2NAME[level]](...) end
 end
 ---@diagnostic enable
 
@@ -535,7 +544,7 @@ H.comment_string_confs = {
 function H.is_disabled(opt)
   opt = opt or {}
   local chunks = { { "celeste_comment.nvim", "DiagnosticSignHint" } }
-  if not H.__has_nvim_012 then
+  if not HAS_NVIM_012 then
     chunks[#chunks + 1] = { " requires nvim-0.12", "WarningMsg" }
   elseif vim.g.celeste_comment_disable == true or vim.b.celeste_comment_disable == true then
     chunks[#chunks + 1] = { " disabled", "WarningMsg" }
@@ -551,12 +560,12 @@ end
 ---@return boolean
 function H.is_visual() return vim.fn.mode():match("[vV\22]") ~= nil end
 
----@param v string|number
+---@param v string|integer
 ---@param map table<string, integer>
 ---@param name string
 ---@return integer flags
 ---@return string? error
-function H.coerce_flags(v, map, name)
+function H.normalize_flags(v, map, name)
   local flags = 0
 
   if type(v) == "number" then
@@ -580,7 +589,7 @@ end
 ---@param cfg Celeste.Comment.Opts
 ---@return Celeste.Comment.Opts
 function H.normalize_config(cfg)
-  cfg.keep_selection = H.coerce_flags(cfg.keep_selection, H.KEEP_SEL_MAP, "keep_selection")
+  cfg.keep_selection = H.normalize_flags(cfg.keep_selection, H.KEEP_SEL_MAP, "keep_selection")
   return cfg
 end
 
@@ -608,12 +617,12 @@ end
 ---@param comments string
 ---@return string[]
 function H.split_comments_parts(comments)
-  if not H.__COMMENTS_PARTS_PATTERN then
+  if not H.COMMENTS_PARTS_PATTERN then
     local P, C, Ct = vim.lpeg.P, vim.lpeg.C, vim.lpeg.Ct
     local part = C((P("\\") * P(1) + (1 - P(","))) ^ 0)
-    H.__COMMENTS_PARTS_PATTERN = Ct(part * (P(",") * part) ^ 0)
+    H.COMMENTS_PARTS_PATTERN = Ct(part * (P(",") * part) ^ 0)
   end
-  return H.__COMMENTS_PARTS_PATTERN:match(comments)
+  return H.COMMENTS_PARTS_PATTERN:match(comments)
 end
 
 ---@class Celeste.Comment.ExtractCommentsRes
@@ -1054,8 +1063,7 @@ function H.match_line_comment(line, row, csi, opts)
     local suffix = #trcs_esc > 0 and "(.-)()" .. trcs_esc .. "()%s*$" or "(.-)%s*$"
     local s, _e, p1, p2, content, p3, p4 = line:find("^%s*()" .. tlcs_esc .. "()" .. suffix)
     if s then
-      local real_idx = idx
-      if opts.check_only then return { matched = true, idx = real_idx } end
+      if opts.check_only then return { matched = true, idx = idx } end
 
       local olcs, orcs = p.tout[1], p.tout[2]
 
@@ -1064,17 +1072,21 @@ function H.match_line_comment(line, row, csi, opts)
         local matched = H.match_byte(line, p2 - 1, olcs, #p.traw[1], 1, csi.ci)
         lcs_pos = { row, p1 - 1, p2 + matched - 2 }
       end
+
       local rcs_pos
       if trcs_esc ~= "" and p3 then
         local matched = H.match_byte(line, p3 - 2, orcs, 0, -1, csi.ci)
         local rcs_start = p3 - matched
         rcs_pos = { row, rcs_start - 1, p4 - 2 }
       end
-      local res = { matched = true, idx = real_idx, lcs_pos = lcs_pos, rcs_pos = rcs_pos }
+
+      local res = { matched = true, idx = idx, lcs_pos = lcs_pos, rcs_pos = rcs_pos }
       if opts.check_will_blank then res.will_blank = content:match("^%s*$") ~= nil end
+
       return res
     end
   end
+
   return { matched = false }
 end
 
@@ -1083,7 +1095,7 @@ end
 ---@param indent_size     integer
 ---@return integer
 function H.next_visible_column(cur_visible_col, byte, indent_size)
-  if byte == 9 then return cur_visible_col + indent_size - (cur_visible_col % indent_size) end
+  if byte == CHAR_CODE.TAB then return cur_visible_col + indent_size - (cur_visible_col % indent_size) end
   return cur_visible_col + 1
 end
 
@@ -1106,7 +1118,7 @@ function H.spaces_diff(a, alen, b, blen)
 
   local a_spaces_cnt, a_tabs_count = 0, 0
   for j = i + 1, alen do
-    if a:byte(j) == 32 then
+    if a:byte(j) == CHAR_CODE.SPACE then
       a_spaces_cnt = a_spaces_cnt + 1
     else
       a_tabs_count = a_tabs_count + 1
@@ -1115,7 +1127,7 @@ function H.spaces_diff(a, alen, b, blen)
 
   local b_spaces_cnt, b_tabs_count = 0, 0
   for j = i + 1, blen do
-    if b:byte(j) == 32 then
+    if b:byte(j) == CHAR_CODE.SPACE then
       b_spaces_cnt = b_spaces_cnt + 1
     else
       b_tabs_count = b_tabs_count + 1
@@ -1135,9 +1147,9 @@ function H.spaces_diff(a, alen, b, blen)
       and 0 <= b_spaces_cnt - 1
       and b_spaces_cnt - 1 < #a
       and b_spaces_cnt < #b
-      and b:byte(b_spaces_cnt + 1) ~= 32
-      and a:byte(b_spaces_cnt) == 32
-      and a:byte(#a) == 44
+      and b:byte(b_spaces_cnt + 1) ~= CHAR_CODE.SPACE
+      and a:byte(b_spaces_cnt) == CHAR_CODE.SPACE
+      and a:byte(#a) == CHAR_CODE.COMMA
     then
       looks_like_alignment = true
     end
@@ -1187,9 +1199,9 @@ function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
     local cur_ln_tab_cnt = 0
     for j = 1, cur_ln_len do
       local char_code = cur_ln:byte(j)
-      if char_code == 9 then
+      if char_code == CHAR_CODE.TAB then
         cur_ln_tab_cnt = cur_ln_tab_cnt + 1
-      elseif char_code == 32 then
+      elseif char_code == CHAR_CODE.SPACE then
         cur_ln_spc_cnt = cur_ln_spc_cnt + 1
       else
         cur_ln_has_content = true
@@ -1310,7 +1322,7 @@ function H.skip_whitespace(str, pos, max, dir)
   local to = dir == 1 and math.min(limit, len) or math.max(limit, 1)
   for i = pos, to, dir do
     local b = str:byte(i)
-    if b ~= 32 and b ~= 9 then break end
+    if b ~= CHAR_CODE.SPACE and b ~= CHAR_CODE.TAB then break end
     pos = i + dir
   end
   return pos
@@ -1332,8 +1344,8 @@ function H.match_byte(sa, sa_pos, sb, sb_pos, dir, ci)
   for i = sa_pos, to, dir do
     local la, lb = sa:byte(i + 1), sb:byte(sb_pos + step + 1)
     if ci then
-      if la >= 65 and la <= 90 then la = la + 32 end
-      if lb >= 65 and lb <= 90 then lb = lb + 32 end
+      if la >= CHAR_CODE.UPPER_A and la <= CHAR_CODE.UPPER_Z then la = la + 32 end
+      if lb >= CHAR_CODE.UPPER_A and lb <= CHAR_CODE.UPPER_Z then lb = lb + 32 end
     end
     if la ~= lb then return step end
     step = step + 1
@@ -1646,32 +1658,48 @@ end
 function H.shrink_region(lines, range)
   local sr, sc, er, ec = range[1], range[2], range[3], range[4]
   if sr > er or (sr == er and sc > ec) or #lines == 0 then return end
-  local fr, fc
 
-  for i = 1, #lines do
-    local line = lines[i]
-    local start = i == 1 and math.min(sc + 1, #line + 1) or 1
-    local pos = line:find("%S", start)
-    if pos then
-      fr, fc = sr + i - 1, pos - 1
-      break
+  --- Shrink from left: find first non-whitespace position
+  ---@return integer? lrow
+  ---@return integer? lcol
+  local function shrink_left()
+    for i = 1, #lines do
+      local line = lines[i]
+      local start = i == 1 and math.min(sc + 1, #line + 1) or 1
+      local pos = line:find("%S", start)
+      if pos then return sr + i - 1, pos - 1 end
     end
   end
-  if not fr then return end
 
-  local fi = fr - sr + 1
-  for i = #lines, fi, -1 do
-    local line = lines[i]
-    if i ~= fi and i ~= #lines then
-      local e = line:match("^.*()%S")
-      if e then return { fr, fc, sr + i - 1, e - 1 } end
-    else
-      local mpos = i == fi and fc + 1 or 1
-      local epos = i == #lines and math.min(ec + 1, #line) or #line
-      local last = H.skip_whitespace(line, epos, epos - mpos + 1, -1)
-      if last >= mpos then return { fr, fc, sr + i - 1, last - 1 } end
+  --- Shrink from right: find last non-whitespace position
+  ---@param lrow integer
+  ---@param lcol integer
+  ---@return integer? rrow
+  ---@return integer? rcol
+  local function shrink_right(lrow, lcol)
+    local fi = lrow - sr + 1
+    for i = #lines, fi, -1 do
+      local line = lines[i]
+      local mpos = (i == fi) and (lcol + 1) or 1
+      local epos = (i == #lines) and math.min(ec + 1, #line) or #line
+
+      if i == fi or i == #lines then
+        local last = H.skip_whitespace(line, epos, epos - mpos + 1, -1)
+        if last >= mpos then return sr + i - 1, last - 1 end
+      else
+        local e = line:match("^.*()%S")
+        if e then return sr + i - 1, e - 1 end
+      end
     end
   end
+
+  local lrow, lcol = shrink_left()
+  if not lrow or not lcol then return end
+
+  local rrow, rcol = shrink_right(lrow, lcol)
+  if not rrow or not rcol then return end
+
+  return { lrow, lcol, rrow, rcol }
 end
 
 ---@param lines  string[]
@@ -1681,60 +1709,74 @@ end
 ---@param motion Celeste.Comment.Motion
 ---@return Celeste.Comment.BlockCommentInfo?
 function H.match_block_comment(lines, shrunk, range, csi, motion)
-  local start_row = shrunk[1]
+  local loff = shrunk[1]
   local scol, ecol = shrunk[2], shrunk[4]
-  local n = shrunk[3] - start_row + 1
-  local fi = start_row - range[1] + 1
+  local n = shrunk[3] - loff + 1
+  local fi = loff - range[1] + 1
   local l1 = lines[fi]
   local ln = lines[fi + n - 1]
 
-  for _, v in ipairs(csi.pairs) do
-    local tlcs_esc, trcs_esc = v.tesc[1], v.tesc[2]
-    local tlcs_len = #v.traw[1]
-    local trcs_len = #v.traw[2]
-    local olcs, orcs = v.tout[1], v.tout[2]
+  ---@param p Celeste.Comment.CommentStringInfo.Pairs
+  ---@return Celeste.Comment.Range2? lcs_range
+  ---@return Celeste.Comment.Range2? rcs_range
+  local function match_line_motion(p)
+    local tlcs_esc, trcs_esc = p.tesc[1], p.tesc[2]
+    local tlcs_len, trcs_len = #p.traw[1], #p.traw[2]
+    local olcs, orcs = p.tout[1], p.tout[2]
     local pad_rcs = #orcs - trcs_len
-    local slcs, elcs, srcs, ercs
-    local matched = true
 
-    if motion ~= "char" then
-      local _, e = l1:find("^%s*" .. tlcs_esc)
-      if not e then matched = false end
-      if matched then
-        slcs = e - tlcs_len + 1
-        local mb = H.match_byte(l1, slcs - 1 + tlcs_len, olcs, tlcs_len, 1, csi.ci)
-        elcs = slcs + tlcs_len + mb - 1
-        srcs, ercs = ln:find(trcs_esc .. "%s*$")
-        if not srcs then matched = false end
-      end
-      if matched then
-        ercs = srcs + trcs_len - 1
-        srcs = srcs - math.min(H.match_byte(ln, srcs - pad_rcs - 1, orcs, 0, 1, csi.ci), pad_rcs)
-      end
-    else
-      local m = H.match_byte(l1, scol, olcs, 0, 1, csi.ci)
-      if m < tlcs_len then matched = false end
-      if matched then
-        slcs = scol + 1
-        elcs = scol + m
-        local ec = ecol + 1
-        local srcs_tmp = ec - trcs_len + 1
-        if srcs_tmp < 1 or srcs_tmp > #ln then matched = false end
-        if matched then
-          if H.match_byte(ln, srcs_tmp - 1, v.traw[2], 0, 1, csi.ci) < trcs_len then matched = false end
-        end
-        if matched then
-          if n == 1 and srcs_tmp <= slcs then matched = false end
-        end
-        if matched then
-          srcs = srcs_tmp - math.min(H.match_byte(ln, math.max(srcs_tmp - pad_rcs - 1, 0), orcs, 0, 1, csi.ci), pad_rcs)
-          ercs = ec
-        end
-      end
-    end
+    local _, e = l1:find("^%s*" .. tlcs_esc)
+    if not e then return end
 
-    if matched then
-      return { lcs_pos = { start_row, slcs - 1, elcs - 1 }, rcs_pos = { start_row + n - 1, srcs - 1, ercs - 1 } }
+    local slcs = e - tlcs_len + 1
+    local mb = H.match_byte(l1, slcs - 1 + tlcs_len, olcs, tlcs_len, 1, csi.ci)
+    local elcs = slcs + tlcs_len + mb - 1
+
+    local srcs, ercs = ln:find(trcs_esc .. "%s*$")
+    if not srcs then return end
+
+    ercs = srcs + trcs_len - 1
+    srcs = srcs - math.min(H.match_byte(ln, srcs - pad_rcs - 1, orcs, 0, 1, csi.ci), pad_rcs)
+
+    return { slcs, elcs }, { srcs, ercs }
+  end
+
+  ---@param p Celeste.Comment.CommentStringInfo.Pairs
+  ---@return Celeste.Comment.Range2? lcs_range
+  ---@return Celeste.Comment.Range2? rcs_range
+  local function match_char_motion(p)
+    local tlcs_len, trcs_len = #p.traw[1], #p.traw[2]
+    local olcs, orcs = p.tout[1], p.tout[2]
+    local pad_rcs = #orcs - trcs_len
+
+    local m = H.match_byte(l1, scol, olcs, 0, 1, csi.ci)
+    if m < tlcs_len then return end
+
+    local slcs = scol + 1
+    local elcs = scol + m
+
+    local ec = ecol + 1
+    local srcs = ec - trcs_len + 1
+    if srcs < 1 or srcs > #ln then return end
+    if H.match_byte(ln, srcs - 1, p.traw[2], 0, 1, csi.ci) < trcs_len then return end
+    if n == 1 and srcs <= slcs then return end
+
+    local ercs = ec
+    srcs = srcs - math.min(H.match_byte(ln, math.max(srcs - pad_rcs - 1, 0), orcs, 0, 1, csi.ci), pad_rcs)
+
+    return { slcs, elcs }, { srcs, ercs }
+  end
+
+  local matcher = (motion == "char") and match_char_motion or match_line_motion
+
+  for _, p in ipairs(csi.pairs) do
+    local lcsr, rcsr = matcher(p)
+
+    if lcsr and rcsr then
+      return {
+        lcs_pos = { loff, lcsr[1] - 1, lcsr[2] - 1 },
+        rcs_pos = { loff + n - 1, rcsr[1] - 1, rcsr[2] - 1 },
+      }
     end
   end
 end
@@ -1910,7 +1952,7 @@ function H.restore_state(ctx)
   local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
-  if cfg.keep_selection ~= M.KEEP_SEL_FLAG.kNone then
+  if cfg.keep_selection ~= M.KEEP_SEL_FLAG.kNever then
     local only_change_marks = (bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kOnlyChangeMarks) ~= 0)
 
     if state.mode == "\22" then
@@ -1991,7 +2033,7 @@ end
 function H.compute_cursor_state(ctx)
   local state = ctx.state_track
   if not state then return end
-  if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL_FLAG.kNone then return end
+  if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL_FLAG.kNever then return end
   state.adj_cursor = H.compute_cursor_pos(state.adj_cursor, ctx)
   state.adj_endpos = H.compute_cursor_pos(state.adj_endpos, ctx)
 end
@@ -2504,7 +2546,7 @@ function H.make_operator(ctype, opts)
     if H.is_disabled({ check_modifiable = true }) then return "" end
     H.state_track = H.make_state_track()
 
-    if H.__has_nvim_013 then
+    if HAS_NVIM_013 then
       vim.o.operatorfunc = f
     else
       _G.__celeste_comment_operator_func = f
@@ -2520,7 +2562,7 @@ function M.setup(config)
   config = vim.tbl_deep_extend("force", vim.deepcopy(H.config), config or {})
   vim.validate("keep_cursor", config.keep_cursor, "boolean", true, "boolean")
   vim.validate("keep_selection", config.keep_selection, function(v)
-    local _, err = H.coerce_flags(v, H.KEEP_SEL_MAP, "keep_selection")
+    local _, err = H.normalize_flags(v, H.KEEP_SEL_MAP, "keep_selection")
     return err == nil, err
   end, true, "string|number")
   vim.validate("insert_space", config.insert_space, "boolean", true, "boolean")

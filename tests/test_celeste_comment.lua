@@ -1098,9 +1098,9 @@ T["base"]["resolve"] = function()
   vim.api.nvim_buf_delete(buf, { force = true })
 end
 
-T["base"]["coerce_flags"] = function()
+T["base"]["normalize_flags"] = function()
   local map = { a = 1, b = 2, c = 4 }
-  local f = function(v) return { H.coerce_flags(v, map, "test") } end
+  local f = function(v) return { H.normalize_flags(v, map, "test") } end
 
   eq(f("a"), { 1 })
   eq(f("b"), { 2 })

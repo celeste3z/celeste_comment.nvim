@@ -305,30 +305,26 @@ See `:help celeste_comment-configuration` for details.
 
 ## What it doesn't do
 
-- **Cover all cases** — This plugin's aim is to handle the vast majority of
-  common scenarios, not every possible case. Known textobject edge cases and
-  unusual comment patterns are acknowledged but not planned to fix.
+- **Cover all cases** — Prioritizes common scenarios over edge cases.
+  Some edge cases may not be considered for fixing.
 - **Doc comment**
 - **Header comment**
 
 ## Limitations
 
-- **Auto-detect textobject accuracy** — `textobject_auto()` first checks
-  whether the current line contains a line comment. In languages like Lua
-  where `--` is used for both line comments (`--`) and block comments
-  (`--[[ ]]`), a line starting with `--` may be misidentified as a line
-  comment, leading to incorrect textobject selection.
+- **Ambiguous comment syntax** — Languages where line and block comments
+  share the same prefix (e.g., Lua's `--` / `--[[ ]]`) may cause
+  `textobject_auto()` to misidentify block comments as line comments.
+  Use `line_textobject` or `block_textobject` explicitly instead.
 
-- **Regex-based textobject range** — Pattern matching can produce false
-  positives in certain scenarios. For example, comment-like tokens inside
-  strings may be mistakenly treated as actual comments. Additionally, the
-  scan range is capped by `block_textobj_nlines` (default 200), so
-  textobject detection may not work beyond that limit.
+- **Textobject limitations**
+  - Comment-like tokens inside strings or literals may be mistakenly
+    detected as comments (e.g., `char *s = "// not a comment";`).
+  - Scan range is limited to `block_textobj_nlines` (default 200 lines).
 
-- **Visual block mode (`<C-v>`)** — Selection is treated as linewise; the
-  entire selected lines are block-commented rather than inserting comment
-  markers per column. For column-wise comment operations, consider using
-  a plugin like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
+- **Visual block mode (`<C-v>`)** — Comments are applied per-line,
+  not per-column. For column-wise commenting, use a multicursor plugin
+  like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
 
 ## Future work
 
