@@ -2549,8 +2549,8 @@ function H.make_operator(ctype, opts)
     if HAS_NVIM_013 then
       vim.o.operatorfunc = f
     else
-      _G.__celeste_comment_operator_func = f
-      vim.o.operatorfunc = "v:lua.__celeste_comment_operator_func"
+      H.operator = f
+      vim.o.operatorfunc = "v:lua.require'celeste_comment'.H.operator"
     end
     return "g@" .. s
   end
