@@ -33,7 +33,10 @@ local get_cursor = function() return child.api.nvim_win_get_cursor(0) end
 local feed = function(...) child.type_keys(...) end
 
 local set_config = function(opts)
-  child.b.celeste_comment_config = vim.tbl_deep_extend("force", child.b.celeste_comment_config or {}, opts or {})
+  child.lua_func(
+    function(o) vim.b.celeste_comment_config = vim.tbl_deep_extend("force", vim.b.celeste_comment_config or {}, o or {}) end,
+    opts
+  )
 end
 
 local selection = function(frow, fcol, trow, tcol, mode)
@@ -3959,7 +3962,7 @@ T["keep_selection"] = new_set({
   hooks = {
     pre_case = function()
       child.lua_func(function()
-        vim.b.celeste_comment_config = { keep_selection = "accurate" }
+        vim.b.celeste_comment_config = { keep_selection = "adjust | keep_visual" }
         vim.bo.filetype = "cpp"
         vim.bo.tabstop = 2
       end)
@@ -4131,7 +4134,7 @@ T["keep_selection"]["works with multibyte marker and selection=exclusive"] = fun
   child.bo.filetype = "unknown"
   child.bo.tabstop = 2
   child.b.celeste_comment_block_commentstring = "※%s※"
-  child.b.celeste_comment_config = { keep_selection = "accurate" }
+  child.b.celeste_comment_config = { keep_selection = "adjust | keep_visual" }
   set_lines({ "  hello你好  tail" })
   selection(1, 2, 1, 13)
   feed("d")
@@ -4167,7 +4170,7 @@ T["keep_selection"]["works with multibyte marker and selection=exclusive"] = fun
 end
 
 T["keep_selection"]["expand_block includes block comment markers"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
 
   -- with selection == 'inclusive'
   child.o.selection = "inclusive"
@@ -4233,7 +4236,7 @@ end
 T["keep_selection"]["expand_block does not expand fallback-to-block"] = function()
   child.lua_func(function()
     vim.b.celeste_comment_config = {
-      keep_selection = "expand_block",
+      keep_selection = "expand_block | keep_visual",
       cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
       fallback_to_block = "if_line_cms_wrapped",
     }
@@ -4262,7 +4265,7 @@ end
 T["keep_selection"]["expand_block does not expand wrapped line comment"] = function()
   child.lua_func(function()
     vim.b.celeste_comment_config = {
-      keep_selection = "expand_block",
+      keep_selection = "expand_block | keep_visual",
       cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
       fallback_to_block = "never", -- use the wrapped line comment directly (ctype=kLine)
     }
@@ -4275,7 +4278,7 @@ T["keep_selection"]["expand_block does not expand wrapped line comment"] = funct
   selection(1, 2, 1, 6) -- charwise "hello"
   feed("gc")
   eq(get_lines(), { "  <# hello world #>", "  second" })
-  eq(get_selection(), { { 0, 5, 0, 9 }, "v" }) -- content-only "hello", not expanded
+  eq(get_selection(), { { 0, 2, 0, 6 }, "v" }) -- expand_block is block-only; keep_visual restores original
 end
 
 T["keep_selection"]["o-swapped charwise keeps cursor at the start"] = function()
@@ -4292,7 +4295,7 @@ T["keep_selection"]["o-swapped charwise keeps cursor at the start"] = function()
   eq(get_selection(), { { 1, 5, 0, 5 }, "v" })
 
   -- expand_block: cursor stays at the LHS marker
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
   feed("<Esc>")
   set_lines(lines)
   selection(1, 2, 2, 5)
@@ -4365,7 +4368,7 @@ T["keep_selection"]["o-swapped charwise keeps cursor at the start with selection
   eq(get_selection(), { { 1, 5, 0, 5 }, "v" })
 
   -- expand_block
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
   feed("<Esc>")
   set_lines(lines)
   selection(1, 2, 2, 5)
@@ -4425,56 +4428,9 @@ T["keep_selection"]["backward V selection restores cursor at the top with select
   eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
 end
 
-T["keep_selection"]["only_change_marks exits visual mode"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "only_change_marks" } end)
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 0, 16 }, "v" })
-  feed("<Esc>")
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 0, 16 }, "v" })
-  feed("<Esc>")
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 2, 0, "V")
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  // second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 1, 0 }, "V" })
-  feed("<Esc>")
-end
-
-T["keep_selection"]["expand_block | only_change_marks exits visual mode"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | only_change_marks" } end)
-
-  child.o.selection = "inclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(child.fn.mode(), "n")
-
-  feed("gv")
-  eq(get_selection(), { { 0, 2, 0, 18 }, "v" })
-  feed('"zy')
-  eq(child.fn.getreg("z"), "/* hello world */")
-end
-
 T["keep_selection"]["expand_line o-swapped and backward V"] = function()
   child.bo.filetype = "cpp"
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_line" } end)
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_line | keep_visual" } end)
   local lines = { "  first line", "  second line" }
 
   -- o-swapped charwise: v mode → o → gc → V mode
@@ -4507,106 +4463,118 @@ T["keep_selection"]["expand_line o-swapped and backward V"] = function()
   eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
 end
 
-T["keep_selection"]["expand_line forces V mode for line comments"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_line" } end)
+-- Equivalence classes: cover all 16 flag combinations, verifying per-axis
+-- (Line / Block) behavior matches the "-+ev" decomposition table.
+--
+--   shorthand: a = adjust, b = expand_block, l = expand_line, v = keep_visual
+--   axis code: - (none) | + (adjust) | +e (expand) | -v (keep_visual)
+--              | +v (adjust+keep) | +ev (expand+keep)
+local KEEP_SEL_EQ = {
+  { "never", "never", "-", "-" },
+  { "a", "adjust", "+", "+" },
+  { "b", "expand_block", "-", "+e" },
+  { "ab", "adjust | expand_block", "+", "+e" },
+  { "l", "expand_line", "+e", "-" },
+  { "al", "adjust | expand_line", "+e", "+" },
+  { "bl", "expand_block | expand_line", "+e", "+e" },
+  { "abl", "adjust | expand_block | expand_line", "+e", "+e" },
+  { "v", "keep_visual", "-v", "-v" },
+  { "av", "adjust | keep_visual", "+v", "+v" },
+  { "bv", "expand_block | keep_visual", "-v", "+ev" },
+  { "abv", "adjust | expand_block | keep_visual", "+v", "+ev" },
+  { "lv", "expand_line | keep_visual", "+ev", "-v" },
+  { "alv", "adjust | expand_line | keep_visual", "+ev", "+v" },
+  { "blv", "expand_block | expand_line | keep_visual", "+ev", "+ev" },
+  { "ablv", "adjust | expand_block | expand_line | keep_visual", "+ev", "+ev" },
+}
 
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  second" })
-  eq(get_selection(), { { 0, 5, 0, 16 }, "V" })
-  feed("<Esc>")
+local KEEP_SEL_EQ_OPS = {
+  {
+    name = "v mode gc",
+    axis = "line",
+    cmd = "gc",
+    select = function() selection(1, 2, 1, 13) end,
+    lines = { "  // hello world", "  second" },
+    cursor = { 1, 15 },
+    content = { { 0, 5, 0, 16 }, "v" },
+    original = { { 0, 2, 0, 13 }, "v" },
+    expand = { { 0, 5, 0, 16 }, "V" },
+  },
+  {
+    name = "v mode gb",
+    axis = "block",
+    cmd = "gb",
+    select = function() selection(1, 2, 1, 13) end,
+    lines = { "  /* hello world */", "  second" },
+    cursor = { 1, 16 },
+    content = { { 0, 5, 0, 16 }, "v" },
+    original = { { 0, 2, 0, 13 }, "v" },
+    expand = { { 0, 2, 0, 18 }, "v" },
+    check_yank = "/* hello world */",
+  },
+  {
+    name = "V mode gc",
+    axis = "line",
+    cmd = "gc",
+    select = function() selection(1, 2, 2, 0, "V") end,
+    lines = { "  // hello world", "  // second" },
+    cursor = { 2, 0 },
+    content = { { 0, 5, 1, 0 }, "V" },
+    original = { { 0, 2, 1, 0 }, "V" },
+    expand = { { 0, 5, 1, 0 }, "V" },
+  },
+  {
+    name = "V mode gb",
+    axis = "block",
+    cmd = "gb",
+    select = function() selection(1, 2, 2, 0, "V") end,
+    lines = { "  /* hello world", "  second */" },
+    cursor = { 2, 0 },
+    content = { { 0, 5, 1, 0 }, "V" },
+    original = { { 0, 2, 1, 0 }, "V" },
+    expand = { { 0, 5, 1, 0 }, "V" },
+  },
+}
 
+local function keep_sel_run_equiv(flags, code, op)
+  set_config({ keep_selection = flags })
   set_lines({ "  hello world", "  second" })
-  selection(1, 2, 2, 0, "V")
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  // second" })
-  eq(get_selection(), { { 0, 5, 1, 0 }, "V" })
-  feed("<Esc>")
+  op.select()
+  feed(op.cmd)
+  eq(get_lines(), op.lines)
 
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(get_selection(), { { 0, 5, 0, 16 }, "v" })
-  feed("<Esc>")
+  if code == "-" then
+    eq(get_cursor(), op.cursor)
+    eq(child.fn.mode(), "n")
+    return
+  end
+
+  if code == "-v" then
+    eq(get_selection(), op.original)
+    return
+  end
+
+  if code == "+" or code == "+e" then
+    eq(child.fn.mode(), "n")
+    feed("gv")
+  end
+
+  local sel = (code == "+e" or code == "+ev") and op.expand or op.content
+  eq(get_selection(), sel)
+  if op.check_yank and (code == "+e" or code == "+ev") then
+    feed('"zy')
+    eq(child.fn.getreg("z"), op.check_yank)
+  end
 end
 
-T["keep_selection"]["expand_line | only_change_marks exits visual mode"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_line | only_change_marks" } end)
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 0, 16 }, "V" })
-  feed("<Esc>")
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 2, 0, "V")
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  // second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 1, 0 }, "V" })
-  feed("<Esc>")
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 0, 16 }, "v" })
-  feed("<Esc>")
-end
-
-T["keep_selection"]["expand_line | expand_block"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_line | expand_block" } end)
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  second" })
-  eq(get_selection(), { { 0, 5, 0, 16 }, "V" })
-  feed("<Esc>")
-
-  child.o.selection = "inclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(get_selection(), { { 0, 2, 0, 18 }, "v" })
-  feed('"zy')
-  eq(child.fn.getreg("z"), "/* hello world */")
-end
-
-T["keep_selection"]["expand_line | expand_block | only_change_marks"] = function()
-  child.lua_func(
-    function() vim.b.celeste_comment_config = { keep_selection = "expand_line | expand_block | only_change_marks" } end
-  )
-
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gc")
-  eq(get_lines(), { "  // hello world", "  second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 5, 0, 16 }, "V" })
-  feed("<Esc>")
-
-  child.o.selection = "inclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(1, 2, 1, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(child.fn.mode(), "n")
-  feed("gv")
-  eq(get_selection(), { { 0, 2, 0, 18 }, "v" })
-  feed('"zy')
-  eq(child.fn.getreg("z"), "/* hello world */")
+T["keep_selection"]["equivalence"] = new_set()
+for _, spec in ipairs(KEEP_SEL_EQ) do
+  local name, flags, line, block = spec[1], spec[2], spec[3], spec[4]
+  local cls = new_set({ parametrize = { { line, block } } })
+  for _, op in ipairs(KEEP_SEL_EQ_OPS) do
+    cls[op.name] = function(l, b) keep_sel_run_equiv(flags, op.axis == "line" and l or b, op) end
+  end
+  T["keep_selection"]["equivalence"][name] = cls
 end
 
 -- PreCommitEdits tests ───────────────────────────────────────────────────────

@@ -52,21 +52,21 @@ M.KEEP_SEL_FLAG = {
   --- Do not restore the visual selection.
   kNever = 0,
   --- Restore the selection with precise per-edit tracking.
-  kAccurate = 1,
+  kAdjust = 1,
   --- Extend the selection to cover the just-added block comment markers.
   kExpandBlock = 2,
   --- Force line comments to use V mode for restore.
   kExpandLine = 4,
-  --- Only update marks without staying in visual mode; use `gv` to restore.
-  kOnlyChangeMarks = 8,
+  --- Stay in visual mode after commenting; default is to exit visual.
+  kKeepVisual = 8,
 }
 
 H.KEEP_SEL_MAP = {
   never = M.KEEP_SEL_FLAG.kNever,
-  accurate = M.KEEP_SEL_FLAG.kAccurate,
+  adjust = M.KEEP_SEL_FLAG.kAdjust,
   expand_block = M.KEEP_SEL_FLAG.kExpandBlock,
   expand_line = M.KEEP_SEL_FLAG.kExpandLine,
-  only_change_marks = M.KEEP_SEL_FLAG.kOnlyChangeMarks,
+  keep_visual = M.KEEP_SEL_FLAG.kKeepVisual,
 }
 
 ---@enum Celeste.Comment.Action
@@ -1922,29 +1922,51 @@ function H.make_state_track()
   return state
 end
 
----@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
-function H.post_commit_expand_block(ctx)
-  if bit.band(ctx.cfg.keep_selection, M.KEEP_SEL_FLAG.kExpandBlock) == 0 then return end
-  local st = ctx.state_track
-  if not st or st.mode ~= "v" or ctx.ctype ~= M.CMT.kBlock or ctx.motion ~= "char" then return end
+---@param state Celeste.Comment.StateTrack
+---@param motion Celeste.Comment.Motion
+---@param edits Celeste.Comment.TextEdits
+---@param csi Celeste.Comment.CommentStringInfo
+---@return Celeste.Comment.Range4?
+function H.expand_block(state, motion, edits, csi)
+  if state.mode ~= "v" or motion ~= "char" then return end
 
-  local lcs, rcs = ctx.edits[1], ctx.edits[2]
+  local lcs, rcs = edits[1], edits[2]
   if not lcs or not rcs then return end
-  if lcs.text[1] ~= ctx.csi.olcs or rcs.text[1] ~= ctx.csi.orcs then return end
+  if lcs.text[1] ~= csi.olcs or rcs.text[1] ~= csi.orcs then return end
 
   local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
   local rcs_end = rcs.range[2] + shift + #rcs.text[1]
   if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
 
-  local backward = (st.cursor.row < st.endpos.row) or (st.cursor.row == st.endpos.row and st.cursor.col < st.endpos.col)
+  local backward = (state.cursor.row < state.endpos.row)
+    or (state.cursor.row == state.endpos.row and state.cursor.col < state.endpos.col)
 
-  if backward then
-    st.adj_endpos = H.make_pos(0, rcs.range[1], rcs_end)
-    st.adj_cursor = H.make_pos(0, lcs.range[1], lcs.range[2])
-  else
-    st.adj_endpos = H.make_pos(0, lcs.range[1], lcs.range[2])
-    st.adj_cursor = H.make_pos(0, rcs.range[1], rcs_end)
+  if backward then return { rcs.range[1], rcs_end, lcs.range[1], lcs.range[2] } end
+  return { lcs.range[1], lcs.range[2], rcs.range[1], rcs_end }
+end
+
+---@param state Celeste.Comment.StateTrack
+---@param ks integer
+---@param ctype Celeste.Comment.CommentType
+---@param motion Celeste.Comment.Motion
+---@param edits Celeste.Comment.TextEdits
+---@param csi Celeste.Comment.CommentStringInfo
+---@return Celeste.Comment.Range4? range
+---@return string? mode
+function H.keep_selection_expand(state, ks, ctype, motion, edits, csi)
+  -- not handle C-v mode, use multiple cursor is the right way
+  if state.mode ~= "v" and state.mode ~= "V" then return end
+
+  local mode = state.mode
+  local range = { state.adj_endpos.row, state.adj_endpos.col, state.adj_cursor.row, state.adj_cursor.col }
+
+  if ctype == M.CMT.kLine then
+    if bit.band(ks, M.KEEP_SEL_FLAG.kExpandLine) ~= 0 then return range, "V" end
+  elseif bit.band(ks, M.KEEP_SEL_FLAG.kExpandBlock) ~= 0 then
+    return H.expand_block(state, motion, edits, csi) or range, mode
   end
+
+  if bit.band(ks, M.KEEP_SEL_FLAG.kAdjust) ~= 0 then return range, mode end
 end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
@@ -1952,22 +1974,17 @@ function H.restore_state(ctx)
   local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
-  if cfg.keep_selection ~= M.KEEP_SEL_FLAG.kNever then
-    local only_change_marks = (bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kOnlyChangeMarks) ~= 0)
+  local keep_visual = bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kKeepVisual) ~= 0
 
-    if state.mode == "\22" then
-      -- not handle C-v mode, use multiple cursor is the right way
-      if not only_change_marks then vim.cmd.normal({ "gv", bang = true }) end
-    elseif state.mode == "V" or state.mode == "v" then
-      local mode = state.mode
-      if ctx.ctype == M.CMT.kLine and bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kExpandLine) ~= 0 then mode = "V" end
+  local range, mode = H.keep_selection_expand(state, cfg.keep_selection, ctx.ctype, ctx.motion, ctx.edits, ctx.csi)
+  if range then
+    H.select_range(range, { mode = mode, exit = not keep_visual })
+    return
+  end
 
-      H.select_range(
-        { state.adj_endpos[1], state.adj_endpos[2], state.adj_cursor[1], state.adj_cursor[2] },
-        { mode = mode, exit = only_change_marks }
-      )
-      return
-    end
+  if keep_visual and state.mode then
+    vim.cmd.normal({ "gv", bang = true })
+    return
   end
 
   if cfg.keep_cursor and state.adj_cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.adj_cursor)) end
@@ -2048,7 +2065,7 @@ end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
 function H.invoke_post_commit_chainably(ctx)
-  local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.post_commit_expand_block, H.restore_state }
+  local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.restore_state }
   for _, hook in ipairs(hooks) do
     if vim.is_callable(hook) and hook(ctx) == true then break end
   end

@@ -33,8 +33,8 @@
   hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
   for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - **Line/block comment toggle** -- fully dot-repeatable with count support
-- **Truly accurate keep cursor** -- cursor position tracks each `TextEdit` precisely
-- **Truly accurate keep selection** -- selection range tracks each `TextEdit` precisely in visual mode
+- **Precise keep cursor** -- cursor position tracks each `TextEdit` precisely
+- **Precise keep selection** -- selection range tracks each `TextEdit` precisely in visual mode
 - **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter. e.g. supports
   `JSX/TSX` out of the box
 - **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
@@ -107,9 +107,9 @@ require("celeste_comment").setup()
   keep_cursor            = true,
 
   -- Restore selection after commenting.
-  -- Possible values: "never" | "accurate" | "expand_block" | "expand_line" | "only_change_marks"
-  -- Can also combine, e.g. "expand_line | only_change_marks" which means: force line comments to
-  -- `V` mode and then exit visual mode, you can type `gv` to restore the selection
+  -- Possible values: "never" | "adjust" | "expand_block" | "expand_line" | "keep_visual"
+  -- Can also combine, e.g. "expand_line | keep_visual" which means: force line comments to
+  -- `V` mode and stay in visual mode
   -- See `:help celeste_comment-config-keep_selection` for more details
   keep_selection         = "never",
 

@@ -1,5 +1,5 @@
 *celeste_comment.txt*                 MIT License Copyright (c) 2026 celeste3z
-                               For NVIM v0.12.0    Last change: 2026 August 29
+                               For NVIM v0.12.0    Last change: 2026 August 30
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
@@ -34,8 +34,8 @@ FEATURES                                            *celeste_comment-features*
     hackable and composable. This also means that the edits commit method is up to you – `lockmarks` + `vim.api.nvim_buf_set_lines`
     for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - Line/block comment toggle – fully dot-repeatable with count support
-- Truly accurate keep cursor – cursor position tracks each `TextEdit` precisely
-- Truly accurate keep selection – selection range tracks each `TextEdit` precisely in visual mode
+- Precise keep cursor – cursor position tracks each `TextEdit` precisely
+- Precise keep selection – selection range tracks each `TextEdit` precisely in visual mode
 - Context-aware comment string resolution via Tree-sitter – comment string adapts to context via Tree-sitter. e.g. supports
     `JSX/TSX` out of the box
 - Textobjects – line, block, and auto textobjects, works without Tree-sitter
@@ -131,7 +131,7 @@ DEFAULT CONFIG ~
 >lua
     {
       keep_cursor            = true,  -- Restore cursor position after commenting
-      keep_selection         = "never", -- Restore visual selection after commenting; "never"|"accurate"|"expand_block"|"expand_line"|"only_change_marks"
+      keep_selection         = "never", -- Restore visual selection after commenting; "never"|"adjust"|"expand_block"|"expand_line"|"keep_visual"
       insert_space           = true,  -- Insert space between comment marker and text
       line_comment_no_indent = false, -- Place comment at start of line, skip indent alignment
       case_insensitive       = false, -- Match comment markers case-insensitively
@@ -189,45 +189,68 @@ edit.
 keep_selection                         *celeste_comment-config-keep_selection*
 
 Default: `"never"`. Controls how the visual selection is restored after
-commenting. The plugin tracks the original cursor and selection end positions
-and adjusts them through each edit operation.
+commenting. The plugin tracks the original cursor and selection anchor and
+adjusts them through each edit operation.
 
-- `"never"` — do not restore the selection.
-- `"accurate"` — restore the selection to its computed position.
-- `"expand_block"` — restore the selection and additionally extend it to cover
-    the just-added block comment markers.
-- `"expand_line"` — force line comments to use V mode.
-- `"only_change_marks"` — only update the marks without staying in visual
-    mode; use `gv` to restore the selection.
+  ---------------------------------------------------------------------------
+  Flag             Behavior
+  ---------------- ----------------------------------------------------------
+  "never"          Do not restore the selection.
 
-Can also combine with `|`, e.g. `"expand_block | only_change_marks"`:
+  "adjust"         Restore the selection to the commented content (precise
+                   per-edit tracking).
 
-  --------------------------------------------------------------------------
-  Value                 Behavior
-  --------------------- ----------------------------------------------------
-  "never"               Do not restore selection
+  "expand_block"   Block comments only — extend the selection to cover the
+                   added /* */ markers.
 
-  "accurate"            Restore selection with precise per-edit tracking
+  "expand_line"    Line comments only — restore in Visual-Line (V) mode.
 
-  "expand_block"        Extend selection to include block comment markers
+  "keep_visual"    Stay in visual mode after commenting (default is to exit
+                   to normal mode).
+  ---------------------------------------------------------------------------
+Values can be combined with `|`, e.g. `"adjust | keep_visual"`.
 
-  "expand_line"         Force line comments to use V mode for restore
+Without `keep_visual`, `adjust` / `expand_block` / `expand_line` exit to normal
+mode; use `gv` to re-enter the restored selection. `keep_visual` alone keeps
+the original selection.
 
-  "only_change_marks"   Exit visual mode after commenting; gv restores
-                        selection
-  --------------------------------------------------------------------------
-Common combinations:
+`expand_block` and `expand_line` are axis-specific (block-only and line-only),
+so each combination decomposes into a per-comment-type behavior.
 
-- `"expand_block | only_change_marks"` — extend to block markers + exit visual mode.
-    Selecting `hello` and pressing `gb` keeps `/* hello */` selected and then exit visual mode,
-    you can use `gv` to restore the visual selection.
-- `"expand_line | only_change_marks"` — force Visual-Line mode for line comments + exit visual mode.
-    Selecting `hello` in `v` mode and pressing `gc`, the mode will change to `V` mode and then exit
-    visual mode, you can use `gv` restore the visual selection.
-- `"expand_block | expand_line"` — extend to block markers + force V for line comments.
-    `gb` extends to markers, `gc` restores in V mode.
-- `"expand_block | expand_line | only_change_marks"` — all three combined.
-- `"accurate | only_change_marks"` — precise tracking + exit visual mode.
+Flag shorthand: `a` = adjust `b` = expand_block `l` = expand_line `v` =
+keep_visual
+
+Axis code (concatenate freely, e.g. `+ev` = adjust + expand + keep_visual):
+
+- `-` = none
+- `+` = adjust
+- `e` = expand — `V` for line comments, block markers for block comments
+- `v` = keep_visual — stay in visual mode
+
+  Combination   Line   Block
+  ------------- ------ -------
+  never         -      -
+  a             +      +
+  b             -      +e
+  ab            +      +e
+  l             +e     -
+  al            +e     +
+  bl            +e     +e
+  abl           +e     +e
+  v             -v     -v
+  av            +v     +v
+  bv            -v     +ev
+  abv           +v     +ev
+  lv            +ev    -v
+  alv           +ev    +v
+  blv           +ev    +ev
+  ablv          +ev    +ev
+Examples:
+
+- `"adjust"` — `gc`/`gb` restore the commented content then exit; `gv` re-enters it.
+- `"expand_block"` — `gb` on a charwise selection keeps `/* hello */` selected; `gc` is unaffected.
+- `"expand_line"` — `gc` restores in `V` mode; `gb` is unaffected.
+- `"keep_visual"` — stays in visual mode with the original selection.
 
 
 insert_space                             *celeste_comment-config-insert_space*
@@ -590,7 +613,7 @@ The tracked state is exposed to hooks as `ctx.state_track`:
 
 `cursor`/`endpos` are the raw pre-edit positions; `adj_cursor`/`adj_endpos` are
 the same positions shifted by the applied edits (and, with `keep_selection =
-"expand_block"` or `"expand_block | only_change_marks"`, extended to the block
+"expand_block"` or `"expand_block | keep_visual"`, extended to the block
 comment markers).
 
 
