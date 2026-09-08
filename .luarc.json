@@ -1,0 +1,25 @@
+{
+  "$comment": "Keep LuaLS settings under Lua so EmmyLua ignores them.",
+  "Lua": {
+    "runtime": {
+      "version": "LuaJIT"
+    },
+    "workspace": {
+      "ignoreDir": [".git", ".github", "doc", "scripts"],
+      "preloadFileSize": 1000,
+      "checkThirdParty": false,
+      "library": ["$VIMRUNTIME", "${3rd}/luv/library"]
+    },
+    "diagnostics": {
+      "unusedLocalExclude": ["_*"],
+      "unusedParamExclude": ["_*"],
+      "globals": ["vim", "svim", "_G"]
+    },
+    "completion": {
+      "autoRequire": false
+    },
+    "codeLens": {
+      "enable": false
+    }
+  }
+}

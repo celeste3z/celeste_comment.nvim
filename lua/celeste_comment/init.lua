@@ -327,7 +327,6 @@ local HAS_NVIM_012 = vim.fn.has("nvim-0.12") == 1
 local HAS_NVIM_013 = vim.fn.has("nvim-0.13") == 1
 
 ---TODO: delete this if we drop support for nvim-0.12
----@diagnostic disable
 do
   ---@param buf integer
   ---@param pos? [integer, integer] (lnum, col) tuple
@@ -347,7 +346,7 @@ do
 
   ---@param pos vim.Pos
   ---@return integer
-  function H.pos_to_offset(pos) return vim.api.nvim_buf_get_offset(pos.buf, pos[1]) + pos[2] end
+  function H.pos_to_offset(pos) return vim.api.nvim_buf_get_offset(pos.buf, pos.row) + pos.col end
 
   ---@param pos? vim.Pos
   ---@return vim.Pos?
@@ -362,6 +361,7 @@ do
     ---@overload fun(win: integer): vim.Pos
     function H.make_cursor(buf, pos)
       buf, pos = normalize_cursor_args(buf, pos)
+      ---@diagnostic disable-next-line: need-check-nil
       return vim.pos.cursor(buf, pos)
     end
 
@@ -377,6 +377,7 @@ do
     else
       ---@param pos vim.Pos
       ---@return [integer, integer]
+      ---@diagnostic disable-next-line: assign-type-mismatch
       function H.pos_to_cursor(pos) return { pos:to_cursor() } end
     end
   else
@@ -384,18 +385,22 @@ do
     ---@param pos [integer, integer] (lnum, col) tuple
     ---@return vim.Pos
     ---@overload fun(win: integer): vim.Pos
+    ---@diagnostic disable-next-line: redundant-parameter
     function H.make_cursor(buf, pos)
       buf, pos = normalize_cursor_args(buf, pos)
+      ---@diagnostic disable-next-line: need-check-nil, param-type-mismatch
       return vim.pos.cursor(pos, { buf = buf })
     end
 
     ---@param buf integer
     ---@param row integer 0-indexed
     ---@param col integer 0-indexed
+    ---@diagnostic disable-next-line: param-type-mismatch
     function H.make_pos(buf, row, col) return vim.pos(row, col, { buf = buf }) end
 
     ---@param pos vim.Pos
     ---@return [integer, integer]
+    ---@diagnostic disable-next-line: assign-type-mismatch
     function H.pos_to_cursor(pos) return { pos:to_cursor() } end
   end
 end
@@ -411,7 +416,6 @@ function H.log(level, ...)
   if not H.logger then H.logger = vim.log.new({ name = "celeste_comment", level = H.config.log_level }) end
   if H.logger then H.logger[LOG_LEVEL2NAME[level]](...) end
 end
----@diagnostic enable
 
 ---@param cfg? Celeste.Comment.PartialOpts
 ---@return Celeste.Comment.Opts
@@ -626,6 +630,7 @@ end
 function H.split_comments_parts(comments)
   if not H.COMMENTS_PARTS_PATTERN then
     local P, C, Ct = vim.lpeg.P, vim.lpeg.C, vim.lpeg.Ct
+    --- @diagnostic disable-next-line: param-type-mismatch
     local part = C((P("\\") * P(1) + (1 - P(","))) ^ 0)
     H.COMMENTS_PARTS_PATTERN = Ct(part * (P(",") * part) ^ 0)
   end
@@ -673,8 +678,8 @@ end
 ---@param pos vim.Pos
 ---@return vim.Pos
 function H.adjust_to_start_column_pos(pos)
-  local line = vim.fn.getline(pos.row + 1)
-  local start_col = line:match("^%s*()")
+  local line = vim.fn.getline(pos.row + 1) --[[@as string]]
+  local start_col = line:match("^%s*()") --[[@as integer]]
   if start_col then return H.make_pos(pos.buf, pos.row, start_col - 1) end
   return pos
 end
@@ -798,7 +803,7 @@ function H.overrides_cms_conf(cms_conf, pos, ltree)
 
   for _pattern, matchs, _metadata in query:iter_matches(root_tree:root(), ltree:source(), iter_from, iter_to) do
     for capture_id, nodes in pairs(matchs) do
-      local capture_name = query.captures[capture_id]
+      local capture_name = query.captures[capture_id] --[[@as string]]
       local base, suffix = capture_name:match("^(.+)%.([^%.]+)$")
       local name = base or capture_name
       -- inclusive default
@@ -858,9 +863,8 @@ function H.default_cms_conf_resolver(ctx)
     walk(parser)
   end
 
-  local conf_getter = function(lang)
-    return (type(ctx.cfg.cms_confs)) == "table" and ctx.cfg.cms_confs[lang] or H.comment_string_confs[lang]
-  end
+  if ctx.cfg.cms_confs == nil or type(ctx.cfg.cms_confs) ~= "table" then ctx.cfg.cms_confs = {} end
+  local conf_getter = function(lang) return ctx.cfg.cms_confs[lang] or H.comment_string_confs[lang] end
 
   local lang = dptree and dptree:lang() or vim.bo[pos.buf].filetype
   if not lang then return end
@@ -1075,6 +1079,8 @@ function H.match_line_comment(line, row, csi, opts)
 
       local olcs, orcs = p.tout[1], p.tout[2]
 
+      ---@cast p2 integer
+      ---@cast p3 integer
       local lcs_pos
       if tlcs_esc ~= "" then
         local matched = H.match_byte(line, p2 - 1, olcs, #p.traw[1], 1, csi.ci)
@@ -1169,7 +1175,11 @@ function H.spaces_diff(a, alen, b, blen)
     return looks_like_alignment, spaces_diff
   end
 
-  if spaces_diff_abs % tabs_diff == 0 then spaces_diff = spaces_diff_abs / tabs_diff end
+  if spaces_diff_abs % tabs_diff == 0 then
+    local v = spaces_diff_abs / tabs_diff
+    ---@cast v integer
+    spaces_diff = v
+  end
   return looks_like_alignment, spaces_diff
 end
 
@@ -1189,8 +1199,8 @@ H.GUESS_INDENTATION_MAX_LINES = 1000
 ---@overload fun(buf: integer, default_tab_size: integer, default_insert_spaces: boolean): Celeste.Comment.GuessIndent.Res
 function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
   if type(lines) == "number" then
-    local n = math.min(vim.api.nvim_buf_line_count(lines), H.GUESS_INDENTATION_MAX_LINES)
-    lines = vim.api.nvim_buf_get_lines(lines, 0, n, false)
+    local n = math.min(vim.api.nvim_buf_line_count(lines --[[@as integer]]), H.GUESS_INDENTATION_MAX_LINES)
+    lines = vim.api.nvim_buf_get_lines(lines --[[@as integer]], 0, n, false)
   end
   local lcnt = math.min(#lines, H.GUESS_INDENTATION_MAX_LINES)
 
@@ -1203,7 +1213,7 @@ function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
   local spc_diff_cnt = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
   for l = 1, lcnt do
-    local cur_ln = lines[l]
+    local cur_ln = assert(lines[l], "unexpected error")
     local cur_ln_len = #cur_ln
 
     local cur_ln_has_content = false
@@ -1235,7 +1245,10 @@ function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
 
       local skip = looks_like_alignment and not (default_insert_spaces and default_tab_size == spc_diff)
       if not skip then
-        if spc_diff <= H.MAX_ALLOWED_TAB_SIZE_GUESS then spc_diff_cnt[spc_diff + 1] = spc_diff_cnt[spc_diff + 1] + 1 end
+        if spc_diff >= 0 and spc_diff <= H.MAX_ALLOWED_TAB_SIZE_GUESS then
+          local v = spc_diff_cnt[spc_diff + 1] --[[@as integer]]
+          spc_diff_cnt[spc_diff + 1] = v + 1
+        end
         prev_ln_text = cur_ln
         prev_ln_indent = cur_ln_indent
       end
@@ -1253,7 +1266,7 @@ function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
     for _, possible_tab_size in ipairs(H.ALLOWED_TAB_SIZE_GUESSES) do
       local possible_tab_size_score = spc_diff_cnt[possible_tab_size + 1]
       if possible_tab_size_score > tab_size_score then
-        tab_size_score = possible_tab_size_score
+        tab_size_score = possible_tab_size_score --[[@as integer]]
         tab_size = possible_tab_size
       end
     end
@@ -1269,7 +1282,7 @@ end
 ---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
 function H.detect_indent_resolver(ctx)
   if not ctx.cfg.detect_indent then return end
-  -- TODO: guess indent if have editorconfig, so that can fallback to default indent resolver
+  -- TODO: not guess indent if have editorconfig, so that can fallback to default indent resolver
   local buf = ctx.buf
   ctx.o_indent = vim.b[buf].celeste_comment_guessed_indent
   if not ctx.o_indent then
@@ -1305,8 +1318,8 @@ function H.compute_indent_chainably(cursor, cfg)
     end
   end
 
-  assert(false, "unreachable")
-  return {} -- unreachable
+  -- unreachable, just for fix diagnostic
+  return { indent_style = "space", indent_size = 0 }
 end
 
 ---@param line            string
@@ -1385,6 +1398,7 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
   local indent_size = indent.indent_size
   local only_whitespace_lines = true
   local min_visible_col = math.huge
+  assert(indent_size > 0, "indent_size must be positive")
 
   for i, line in ipairs(lines) do
     local row = range[1] + i - 1
@@ -1459,7 +1473,7 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
     min_visible_col = min_visible_col == math.huge and 0 or (math.floor(min_visible_col / indent_size) * indent_size)
     if not all_info.should_remove or action == M.ACTION.kInvert then
       for i, line in ipairs(lines) do
-        local info = all_info.lines[i]
+        local info = assert(all_info.lines[i], "unexpected error, info nil")
         if not info.ignore then
           info.offset = H.find_insert_offset(line, info.offset, min_visible_col, indent_size)
           info.min_visible_col = min_visible_col
@@ -1478,6 +1492,8 @@ end
 ---@param indent_style "space"|"tab"
 ---@return string
 function H.make_indent_padding(from, to, indent_size, indent_style)
+  assert(indent_size > 0, "indent_size must be positive")
+  if to <= from then return "" end
   if indent_style ~= "tab" then return string.rep(" ", to - from) end
   local spaces = to - from
   local tabs = 0
@@ -1511,8 +1527,12 @@ function H.make_comment_edits(info, line, cfg, range, opts)
   end
 
   if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed and info.visible_col < info.min_visible_col then
-    local pad =
-      H.make_indent_padding(info.visible_col, info.min_visible_col, info.indent.indent_size, info.indent.indent_style)
+    local pad = H.make_indent_padding(
+      info.visible_col,
+      info.min_visible_col --[[@as integer]],
+      info.indent.indent_size,
+      info.indent.indent_style
+    )
     edits[#edits + 1] = {
       range = { row, info.lead_ws_len, row, info.lead_ws_len },
       text = { pad .. csi.olcs },
@@ -1526,11 +1546,10 @@ function H.make_comment_edits(info, line, cfg, range, opts)
 end
 
 ---@param info  Celeste.Comment.LineCommentInfo.Line
----@param line  string
----@param cfg?  Celeste.Comment.Opts
+---@param _line  string
+---@param _cfg?  Celeste.Comment.Opts
 ---@return Celeste.Comment.TextEdits
-function H.make_uncomment_edits(info, line, cfg)
-  cfg = cfg or {}
+function H.make_uncomment_edits(info, _line, _cfg)
   local edits = {} ---@type Celeste.Comment.TextEdits
 
   if info.lcs_pos then
@@ -1545,23 +1564,23 @@ function H.make_uncomment_edits(info, line, cfg)
   return edits
 end
 
----@param lines  string[]
----@param range  Celeste.Comment.Range4
----@param motion Celeste.Comment.Motion
----@param csi    Celeste.Comment.CommentStringInfo
----@param cfg    Celeste.Comment.Opts
----@param action Celeste.Comment.Action
----@param opts?  Celeste.Comment.InvokeCtx
+---@param lines   string[]
+---@param range   Celeste.Comment.Range4
+---@param _motion Celeste.Comment.Motion
+---@param csi     Celeste.Comment.CommentStringInfo
+---@param cfg     Celeste.Comment.Opts
+---@param action  Celeste.Comment.Action
+---@param opts?   Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 ---@return Celeste.Comment.LineCommentInfo?
-function H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
+function H.compute_line_edits(lines, range, _motion, csi, cfg, action, cursor, opts)
   opts = opts or {}
   local all_edits = {} ---@type Celeste.Comment.TextEdits
   local all_info = H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
 
   for i, line in ipairs(lines) do
     local info = all_info.lines[i]
-    if not info.ignore then
+    if info and not info.ignore then
       local edits
 
       if action == M.ACTION.kToggle then
@@ -1602,8 +1621,8 @@ end
 ---@return Celeste.Comment.TextEdits
 function H.make_block_comment_edits(lines, csi, range, opts)
   local n = #lines
-  local l1 = lines[1]
-  local ln = lines[n]
+  local l1 = lines[1] --[[@as string]]
+  local ln = lines[n] --[[@as string]]
   local edits = {} ---@type Celeste.Comment.TextEdits
   opts = opts or {}
 
@@ -1631,9 +1650,9 @@ end
 ---@param lines string[]
 ---@param csi   Celeste.Comment.CommentStringInfo
 ---@param range Celeste.Comment.Range4
----@param opts? Celeste.Comment.InvokeCtx
+---@param _opts? Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
-function H.make_block_partial_edits(lines, csi, range, opts)
+function H.make_block_partial_edits(lines, csi, range, _opts)
   local n = #lines
   local edits = {} ---@type Celeste.Comment.TextEdits
 
@@ -1700,7 +1719,7 @@ function H.shrink_region(lines, range)
         local last = H.skip_whitespace(line, epos, epos - mpos + 1, -1)
         if last >= mpos then return sr + i - 1, last - 1 end
       else
-        local e = line:match("^.*()%S")
+        local e = line:match("^.*()%S") --[[@as integer?]]
         if e then return sr + i - 1, e - 1 end
       end
     end
@@ -1726,8 +1745,8 @@ function H.match_block_comment(lines, shrunk, range, csi, motion)
   local scol, ecol = shrunk[2], shrunk[4]
   local n = shrunk[3] - loff + 1
   local fi = loff - range[1] + 1
-  local l1 = lines[fi]
-  local ln = lines[fi + n - 1]
+  local l1 = lines[fi] --[[@as string]]
+  local ln = lines[fi + n - 1] --[[@as string]]
 
   ---@param p Celeste.Comment.CommentStringInfo.Pairs
   ---@return Celeste.Comment.Range2? lcs_range
@@ -1826,7 +1845,7 @@ end
 ---@param opts?  Celeste.Comment.InvokeCtx
 ---@return Celeste.Comment.TextEdits
 ---@return Celeste.Comment.BlockCommentInfo?
-function H.compute_block_edits(lines, range, motion, csi, cfg, action, cursor, opts)
+function H.compute_block_edits(lines, range, motion, csi, cfg, action, _cursor, opts)
   local info = H.block_comment_info(lines, csi, motion, range, cfg)
   local edits ---@type Celeste.Comment.TextEdits
 
@@ -1874,7 +1893,8 @@ function H.apply_edits(lines, edits, offset_row)
   for i = #edits, 1, -1 do
     local e = edits[i]
     local rel = e.range[1] - offset_row + 1
-    lines[rel] = lines[rel]:sub(1, e.range[2]) .. e.text[1] .. lines[rel]:sub(e.range[4] + 1)
+    local l = assert(lines[rel], "unexpected error")
+    lines[rel] = l:sub(1, e.range[2]) .. e.text[1] .. l:sub(e.range[4] + 1)
   end
 end
 
@@ -1942,6 +1962,7 @@ end
 ---@return Celeste.Comment.Range4?
 function H.expand_block(state, motion, edits, csi)
   if state.mode ~= "v" or motion ~= "char" then return end
+  if not state.cursor or not state.endpos then return end
 
   local lcs, rcs = edits[1], edits[2]
   if not lcs or not rcs then return end
@@ -1969,6 +1990,8 @@ end
 function H.keep_selection_expand(state, ks, ctype, motion, edits, csi)
   -- not handle C-v mode, use multiple cursor is the right way
   if state.mode ~= "v" and state.mode ~= "V" then return end
+
+  if not state.adj_cursor or not state.adj_endpos then return end
 
   local mode = state.mode
   local range = { state.adj_endpos.row, state.adj_endpos.col, state.adj_cursor.row, state.adj_cursor.col }
@@ -2102,7 +2125,6 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
   else
     edits, info = H.compute_line_edits(lines, range, motion, csi, cfg, action, cursor, opts)
   end
-  assert(edits, "unexpected error, nil edits")
 
   ---@type Celeste.Comment.Hooks.PreCommitEdits.Ctx
   local ctx = {
@@ -2134,7 +2156,7 @@ end
 ---@return Celeste.Comment.Range4?
 function H.compute_linecomment_range(cfg, cursor, csi, inner)
   local row = cursor.row + 1
-  local line = vim.fn.getline(row)
+  local line = vim.fn.getline(row) --[[@as string]]
 
   if inner then
     local res = H.match_line_comment(line, cursor.row, csi, { with_inner = true })
@@ -2145,7 +2167,7 @@ function H.compute_linecomment_range(cfg, cursor, csi, inner)
   local nlines = vim.api.nvim_buf_line_count(cursor.buf)
 
   local function is_comment(lnum)
-    local l = vim.fn.getline(lnum)
+    local l = vim.fn.getline(lnum) --[[@as string]]
     if l:match("^%s*$") then return false end
     return H.match_line_comment(l, lnum - 1, csi, { check_only = true }).matched
   end
@@ -2162,7 +2184,7 @@ function H.compute_linecomment_range(cfg, cursor, csi, inner)
 
   local function check(lnum)
     if lnum < 1 or lnum > nlines then return false end
-    local l = vim.fn.getline(lnum)
+    local l = vim.fn.getline(lnum) --[[@as string]]
     if cfg.ignore_empty_lines == M.IGN_EMT.kAlways and l:match("^%s*$") then return true end
     return is_comment(lnum)
   end
@@ -2345,7 +2367,8 @@ function H.block_inner_range(lines, range, pair, ci)
   local lcs_len, rcs_len = #pair.traw[1], #pair.traw[2]
   local olcs, orcs = pair.tout[1], pair.tout[2]
   local pad_rcs = #orcs - rcs_len
-  local l1, ln = lines[1], lines[#lines]
+  local l1 = lines[1] --[[@as string]]
+  local ln = lines[#lines] --[[@as string]]
 
   local cscol = range[2] + lcs_len + H.match_byte(l1, range[2] + lcs_len, olcs, lcs_len, 1, ci)
 
@@ -2410,15 +2433,16 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range, inner)
   local pairs = H.textobject_block_match_pairs(lines, from_limit, csi, cursor)
   if #pairs == 0 then return end
   local idx = math.min(vim.v.count1, #pairs)
-  local p = pairs[idx]
+  local p = pairs[idx] --[[@as Celeste.Comment.BlockMatchPair.Res]]
   if not inner then return p.range end
 
+  local match_pairs = assert(csi.pairs[p.idx], "unexpected error")
   local subrange = vim.list_slice(lines, p.range[1] - from_limit + 2, p.range[3] - from_limit + 2)
-  return H.block_inner_range(subrange, p.range, csi.pairs[p.idx], csi.ci)
+  return H.block_inner_range(subrange, p.range, match_pairs, csi.ci)
 end
 
 ---@param range? Celeste.Comment.Range4
----@param opts? { mode?: 'V'|'v', end_inclusive?: boolean, exit?: boolean }
+---@param opts? { mode?: 'V'|'v'|string, end_inclusive?: boolean, exit?: boolean }
 function H.select_range(range, opts)
   if not range then return end
   opts = opts or {}
@@ -2682,7 +2706,7 @@ function M.setup(config)
   local m = H.config.mappings --[[@as Celeste.Comment.Opts.Mapping]]
 
   ---@param mode string|string[]
-  ---@param lhs string|string[]
+  ---@param lhs (string|string[])?
   ---@param rhs string|function
   ---@param opts vim.keymap.set.Opts
   local function map(mode, lhs, rhs, opts)

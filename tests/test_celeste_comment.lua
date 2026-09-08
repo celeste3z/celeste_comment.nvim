@@ -1,4 +1,4 @@
----@diagnostic disable: inject-field, param-type-mismatch, need-check-nil, cast-local-type, missing-fields
+---@diagnostic disable: inject-field, param-type-mismatch, need-check-nil, cast-local-type, missing-fields, assign-type-mismatch, undefined-field, unnecessary-assert, global-in-non-module, missing-return, unresolved-require
 local MiniTest = require("mini.test")
 local expect = MiniTest.expect
 local eq = expect.equality
@@ -1317,7 +1317,7 @@ end
 
 T["edits"]["make_uncomment_edits"] = function()
   local info = make_line_info({ lcs_pos = { 0, 0, 1 } })
-  local edits = H.make_uncomment_edits(info, "# hello")
+  local edits = H.make_uncomment_edits(info, "# hello", {})
   assert(edits)
   eq(apply("# hello", edits), "hello")
   eq(#edits, 1)
@@ -1347,7 +1347,7 @@ end
 
 T["edits"]["make_uncomment_edits_with_rcs"] = function()
   local info = make_line_info({ lcs_pos = { 0, 0, 4 }, rcs_pos = { 0, 10, 13 } })
-  local edits = H.make_uncomment_edits(info, "<!-- hello -->")
+  local edits = H.make_uncomment_edits(info, "<!-- hello -->", {})
   assert(edits)
   eq(apply("<!-- hello -->", edits), "hello")
   eq(#edits, 2)
