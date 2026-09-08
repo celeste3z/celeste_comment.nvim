@@ -86,7 +86,7 @@ vim.pack.add({
     src = "https://github.com/celeste3z/celeste_comment.nvim",
     name = "celeste_comment",
     version = vim.version.range("*"),
-  }
+  },
 })
 
 require("celeste_comment").setup()
@@ -173,12 +173,17 @@ require("celeste_comment").setup()
     -- Block comment visual selection (x)
     block_toggle_visual  = "gb",
 
-    -- Linewise textobject (o)
+    -- All textobjects below works without treesitter
+    -- NOTE: not works for end of line comment, like 'some code -- comment here'
+    -- Linewise textobject outer (o)
     line_textobject      = "gc",
-    -- Blockwise textobject (o)
+    -- Blockwise textobject outer (o)
     block_textobject     = "gb",
-    -- Auto textobject (o, x), example 'ga'
+    -- Auto textobject outer (o, x), example 'ac'
     auto_textobject      = "",
+    -- Auto textobject inner (o, x), example 'ic'
+    auto_textobject_inner = "",
+
     -- Auto uncomment (n), example `gcu`
     uncomment_auto       = "",
 
@@ -235,8 +240,8 @@ See `:help celeste_comment-configuration` for details.
 > -- for example, `lang` should be the Tree-sitter parser name or filetype
 > require("celeste_comment").setup({
 >   cms_confs = {
->     ["lang"] = {"//%s", "/*%s*/"}
->   }
+>     ["lang"] = { "//%s", "/*%s*/" },
+>   },
 > })
 > ```
 >

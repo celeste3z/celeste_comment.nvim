@@ -93,6 +93,10 @@ local T = new_set({
               auto_textobject = "ga",
               uncomment_auto = "gcu",
 
+              line_textobject_inner = "gic",
+              block_textobject_inner = "gib",
+              auto_textobject_inner = "gia",
+
               line_add_below = "gco",
               line_add_above = "gcO",
               line_add_eol = "gcA",
@@ -417,6 +421,28 @@ T["base"]["match_line_comment"] = function()
   r8 = H.match_line_comment("  /// doc", 1, csi, { check_will_blank = true })
   eq(r8.matched, true)
   eq(r8.will_blank, false)
+
+  -- with_inner
+  local csi_inner = H.make_csi({ { "//", "" } }, { pad = true })
+  local i1 = H.match_line_comment("// xxx", 0, csi_inner, { with_inner = true })
+  eq(i1.inner, { 0, 3, 5 })
+  eq(H.match_line_comment("//  abc", 0, csi_inner, { with_inner = true }).inner, { 0, 3, 6 })
+  -- trailing whitespace preserved
+  eq(H.match_line_comment("// xxx   ", 0, csi_inner, { with_inner = true }).inner, { 0, 3, 8 })
+  -- empty content → no inner
+  eq(H.match_line_comment("//", 0, csi_inner, { with_inner = true }).inner, nil)
+
+  -- with_inner: wrapped lcs+rcs
+  local csi_wrap = H.make_csi({ { "<!--", "-->" } }, { pad = true })
+  eq(H.match_line_comment("<!-- xxx -->", 0, csi_wrap, { with_inner = true }).inner, { 0, 5, 7 })
+
+  -- with_inner: rcs-only
+  local csi_rcs = H.make_csi({ { "", " #" } }, { pad = true })
+  eq(H.match_line_comment("line #", 0, csi_rcs, { with_inner = true }).inner, { 0, 0, 3 })
+
+  -- with_inner: insert_space=false respects raw lcs
+  local csi_nopad = H.make_csi({ { "// ", "" } }, { pad = false })
+  eq(H.match_line_comment("//abc", 0, csi_nopad, { with_inner = true }).inner, { 0, 2, 4 })
 end
 
 T["base"]["compute_cursor_pos"] = function()
@@ -3058,10 +3084,7 @@ T["textobject"]["block_match_pairs"] = function()
   -- Single pair → 1 result
   local r = mp({ "/* a */" }, 1, c("/* ", " */"), make_pos(0, 0, 3))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 6)
+  eq(r[1].range, { 0, 0, 0, 6 })
 
   -- No pair
   eq(#mp({ "hello" }, 1, c("/* ", " */"), make_pos(0, 0, 1)), 0)
@@ -3075,46 +3098,37 @@ T["textobject"]["block_match_pairs"] = function()
   -- Three levels, cursor at innermost → 3 pairs, innermost first
   r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 11))
   eq(#r, 3)
-  eq(r[1][2], 10)
-  eq(r[1][4], 16) -- innermost: /* c */
-  eq(r[2][2], 5)
-  eq(r[2][4], 21) -- middle: /* b /* c */ d */
-  eq(r[3][2], 0)
-  eq(r[3][4], 26) -- outermost: /* a /* b /* c */ d */ e */
+  eq(r[1].range[2], 10)
+  eq(r[1].range[4], 16) -- innermost: /* c */
+  eq(r[2].range[2], 5)
+  eq(r[2].range[4], 21) -- middle: /* b /* c */ d */
+  eq(r[3].range[2], 0)
+  eq(r[3].range[4], 26) -- outermost: /* a /* b /* c */ d */ e */
 
   -- Three levels, cursor at outermost → 1 pair (outermost only)
   r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 0))
   eq(#r, 1)
-  eq(r[1][2], 0)
-  eq(r[1][4], 26)
+  eq(r[1].range[2], 0)
+  eq(r[1].range[4], 26)
 
   -- Three levels, cursor in middle → 2 pairs (middle + outer)
   r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 7))
   eq(#r, 2)
-  eq(r[1][2], 5)
-  eq(r[1][4], 21) -- middle
-  eq(r[2][2], 0)
-  eq(r[2][4], 26) -- outermost
+  eq(r[1].range[2], 5)
+  eq(r[1].range[4], 21) -- middle
+  eq(r[2].range[2], 0)
+  eq(r[2].range[4], 26) -- outermost
 
   -- Cross-line nested
   r = mp({ "/* a", "/* b */", "c */" }, 1, c("/* ", " */"), make_pos(0, 1, 3))
   eq(#r, 2)
-  eq(r[1][1], 2)
-  eq(r[1][2], 0)
-  eq(r[1][3], 2)
-  eq(r[1][4], 6) -- innermost: /* b */
-  eq(r[2][1], 1)
-  eq(r[2][2], 0)
-  eq(r[2][3], 3)
-  eq(r[2][4], 3) -- outermost
+  eq(r[1].range, { 1, 0, 1, 6 }) -- innermost: /* b */
+  eq(r[2].range, { 0, 0, 2, 3 }) -- outermost
 
   -- Lua --[[ ]] style
   r = mp({ "--[[ a ", "  b ]] " }, 1, c("--[[ ", " ]]"), make_pos(0, 1, 3))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 2)
-  eq(r[1][4], 5)
+  eq(r[1].range, { 0, 0, 1, 5 })
 end
 
 T["textobject"]["block_match_pairs multi block cms"] = function()
@@ -3125,62 +3139,38 @@ T["textobject"]["block_match_pairs multi block cms"] = function()
   -- single line, pair 1
   local r = mp({ "{- hello -}" }, 1, csi, pos(0, 0, 3))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 10)
+  eq(r[1].range, { 0, 0, 0, 10 })
 
   -- single line, pair 2
   r = mp({ "{# hello #}" }, 1, csi, pos(0, 0, 3))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 10)
+  eq(r[1].range, { 0, 0, 0, 10 })
 
   -- multi line, pair 1 spans two lines
   r = mp({ "{- a", "b -}" }, 1, csi, pos(0, 1, 1))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 2)
-  eq(r[1][4], 3)
+  eq(r[1].range, { 0, 0, 1, 3 })
 
   -- two inline blocks on one line, cursor in first
   r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 2))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 6)
+  eq(r[1].range, { 0, 0, 0, 6 })
 
   -- two inline blocks on one line, cursor in second
   r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 14))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 13)
-  eq(r[1][3], 1)
-  eq(r[1][4], 19)
+  eq(r[1].range, { 0, 13, 0, 19 })
 
   -- nested both markers, cursor in outer pair
   r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 2))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 16)
+  eq(r[1].range, { 0, 0, 0, 16 })
 
   -- nested both markers, cursor in inner pair
   r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 8))
   eq(#r, 2)
-  eq(r[1][1], 1)
-  eq(r[1][2], 5)
-  eq(r[1][3], 1)
-  eq(r[1][4], 11)
-  eq(r[2][1], 1)
-  eq(r[2][2], 0)
-  eq(r[2][3], 1)
-  eq(r[2][4], 16)
+  eq(r[1].range, { 0, 5, 0, 11 })
+  eq(r[2].range, { 0, 0, 0, 16 })
 
   -- cursor between two blocks, no match
   r = mp({ "{- a -}  {# b #}" }, 1, csi, pos(0, 0, 7))
@@ -3199,62 +3189,87 @@ T["textobject"]["block_match_pairs overlapping markers"] = function()
   -- Single line, cursor inside → both match, outer first
   local r = mp({ "{/* aaa */}" }, 1, csi, pos(0, 0, 5))
   eq(#r, 2)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 10)
-  eq(r[2][1], 1)
-  eq(r[2][2], 1)
-  eq(r[2][3], 1)
-  eq(r[2][4], 9)
+  eq(r[1].range, { 0, 0, 0, 10 })
+  eq(r[2].range, { 0, 1, 0, 9 })
 
   -- Standalone /* */ → only the inner pair matches
   r = mp({ "/* bbb */" }, 1, csi, pos(0, 0, 5))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 8)
+  eq(r[1].range, { 0, 0, 0, 8 })
 
   -- Two blocks inline, cursor in the second
   r = mp({ "{/* aaa */}  /* bbb */" }, 1, csi, pos(0, 0, 15))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 13)
-  eq(r[1][3], 1)
-  eq(r[1][4], 21)
+  eq(r[1].range, { 0, 13, 0, 21 })
 
   -- Two blocks inline, cursor in the first → outer first
   r = mp({ "{/* aaa */}  /* bbb */" }, 1, csi, pos(0, 0, 5))
   eq(#r, 2)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 1)
-  eq(r[1][4], 10)
-  eq(r[2][1], 1)
-  eq(r[2][2], 1)
-  eq(r[2][3], 1)
-  eq(r[2][4], 9)
+  eq(r[1].range, { 0, 0, 0, 10 })
+  eq(r[2].range, { 0, 1, 0, 9 })
 
   -- Multi-line {/*  */}, cursor on first line → outer first
   r = mp({ "{/* aaa", "bbb */}" }, 1, csi, pos(0, 0, 5))
   eq(#r, 2)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 2)
-  eq(r[1][4], 6)
-  eq(r[2][1], 1)
-  eq(r[2][2], 1)
-  eq(r[2][3], 2)
-  eq(r[2][4], 5)
+  eq(r[1].range, { 0, 0, 1, 6 })
+  eq(r[2].range, { 0, 1, 1, 5 })
 
   -- Multi-line standalone /* */ → only inner pair matches
   r = mp({ "/* bbb", "ccc */" }, 1, csi, pos(0, 1, 3))
   eq(#r, 1)
-  eq(r[1][1], 1)
-  eq(r[1][2], 0)
-  eq(r[1][3], 2)
-  eq(r[1][4], 5)
+  eq(r[1].range, { 0, 0, 1, 5 })
+end
+
+T["textobject"]["block_inner_range"] = function()
+  local bir = H.block_inner_range
+  local pad = H.make_csi({ { "/*", "*/" } }, { pad = true })
+  local nopad = H.make_csi({ { "/*", "*/" } }, { pad = false })
+  local pair_pad, pair_nopad = pad.pairs[1], nopad.pairs[1]
+
+  -- user examples: pad strips exactly one space
+  eq(bir({ "/*abc */" }, { 0, 0, 0, 7 }, pair_pad, false), { 0, 2, 0, 4 })
+  eq(bir({ "/*abc*/" }, { 0, 0, 0, 6 }, pair_pad, false), { 0, 2, 0, 4 })
+  eq(bir({ "/* abc */" }, { 0, 0, 0, 8 }, pair_pad, false), { 0, 3, 0, 5 })
+  eq(bir({ "/*  abc */" }, { 0, 0, 0, 9 }, pair_pad, false), { 0, 3, 0, 6 })
+
+  -- empty content → nil
+  eq(bir({ "/**/" }, { 0, 0, 0, 3 }, pair_pad, false), nil)
+
+  -- insert_space=false: no padding stripped
+  eq(bir({ "/* abc */" }, { 0, 0, 0, 8 }, pair_nopad, false), { 0, 2, 0, 6 })
+
+  -- multi-line: intermediate line preserved fully
+  eq(bir({ "/* a", "  b  ", " c */" }, { 0, 0, 2, 4 }, pair_pad, false), { 0, 3, 2, 1 })
+end
+
+T["textobject"]["block_match_ts inner"] = function()
+  local bmts = H.textobject_block_match_ts
+  local pad = H.make_csi({ { "/*", "*/" } }, { pad = true })
+  local buf = vim.api.nvim_create_buf(true, false)
+  local set = function(lines) vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines) end
+
+  -- single line
+  set({ "/* hello world */" })
+  eq(bmts(buf, pad, { 0, 0, 0, 16 }, true), { 0, 3, 0, 13 })
+
+  -- no inner → returns ts_range as-is
+  eq(bmts(buf, pad, { 0, 0, 0, 16 }, false), { 0, 0, 0, 16 })
+
+  -- multi-line
+  set({ "/* a", "  b  ", " c */" })
+  eq(bmts(buf, pad, { 0, 0, 2, 4 }, true), { 0, 3, 2, 1 })
+
+  -- multi-line with empty trailing line
+  set({ "/* a", " */" })
+  eq(bmts(buf, pad, { 0, 0, 1, 2 }, true), { 0, 3, 0, 3 })
+
+  -- empty content
+  set({ "/**/" })
+  eq(bmts(buf, pad, { 0, 0, 0, 3 }, true), nil)
+
+  -- marker mismatch → nil (ts_range doesn't match any pair)
+  set({ "/* hello world */" })
+  eq(bmts(buf, pad, { 0, 0, 0, 15 }, true), nil)
 end
 
 T["textobject"]["line textobject works"] = function()
@@ -3286,6 +3301,47 @@ T["textobject"]["block textobject works"] = function()
   set_cursor(2, 9)
   feed(".")
   eq(get_lines(), { "aaa", "--[[bbb]] ccc  eeee", "ffff  jjj" }) -- do nothing
+end
+
+T["textobject"]["linewise inner"] = function()
+  set_lines({ "# hello world", "# hello world   ", "#" })
+  set_cursor(1, 3)
+  feed("d", "gic")
+  eq(get_lines(), { "# ", "# hello world   ", "#" })
+  set_cursor(2, 3)
+  feed("d", "gic")
+  eq(get_lines(), { "# ", "# ", "#" })
+  set_cursor(3, 0)
+  feed("d", "gic") -- empty content: do nothing
+  eq(get_lines(), { "# ", "# ", "#" })
+end
+
+T["textobject"]["blockwise inner"] = function()
+  child.b.celeste_comment_block_commentstring = "/*%s*/"
+  set_lines({ "/* hello world */", "/* a", "  b  ", " c */" })
+  set_cursor(1, 4)
+  feed("d", "gib")
+  eq(get_lines(), { "/*  */", "/* a", "  b  ", " c */" })
+  set_cursor(2, 2)
+  feed("d", "gib")
+  eq(get_lines(), { "/*  */", "/*  */" })
+
+  -- empty content
+  set_lines({ "/**/" })
+  set_cursor(1, 0)
+  feed("d", "gib")
+  eq(get_lines(), { "/**/" })
+end
+
+T["textobject"]["auto inner"] = function()
+  child.b.celeste_comment_block_commentstring = "/*%s*/"
+  set_lines({ "# hello world", "/* hello world */" })
+  set_cursor(1, 3)
+  feed("d", "gia")
+  eq(get_lines(), { "# ", "/* hello world */" })
+  set_cursor(2, 4)
+  feed("d", "gia")
+  eq(get_lines(), { "# ", "/*  */" })
 end
 
 -- Referenced from: https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L797
@@ -3772,6 +3828,40 @@ T["textobject treesitter"]["fallback to text match impl while disable textobj_tr
   child.b.celeste_comment_config = { textobj_treesitter_detect = false }
   feed("gbgb")
   eq(get_lines(), { "// hello world" })
+end
+
+T["textobject treesitter"]["inner works on block comment"] = function()
+  child.lua_func(function()
+    vim.bo.filetype = "cpp"
+    vim.bo.tabstop = 2
+    vim.bo.expandtab = true
+    vim.cmd("packadd nvim-treesitter-textobjects")
+    vim.treesitter.language.add("cpp")
+    vim.treesitter.start()
+    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
+  end)
+  set_lines({ "/* hello world */" })
+
+  set_cursor(1, 7)
+  feed("d", "gib")
+  eq(get_lines(1, 1), { "/*  */" })
+end
+
+T["textobject treesitter"]["inner works on line comment"] = function()
+  child.lua_func(function()
+    vim.bo.filetype = "cpp"
+    vim.bo.tabstop = 2
+    vim.bo.expandtab = true
+    vim.cmd("packadd nvim-treesitter-textobjects")
+    vim.treesitter.language.add("cpp")
+    vim.treesitter.start()
+    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
+  end)
+  set_lines({ "// hello world" })
+
+  set_cursor(1, 7)
+  feed("d", "gic")
+  eq(get_lines(1, 1), { "// " })
 end
 
 -- keep cursor tests ──────────────────────────────────────────────────────────

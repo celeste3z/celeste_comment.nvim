@@ -186,24 +186,27 @@ M.ACTION = {
 ---@field indent_resolver?   fun(ctx:Celeste.Comment.Hooks.IndentResolver.Ctx)
 
 ---@class Celeste.Comment.Opts.Mapping
----@field line_toggle?           string|string[] mode 'n', operator, default 'gc'
----@field line_toggle_cur?       string|string[] mode 'n', default 'gcc'
----@field line_toggle_visual?    string|string[] mode 'x', default 'gc'
----@field line_toggle_insert     string|string[] mode 'i', toggle comment at current line in insert mode, '<C-/>'
----@field block_toggle?          string|string[] mode 'n', operator, default 'gb'
----@field block_toggle_cur?      string|string[] mode 'n', default 'gbc'
----@field block_toggle_visual?   string|string[] mode 'x', default 'gb'
----@field line_textobject?       string|string[] mode 'o', linewise textobject, like 'gc', default ''
----@field block_textobject?      string|string[] mode 'o', blockwise textobject, like 'gb', default ''
----@field auto_textobject?       string|string[] mode 'o', auto detect textobject, default 'ga'
----@field line_add_below?        string|string[] mode 'n', comment below, 'gco'
----@field line_add_above?        string|string[] mode 'n', comment above, 'gcO'
----@field line_add_eol?          string|string[] mode 'n', comment eol, 'gcA'
----@field uncomment_auto?        string|string[] mode 'n', auto detect and uncomment, 'gcu'
----@field line_invert?           string|string[] mode 'nx', invert comment per line, ''
----@field line_force_add?        string|string[] mode 'nx', force add line comment, ''
----@field line_force_remove?     string|string[] mode 'nx', force remove line comment, ''
----@field dot_repeat?            string|string[] mode 'n', default '.'
+---@field line_toggle?            string|string[] mode 'n', operator, default 'gc'
+---@field line_toggle_cur?        string|string[] mode 'n', default 'gcc'
+---@field line_toggle_visual?     string|string[] mode 'x', default 'gc'
+---@field line_toggle_insert      string|string[] mode 'i', toggle comment at current line in insert mode, default '', e.g. {'<C-/>', '<C-_>'}
+---@field block_toggle?           string|string[] mode 'n', operator, default 'gb'
+---@field block_toggle_cur?       string|string[] mode 'n', default 'gbc'
+---@field block_toggle_visual?    string|string[] mode 'x', default 'gb'
+---@field line_textobject?        string|string[] mode 'o', linewise outer textobject, default 'gc'
+---@field block_textobject?       string|string[] mode 'o', blockwise outer textobject, default 'gb'
+---@field auto_textobject?        string|string[] mode 'o', auto detect outer textobject, default '', e.g. 'ac'
+---@field line_textobject_inner?  string|string[] mode 'o', linewise inner textobject, default ''
+---@field block_textobject_inner? string|string[] mode 'o', blockwise inner textobject, default ''
+---@field auto_textobject_inner?  string|string[] mode 'o', auto detect inner textobject, default '', e.g. 'ic'
+---@field line_add_below?         string|string[] mode 'n', comment below, default '', e.g. 'gco'
+---@field line_add_above?         string|string[] mode 'n', comment above, default '', e.g. 'gcO'
+---@field line_add_eol?           string|string[] mode 'n', comment eol, default '', e.g. 'gcA'
+---@field uncomment_auto?         string|string[] mode 'n', auto detect and uncomment, default '', e.g. 'gcu'
+---@field line_invert?            string|string[] mode 'nx', invert comment per line, default '', e.g. 'gcI'
+---@field line_force_add?         string|string[] mode 'nx', force add line comment, default '', e.g. 'gCC'
+---@field line_force_remove?      string|string[] mode 'nx', force remove line comment, default '', e.g. 'gCU'
+---@field dot_repeat?             string|string[] mode 'n', default '.'
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor                boolean
@@ -285,6 +288,10 @@ H.config = {
     line_textobject         = "gc",
     block_textobject        = "gb",
     auto_textobject         = "",
+
+    line_textobject_inner   = "",
+    block_textobject_inner  = "",
+    auto_textobject_inner   = "",
 
     uncomment_auto          = "",
 
@@ -1051,9 +1058,10 @@ end
 ---@field lcs_pos?    Celeste.Comment.Range3
 ---@field rcs_pos?    Celeste.Comment.Range3
 ---@field will_blank? boolean
+---@field inner?      Celeste.Comment.Range3
 
 ---@param csi   Celeste.Comment.CommentStringInfo
----@param opts? {check_only?: boolean, check_will_blank?: boolean}
+---@param opts? {check_only?: boolean, check_will_blank?: boolean, with_inner?: boolean}
 ---@return Celeste.Comment.MatchLineComment.Result
 function H.match_line_comment(line, row, csi, opts)
   opts = opts or {}
@@ -1082,6 +1090,11 @@ function H.match_line_comment(line, row, csi, opts)
 
       local res = { matched = true, idx = idx, lcs_pos = lcs_pos, rcs_pos = rcs_pos }
       if opts.check_will_blank then res.will_blank = content:match("^%s*$") ~= nil end
+      if opts.with_inner then
+        local istart = lcs_pos and (lcs_pos[3] + 1) or (p2 - 1)
+        local iend = rcs_pos and (rcs_pos[2] - 1) or (#line - 1)
+        if iend >= istart then res.inner = { row, istart, iend } end
+      end
 
       return res
     end
@@ -2117,11 +2130,19 @@ end
 ---@param cfg Celeste.Comment.Opts
 ---@param cursor vim.Pos
 ---@param csi Celeste.Comment.CommentStringInfo
+---@param inner? boolean
 ---@return Celeste.Comment.Range4?
-function H.compute_linecomment_range(cfg, cursor, csi)
-  local nlines = vim.api.nvim_buf_line_count(cursor.buf)
+function H.compute_linecomment_range(cfg, cursor, csi, inner)
   local row = cursor.row + 1
   local line = vim.fn.getline(row)
+
+  if inner then
+    local res = H.match_line_comment(line, cursor.row, csi, { with_inner = true })
+    if res.matched and res.inner then return { res.inner[1], res.inner[2], res.inner[1], res.inner[3] } end
+    return
+  end
+
+  local nlines = vim.api.nvim_buf_line_count(cursor.buf)
 
   local function is_comment(lnum)
     local l = vim.fn.getline(lnum)
@@ -2162,10 +2183,16 @@ function H.compute_linecomment_range(cfg, cursor, csi)
   return { lnum_from - 1, cursor.col, lnum_to - 1, cursor.col }
 end
 
+---@class Celeste.Comment.BlockMatchPair.Res
+---@field range   Celeste.Comment.Range4
+---@field lcs_len integer
+---@field rcs_len integer
+---@field idx     integer -- index into csi.pairs
+
 ---@param lbegin integer
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cursor vim.Pos
----@return Celeste.Comment.Range4[]
+---@return Celeste.Comment.BlockMatchPair.Res[]
 function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
   local nlines = #lines
   local cursor_row, cursor_col = cursor.row + 1, cursor.col
@@ -2180,7 +2207,7 @@ function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
     return true
   end
 
-  for _, v in ipairs(csi.pairs) do
+  for pidx, v in ipairs(csi.pairs) do
     local tlcs, trcs = v.traw[1], v.traw[2]
     if tlcs ~= "" and trcs ~= "" then
       local lcs_esc, rcs_esc = v.tesc[1], v.tesc[2]
@@ -2218,7 +2245,8 @@ function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
                 local key = table.concat({ ol, ocs, cl, cce }, ":")
                 if not seen[key] then
                   seen[key] = true
-                  plist[#plist + 1] = { ol, ocs, cl, cce, lcs_len, rcs_len }
+                  plist[#plist + 1] =
+                    { range = { ol - 1, ocs, cl - 1, cce }, lcs_len = lcs_len, rcs_len = rcs_len, idx = pidx }
                 end
               end
               pos = cpos + rcs_len
@@ -2234,22 +2262,23 @@ function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
   end
 
   table.sort(all_pairs, function(a, b)
+    local ar, br = a.range, b.range
     -- Detect marker overlap: e.g. `{/*` (len 3) and `/*` (len 2) share bytes.
     -- This is not real nesting — prefer the larger region.
-    if a[1] == b[1] then
-      local a_start, a_len = a[2], a[5]
-      local b_start, b_len = b[2], b[5]
+    if ar[1] == br[1] then
+      local a_start, a_len = ar[2], a.lcs_len
+      local b_start, b_len = br[2], b.lcs_len
       if (a_start <= b_start and b_start < a_start + a_len) or (b_start <= a_start and a_start < b_start + b_len) then
-        local ra, ca = a[3] - a[1], a[4] - a[2]
-        local rb, cb = b[3] - b[1], b[4] - b[2]
+        local ra, ca = ar[3] - ar[1], ar[4] - ar[2]
+        local rb, cb = br[3] - br[1], br[4] - br[2]
         if ra ~= rb then return ra > rb end
         return ca > cb
       end
     end
 
     -- Real nesting (or non-overlapping pairs): smaller region first.
-    local ra, ca = a[3] - a[1], a[4] - a[2]
-    local rb, cb = b[3] - b[1], b[4] - b[2]
+    local ra, ca = ar[3] - ar[1], ar[4] - ar[2]
+    local rb, cb = br[3] - br[1], br[4] - br[2]
     if ra ~= rb then return ra < rb end
     return ca < cb
   end)
@@ -2307,11 +2336,37 @@ function H.textobject_comment_at_cursor(cursor)
   if has_query then return nil, true end
 end
 
+---@param lines string[]
+---@param range Celeste.Comment.Range4
+---@param pair  Celeste.Comment.CommentStringInfo.Pairs
+---@param ci    boolean
+---@return Celeste.Comment.Range4?
+function H.block_inner_range(lines, range, pair, ci)
+  local lcs_len, rcs_len = #pair.traw[1], #pair.traw[2]
+  local olcs, orcs = pair.tout[1], pair.tout[2]
+  local pad_rcs = #orcs - rcs_len
+  local l1, ln = lines[1], lines[#lines]
+
+  local cscol = range[2] + lcs_len + H.match_byte(l1, range[2] + lcs_len, olcs, lcs_len, 1, ci)
+
+  local rcs_start = range[4] - rcs_len + 1
+  local cecol = rcs_start - 1 - math.min(H.match_byte(ln, math.max(rcs_start - pad_rcs, 0), orcs, 0, 1, ci), pad_rcs)
+
+  if range[1] == range[3] then
+    if cecol < cscol then return end
+  elseif cecol < 0 then
+    local prev = lines[#lines - 1]
+    return { range[1], cscol, range[3] - 1, #prev - 1 }
+  end
+
+  return { range[1], cscol, range[3], cecol }
+end
+
 ---@param buf       integer
 ---@param csi       Celeste.Comment.CommentStringInfo
 ---@param ts_range? Celeste.Comment.Range4
 ---@return Celeste.Comment.Range4?
-function H.textobject_block_match_ts(buf, csi, ts_range)
+function H.textobject_block_match_ts(buf, csi, ts_range, inner)
   if not ts_range then return end
 
   local lines = vim.api.nvim_buf_get_lines(buf, ts_range[1], ts_range[3] + 1, false)
@@ -2325,6 +2380,7 @@ function H.textobject_block_match_ts(buf, csi, ts_range)
         H.match_byte(first, ts_range[2], tlcs, 0, 1, csi.ci) == #tlcs
         and H.match_byte(last, ts_range[4] - #trcs + 1, trcs, 0, 1, csi.ci) == #trcs
       then
+        if inner then return H.block_inner_range(lines, ts_range, v, csi.ci) end
         return ts_range
       end
     end
@@ -2336,14 +2392,14 @@ end
 ---@param csi      Celeste.Comment.CommentStringInfo
 ---@param ts_range? Celeste.Comment.Range4
 ---@return Celeste.Comment.Range4?
-function H.compute_blockcomment_range(cfg, cursor, csi, ts_range)
+function H.compute_blockcomment_range(cfg, cursor, csi, ts_range, inner)
   if not ts_range and cfg.textobj_treesitter_detect then
     local range, ts_no_comment = H.textobject_comment_at_cursor(cursor)
     if ts_no_comment then return end
     ts_range = range
   end
 
-  if ts_range and #ts_range == 4 then return H.textobject_block_match_ts(cursor.buf, csi, ts_range) end
+  if ts_range and #ts_range == 4 then return H.textobject_block_match_ts(cursor.buf, csi, ts_range, inner) end
 
   local nlines = vim.api.nvim_buf_line_count(cursor.buf)
   local from_limit = math.max(1, cursor.row + 1 - cfg.block_textobj_nlines)
@@ -2355,7 +2411,10 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range)
   if #pairs == 0 then return end
   local idx = math.min(vim.v.count1, #pairs)
   local p = pairs[idx]
-  return { p[1] - 1, p[2], p[3] - 1, p[4] }
+  if not inner then return p.range end
+
+  local subrange = vim.list_slice(lines, p.range[1] - from_limit + 2, p.range[3] - from_limit + 2)
+  return H.block_inner_range(subrange, p.range, csi.pairs[p.idx], csi.ci)
 end
 
 ---@param range? Celeste.Comment.Range4
@@ -2385,10 +2444,11 @@ end
 
 ---@param cfg Celeste.Comment.Opts
 ---@param cursor vim.Pos
+---@param inner? boolean
 ---@return Celeste.Comment.Range4?
 ---@return Celeste.Comment.CommentType?
 ---@return Celeste.Comment.CommentStringInfo?
-function H.compute_x_comment_range(cfg, cursor)
+function H.compute_x_comment_range(cfg, cursor, inner)
   local all_csi = H.make_all_csi(cursor, cfg, nil, false)
   if not all_csi then return end
   local lcsi, bcsi = all_csi[M.CMT.kLine], all_csi[M.CMT.kBlock]
@@ -2404,30 +2464,33 @@ function H.compute_x_comment_range(cfg, cursor)
   if lcsi then
     local r
     if lcsi.wrapped and cfg.fallback_to_block == M.FBK2BLOCK.kIfLineCmsWrapped then
-      r = H.compute_blockcomment_range(cfg, cursor, lcsi)
+      r = H.compute_blockcomment_range(cfg, cursor, lcsi, nil, inner)
       if r then return r, M.CMT.kBlock, lcsi end
     end
 
     if bprefix and bcsi then
-      r = H.compute_blockcomment_range(cfg, cursor, bcsi)
+      r = H.compute_blockcomment_range(cfg, cursor, bcsi, nil, inner)
       if r then return r, M.CMT.kBlock, bcsi end
     end
 
-    r = H.compute_linecomment_range(cfg, cursor, lcsi)
+    r = H.compute_linecomment_range(cfg, cursor, lcsi, inner)
     if r then return r, M.CMT.kLine, lcsi end
   end
 
-  if not bprefix and bcsi then return H.compute_blockcomment_range(cfg, cursor, bcsi), M.CMT.kBlock, bcsi end
+  if not bprefix and bcsi then
+    return H.compute_blockcomment_range(cfg, cursor, bcsi, nil, inner), M.CMT.kBlock, bcsi
+  end
 end
 
 --- Auto-detect linewise or blockwise textobject
-function H.textobject_auto()
+---@param inner? boolean
+function H.textobject_auto(inner)
   if H.is_disabled() then return end
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
-  local range, ctype = H.compute_x_comment_range(cfg, cursor)
+  local range, ctype = H.compute_x_comment_range(cfg, cursor, inner)
   if not range or not ctype then return end
-  H.select_range(range, { mode = ctype == M.CMT.kLine and "V" or "v", end_inclusive = true })
+  H.select_range(range, { mode = inner and "v" or (ctype == M.CMT.kLine and "V" or "v"), end_inclusive = true })
 end
 
 --- Auto-detect and remove comment
@@ -2452,23 +2515,27 @@ function H.uncomment_auto()
 end
 
 -- Textobject: select contiguous linewise comment block
-function H.textobject_linewise()
+---@param inner? boolean
+function H.textobject_linewise(inner)
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
-
-  if cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then return H.textobject_auto() end
-
   local cursor = H.make_cursor(0)
+
+  if cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then return H.textobject_auto(inner) end
 
   local csi = H.resolve(cursor, M.CMT.kLine, cfg)
   if not csi then return end
 
-  H.select_range((H.compute_linecomment_range(cfg, cursor, csi)), { mode = "V", end_inclusive = true })
+  H.select_range((H.compute_linecomment_range(cfg, cursor, csi, inner)), {
+    mode = inner and "v" or "V",
+    end_inclusive = true,
+  })
 end
 
 ---Textobject: select blockwise comment that surrounds the cursor.
-function H.textobject_blockwise()
+---@param inner? boolean
+function H.textobject_blockwise(inner)
   if H.is_disabled() then return end
 
   local cfg = H.buf_config()
@@ -2477,7 +2544,7 @@ function H.textobject_blockwise()
   local csi = H.resolve(cursor, M.CMT.kBlock, cfg)
   if not csi then return end
 
-  H.select_range((H.compute_blockcomment_range(cfg, cursor, csi)), { mode = "v", end_inclusive = true })
+  H.select_range((H.compute_blockcomment_range(cfg, cursor, csi, nil, inner)), { mode = "v", end_inclusive = true })
 end
 
 ---@param kind 'above'|'below'|'eol'
@@ -2674,6 +2741,24 @@ function M.setup(config)
     m.auto_textobject,
     '<cmd>lua require("celeste_comment").H.textobject_auto()<cr>',
     { desc = "Auto line/block textobject" }
+  )
+  map(
+    m.line_toggle_visual == m.line_textobject_inner and "o" or { "o", "x" },
+    m.line_textobject_inner,
+    '<cmd>lua require("celeste_comment").H.textobject_linewise(true)<cr>',
+    { desc = "Linewise inner comment textobject" }
+  )
+  map(
+    m.block_toggle_visual == m.block_textobject_inner and "o" or { "o", "x" },
+    m.block_textobject_inner,
+    '<cmd>lua require("celeste_comment").H.textobject_blockwise(true)<cr>',
+    { desc = "Block inner comment textobject" }
+  )
+  map(
+    { "o", "x" },
+    m.auto_textobject_inner,
+    '<cmd>lua require("celeste_comment").H.textobject_auto(true)<cr>',
+    { desc = "Auto inner line/block textobject" }
   )
 
   map("i", m.line_toggle_insert, function()
