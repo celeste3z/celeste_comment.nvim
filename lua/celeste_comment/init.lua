@@ -125,7 +125,7 @@ M.ACTION = {
 ---@field rcs_pos          Celeste.Comment.Range3? position of rcs
 ---@field csi              Celeste.Comment.CommentStringInfo comment string info
 ---@field indent           Celeste.Comment.IndentInfo resolved indent info (shared across lines)
----@field visible_col      integer visible column count of leading whitespace
+---@field visible_col?     integer visible column count of leading whitespace (nil unless all-blank and ignore_empty_lines=kMixed)
 ---@field min_visible_col? integer aligned target visible column (for padding calculation)
 ---@field commented?       boolean commented or not
 ---@field all_blank?       boolean blank line
@@ -1397,15 +1397,27 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
   local indent = H.compute_indent_chainably(cursor, cfg)
   local indent_size = indent.indent_size
   local only_whitespace_lines = true
-  local min_visible_col = math.huge
+  local min_visible_col = math.huge --[[@as integer]]
   assert(indent_size > 0, "indent_size must be positive")
+
+  ---@param line string
+  ---@param ws_len integer
+  ---@param limit integer
+  ---@return integer
+  local function leading_visible_col(line, ws_len, limit)
+    local visible_col = 0
+    for j = 1, ws_len do
+      visible_col = H.next_visible_column(visible_col, line:byte(j), indent_size)
+      if visible_col >= limit then break end
+    end
+    return visible_col
+  end
 
   for i, line in ipairs(lines) do
     local row = range[1] + i - 1
     ---@type Celeste.Comment.LineCommentInfo.Line
     local info = {
       lead_ws_len = 0,
-      visible_col = 0,
       offset = 0,
       ignore = false,
       csi = csi,
@@ -1415,15 +1427,15 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
     local ws = line:match("^(%s*)")
     local ws_len = #ws
 
-    for j = 1, ws_len do
-      info.visible_col = H.next_visible_column(info.visible_col, line:byte(j), indent_size)
-    end
-
     if ws_len == #line then
       info.ignore = cfg.ignore_empty_lines == M.IGN_EMT.kAlways
       info.offset = cfg.line_comment_no_indent and 0 or #line
       info.lead_ws_len = ws_len
       info.all_blank = true
+      -- PERF: only kMixed blank lines need the full visible column (for padding)
+      if cfg.ignore_empty_lines == M.IGN_EMT.kMixed then
+        info.visible_col = leading_visible_col(line, ws_len, math.huge --[[@as integer]])
+      end
     else
       only_whitespace_lines = false
       info.offset = cfg.line_comment_no_indent and 0 or ws_len
@@ -1444,7 +1456,8 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
 
     if not info.ignore and not cfg.line_comment_no_indent then
       if not info.all_blank or cfg.ignore_empty_lines ~= M.IGN_EMT.kMixed then
-        min_visible_col = math.min(min_visible_col, info.visible_col)
+        local col = leading_visible_col(line, ws_len, min_visible_col)
+        if col < min_visible_col then min_visible_col = col end
       end
     end
 
@@ -1464,7 +1477,10 @@ function H.line_comment_info(lines, csi, cfg, range, action, cursor, opts)
     for _, info in ipairs(all_info.lines) do
       info.ignore = false
 
-      if need_align_indent_for_blank then min_visible_col = math.min(min_visible_col, info.visible_col) end
+      if need_align_indent_for_blank then
+        assert(info.visible_col ~= nil, "kMixed blank line must have visible_col")
+        min_visible_col = math.min(min_visible_col, info.visible_col) --[[@as integer]]
+      end
     end
   end
 
@@ -1526,13 +1542,15 @@ function H.make_comment_edits(info, line, cfg, range, opts)
     return edits
   end
 
-  if info.all_blank and cfg.ignore_empty_lines == M.IGN_EMT.kMixed and info.visible_col < info.min_visible_col then
-    local pad = H.make_indent_padding(
-      info.visible_col,
-      info.min_visible_col --[[@as integer]],
-      info.indent.indent_size,
-      info.indent.indent_style
-    )
+  if
+    info.all_blank
+    and cfg.ignore_empty_lines == M.IGN_EMT.kMixed
+    and info.visible_col
+    and info.min_visible_col
+    and info.visible_col < info.min_visible_col
+  then
+    local pad =
+      H.make_indent_padding(info.visible_col, info.min_visible_col, info.indent.indent_size, info.indent.indent_style)
     edits[#edits + 1] = {
       range = { row, info.lead_ws_len, row, info.lead_ws_len },
       text = { pad .. csi.olcs },
