@@ -108,9 +108,15 @@ require("celeste_comment").setup()
 
   -- Restore selection after commenting.
   -- Possible values: "never" | "adjust" | "expand_block" | "expand_line" | "keep_visual"
+  --
   -- Can also combine, e.g. "expand_line | keep_visual" which means: force line comments to
   -- `V` mode and stay in visual mode
-  -- See `:help celeste_comment-config-keep_selection` for more details
+  -- See `:help celeste_comment-config-keep_selection` for more details.
+  --
+  -- NOTE: Currently, `keep_selection` is incompatible with native multicursor (nvim 0.13+)
+  -- due to some nvim core issues. It is skipped during operations when multiple cursors
+  -- are detected; otherwise it works normally. See:
+  -- * https://github.com/neovim/neovim/issues/41606
   keep_selection         = "never",
 
   -- Insert space between comment marker and text.
@@ -200,13 +206,6 @@ require("celeste_comment").setup()
     line_force_add       = "",
     -- Force remove line comment (n, x), example `gCU`
     line_force_remove    = "",
-
-    -- Cursor sticky dot-repeat.
-    -- If a "." mapping already exists, this will not override it.
-    -- You can also call `require("celeste_comment").track_state()` in your
-    -- own dot-repeat keymap to enable sticky cursor behavior.
-    -- See `:help celeste_comment-api` for more details.
-    dot_repeat           = ".",
   },
 
   hooks = {
