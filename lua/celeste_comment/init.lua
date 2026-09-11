@@ -354,6 +354,37 @@ do
     if pos then return H.make_pos(pos.buf, pos.row, pos.col) end
   end
 
+  ---@param pos? vim.Pos
+  ---@return string
+  function H.pos_to_string(pos)
+    if pos then return ("{%s, %s, %s}"):format(pos.row, pos.col, pos.buf) end
+    return "nil"
+  end
+
+  ---@type ((fun(motion:Celeste.Comment.Motion))|string)?
+  H.sentinel = "v:lua.require'celeste_comment'.H.operator"
+
+  ---@param f fun(motion:Celeste.Comment.Motion)
+  function H.apply_operator(f)
+    H.operator = f
+    vim.go.operatorfunc = H.sentinel
+  end
+
+  ---@return boolean
+  function H.mcursor_active() return false end
+
+  if HAS_NVIM_013 then
+    ---@param f fun(motion:Celeste.Comment.Motion)
+    function H.apply_operator(f)
+      H.sentinel = f
+      vim.go.operatorfunc = f
+    end
+
+    local MCURSOR_NS = vim.api.nvim_create_namespace("nvim.multicursor")
+    ---@return boolean
+    function H.mcursor_active() return #vim.api.nvim_buf_get_extmarks(0, MCURSOR_NS, 0, -1, { limit = 1 }) > 0 end
+  end
+
   if vim.fn.has("nvim-0.12.2") == 1 then
     ---@param buf integer
     ---@param pos [integer, integer] (lnum, col) tuple
@@ -568,8 +599,8 @@ function H.is_disabled(opt)
   return #chunks > 1
 end
 
----@return boolean
-function H.is_visual() return vim.fn.mode():match("[vV\22]") ~= nil end
+---@return string?
+function H.current_visual() return vim.fn.mode():match("[vV\22]") end
 
 ---@param v string|integer
 ---@param map table<string, integer>
@@ -1962,8 +1993,9 @@ end
 function H.make_state_track()
   local state = {} ---@type Celeste.Comment.StateTrack
   state.cursor = H.make_cursor(0)
-  if H.is_visual() then
-    state.mode = vim.fn.mode()
+  local current_visual = H.current_visual()
+  if current_visual then
+    state.mode = current_visual
     local endpos = vim.fn.getpos("v")
     state.endpos = H.make_pos(endpos[1], endpos[2] - 1, endpos[3] - 1)
   end
@@ -1971,6 +2003,15 @@ function H.make_state_track()
   state.adj_cursor = H.pos_clone(state.cursor)
   state.adj_endpos = H.pos_clone(state.endpos)
   return state
+end
+
+---@param e Celeste.Comment.StateTrack?
+---@return string
+function H.state_track_to_string(e)
+  if e then
+    return ("{mode:%s, cursor:%s, endpos:%s}"):format(e.mode, H.pos_to_string(e.cursor), H.pos_to_string(e.endpos))
+  end
+  return "nil"
 end
 
 ---@param state Celeste.Comment.StateTrack
@@ -2028,17 +2069,23 @@ function H.restore_state(ctx)
   local cfg, state = ctx.cfg, ctx.state_track
   if not state then return end
 
-  local keep_visual = bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kKeepVisual) ~= 0
+  -- FIXME: `keep_selection` is incompatible with native multicursor due to some
+  -- nvim core issues. The following also don't work with multicursor:
+  -- 1. Built-in `vim.treesitter.select()`
+  -- 2. mini.ai
+  -- 3. nvim-treesitter-textobject select
+  -- Remove this guard when nvim core fixes multicursor support.
+  if not H.mcursor_active() then
+    local keep_visual = bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kKeepVisual) ~= 0
 
-  local range, mode = H.keep_selection_expand(state, cfg.keep_selection, ctx.ctype, ctx.motion, ctx.edits, ctx.csi)
-  if range then
-    H.select_range(range, { mode = mode, exit = not keep_visual })
-    return
-  end
-
-  if keep_visual and state.mode then
-    vim.cmd.normal({ "gv", bang = true })
-    return
+    local range, mode = H.keep_selection_expand(state, cfg.keep_selection, ctx.ctype, ctx.motion, ctx.edits, ctx.csi)
+    if range then
+      H.select_range(range, { mode = mode, keep_visual = keep_visual })
+      if keep_visual then return end
+    elseif keep_visual and state.mode then
+      vim.cmd.normal({ "gv", bang = true })
+      return
+    end
   end
 
   if cfg.keep_cursor and state.adj_cursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.adj_cursor)) end
@@ -2162,7 +2209,10 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
 
   H.invoke_pre_commit_chainably(ctx)
 
-  H.commit_edits(cursor.buf, ctx.range, ctx.lines, ctx.edits, ctx.o_use_set_text or cfg.use_set_text)
+  -- Use `nvim_buf_set_text` when multicursor is active: it correctly handles
+  -- multiple edits on the same line from multiple cursors.
+  local use_set_text = ctx.o_use_set_text or cfg.use_set_text or H.mcursor_active()
+  H.commit_edits(cursor.buf, ctx.range, ctx.lines, ctx.edits, use_set_text)
 
   H.invoke_post_commit_chainably(ctx --[[@as Celeste.Comment.Hooks.PostCommitEdits.Ctx]])
 end
@@ -2460,28 +2510,34 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range, inner)
 end
 
 ---@param range? Celeste.Comment.Range4
----@param opts? { mode?: 'V'|'v'|string, end_inclusive?: boolean, exit?: boolean }
+---@param opts? { mode?: 'V'|'v'|string, end_inclusive?: boolean, keep_visual?: boolean }
 function H.select_range(range, opts)
   if not range then return end
   opts = opts or {}
   local mode = opts.mode or "v"
+  local keep_visual = opts.keep_visual ~= false
 
-  if H.is_visual() then vim.cmd.normal({ "\27", bang = true }) end
+  vim._with({ noautocmd = true }, function()
+    local current_visual = H.current_visual()
+    if current_visual then
+      vim.cmd.normal({ current_visual ~= mode and (mode .. "\27") or "\27", bang = true })
+    elseif vim.fn.visualmode() ~= mode then
+      vim.cmd.normal({ mode .. "\27", bang = true })
+    end
 
-  local sv = vim.fn.winsaveview()
+    local view = vim.fn.winsaveview()
 
-  local cur_col = range[4]
-  if opts.end_inclusive and vim.o.selection == "exclusive" then cur_col = cur_col + 1 end
+    local endcol = range[4]
+    if opts.end_inclusive and vim.o.selection == "exclusive" then endcol = endcol + 1 end
 
-  vim.api.nvim_win_set_cursor(0, { range[1] + 1, range[2] })
-  vim.cmd.normal({ "zv", bang = true })
-  vim.cmd.normal({ mode, bang = true })
-  vim.api.nvim_win_set_cursor(0, { range[3] + 1, cur_col })
-  vim.cmd.normal({ "zv", bang = true })
+    vim.api.nvim_buf_set_mark(0, "<", range[1] + 1, range[2], {})
+    vim.api.nvim_buf_set_mark(0, ">", range[3] + 1, endcol, {})
 
-  vim.fn.winrestview({ leftcol = sv.leftcol, topline = sv.topline })
+    if keep_visual then vim.cmd.normal({ "gv", bang = true }) end
 
-  if opts.exit then vim.cmd.normal({ "\27", bang = true }) end
+    -- TODO: should we restore topline as well?
+    vim.fn.winrestview({ leftcol = view.leftcol, topline = view.topline })
+  end)
 end
 
 ---@param cfg Celeste.Comment.Opts
@@ -2600,26 +2656,32 @@ function H.insert_comment(kind)
   local csi = H.resolve(cursor, M.CMT.kLine, cfg)
   if not csi then return end
 
+  local rcs_only = csi.olcs == ""
+
   if kind ~= "eol" then
     local target = cursor.row + (kind == "above" and 0 or 1)
     vim.api.nvim_buf_set_lines(buf, target, target, false, { csi.olcs .. csi.orcs })
     vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
     vim.cmd.normal({ "==", bang = true })
-    local indent = #(vim.api.nvim_get_current_line():match("^(%s*)"))
-    vim.api.nvim_win_set_cursor(0, { target + 1, indent + #csi.olcs })
+    local line = vim.api.nvim_get_current_line()
+    local indent = #(line:match("^(%s*)"))
+    vim.api.nvim_win_set_cursor(0, { target + 1, rcs_only and indent or indent + #csi.olcs - 1 })
   else
     local line = vim.api.nvim_get_current_line()
     if line:find("^%s*$") then
       vim.api.nvim_buf_set_text(buf, cursor.row, 0, cursor.row, 0, { csi.olcs .. csi.orcs })
       vim.cmd.normal({ "==", bang = true })
-      local indent = #(vim.api.nvim_get_current_line():match("^(%s*)"))
-      vim.api.nvim_win_set_cursor(0, { cursor.row + 1, indent + #csi.olcs })
+      line = vim.api.nvim_get_current_line()
+      local indent = #(line:match("^(%s*)"))
+      vim.api.nvim_win_set_cursor(0, { cursor.row + 1, rcs_only and indent or indent - 1 + #csi.olcs })
     else
       vim.api.nvim_buf_set_text(buf, cursor.row, #line, cursor.row, #line, { " " .. csi.olcs .. csi.orcs })
-      vim.api.nvim_win_set_cursor(0, { cursor.row + 1, #line + 1 + #csi.olcs })
+      vim.api.nvim_win_set_cursor(0, { cursor.row + 1, rcs_only and #line + 1 or #line + #csi.olcs })
     end
   end
-  vim.cmd.startinsert({ bang = (csi.trcs == "") })
+
+  -- needed for multicursor
+  vim.api.nvim_feedkeys((rcs_only and "i" or "a"), "tn", false)
 end
 
 ---@param cursor vim.Pos
@@ -2646,39 +2708,46 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
   H.make_actionx(cfg, n_ctype, action, lines, csi, range, motion, cursor, opts)
 end
 
---- Track cursor and selection state
-function M.track_state() H.state_track = H.make_state_track() end
-
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.InvokeCtx
 ---@return fun():string
 function H.make_operator(ctype, opts)
   opts = opts or {}
-  local s = type(opts.suffix) == "string" and opts.suffix or ""
+  local m = type(opts.motion) == "string" and opts.motion or ""
   local action = opts.action or M.ACTION.kToggle
 
   ---@param motion Celeste.Comment.Motion
   local f = function(motion)
-    local state_track = H.state_track
-    H.state_track = nil
-    -- actually, at the region start position, it may not be the same as `cursor_state`
+    local state_track ---@type Celeste.Comment.StateTrack?
+    state_track, H.state_track = H.state_track, nil
+
+    if H.is_disabled({ check_modifiable = true }) then return end
+
+    -- actually, at the region start position, it may not be the same as `state_track.cursor`
     local cursor = H.make_cursor(0)
     local range = H.get_selection_range(cursor.buf)
     if not range then return end
+
+    if opts.visual then
+      -- HACK: For visual keymaps, `gv` is needed to restore the selection:
+      -- direct marks ('<, '>) lose column info for V mode (:help '<), and
+      -- `v`/`.` are not usable outside visual mode.
+      assert(vim.fn.visualmode() ~= "", "unexpected error")
+      vim._with({ noautocmd = true, keepjumps = true, buf = cursor.buf }, function()
+        local sv = vim.fn.winsaveview()
+        vim.cmd.normal({ "gv", bang = true })
+        state_track = H.make_state_track()
+        vim.cmd.normal({ "\27", bang = true })
+        vim.fn.winrestview(sv)
+      end)
+    end
+
     H.make_action_range(cursor, range, ctype, action, motion, { cfg = opts.cfg, state_track = state_track })
   end
 
   return function()
-    if H.is_disabled({ check_modifiable = true }) then return "" end
-    H.state_track = H.make_state_track()
-
-    if HAS_NVIM_013 then
-      vim.o.operatorfunc = f
-    else
-      H.operator = f
-      vim.o.operatorfunc = "v:lua.require'celeste_comment'.H.operator"
-    end
-    return "g@" .. s
+    H.apply_operator(f)
+    return "g@" .. m
   end
 end
 
@@ -2721,6 +2790,28 @@ function M.setup(config)
 
   H.config = H.normalize_config(config)
 
+  local group = vim.api.nvim_create_augroup("celeste_comment.nvim.augroup", { clear = true })
+
+  -- Capture original cursor position when entering operator-pending mode (normal mode g@)
+  -- This is a workaround to make sticky cursor works for dot repeat and also nvim's built-in
+  -- multiple cursor, see:
+  -- * https://github.com/neovim/neovim/discussions/41819
+  -- * https://github.com/neovim/neovim/issues/41830
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    group = group,
+    pattern = { "n:no*", "no*:n" },
+    desc = "celeste_comment.nvim : capture original cursor position before motion",
+    callback = function(ev)
+      if vim.v.operator ~= "g@" then return end
+      if vim.go.operatorfunc ~= H.sentinel then return end
+      if vim.startswith(ev.match, "no") then
+        H.state_track = nil
+      else
+        H.state_track = H.make_state_track()
+      end
+    end,
+  })
+
   local m = H.config.mappings --[[@as Celeste.Comment.Opts.Mapping]]
 
   ---@param mode string|string[]
@@ -2739,31 +2830,35 @@ function M.setup(config)
   end
 
   -- stylua: ignore start
-  local op_line_toggle      = H.make_operator(M.CMT.kLine)
-  local op_line_toggle_cur  = H.make_operator(M.CMT.kLine, { suffix = "_" })
-  local op_block_toggle     = H.make_operator(M.CMT.kBlock)
-  local op_block_toggle_cur = H.make_operator(M.CMT.kBlock, { suffix = "_" })
-  local op_invert           = H.make_operator(M.CMT.kLine, { action = M.ACTION.kInvert })
-  local op_force_add        = H.make_operator(M.CMT.kLine, { action = M.ACTION.kForceAdd })
-  local op_force_rmv        = H.make_operator(M.CMT.kLine, { action = M.ACTION.kForceRemove })
+  local op_line_toggle      = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kToggle })
+  local op_line_toggle_cur  = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kToggle, motion = "_" })
+  local op_line_toggle_v    = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kToggle, visual = true })
+  local op_block_toggle     = H.make_operator(M.CMT.kBlock, { action = M.ACTION.kToggle })
+  local op_block_toggle_cur = H.make_operator(M.CMT.kBlock, { action = M.ACTION.kToggle, motion = "_" })
+  local op_block_toggle_v   = H.make_operator(M.CMT.kBlock, { action = M.ACTION.kToggle, visual = true })
+  local op_invert           = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kInvert })
+  local op_invert_v         = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kInvert, visual = true })
+  local op_force_add        = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kForceAdd })
+  local op_force_add_v      = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kForceAdd, visual = true })
+  local op_force_rmv        = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kForceRemove })
+  local op_force_rmv_v      = H.make_operator(M.CMT.kLine,  { action = M.ACTION.kForceRemove, visual = true })
 
-  map("n", m.line_toggle,        op_line_toggle,      { expr = true, desc = "Line comment by motion" })
-  map("n", m.line_toggle_cur,    op_line_toggle_cur,  { expr = true, desc = "Line comment current line" })
-  map("x", m.line_toggle_visual, op_line_toggle,      { expr = true, desc = "Line comment selection" })
-  map("n", m.block_toggle,       op_block_toggle,     { expr = true, desc = "Block comment by motion" })
-  map("n", m.block_toggle_cur,   op_block_toggle_cur, { expr = true, desc = "Block comment current line" })
-  map("x", m.block_toggle_visual,op_block_toggle,     { expr = true, desc = "Block comment selection" })
-
-  map("n", m.line_add_below,  function() H.insert_comment("below") end, { desc = "Add comment below" })
-  map("n", m.line_add_above,  function() H.insert_comment("above") end, { desc = "Add comment above" })
-  map("n", m.line_add_eol,    function() H.insert_comment("eol")   end, { desc = "Add comment at end of line" })
-  map("n", m.uncomment_auto,  function() H.uncomment_auto()        end, { desc = "Auto detect and uncomment" })
-
-  map("n", m.line_invert, op_invert, { expr = true, desc = "Invert comment by motion" })
-  map("x", m.line_invert, op_invert, { expr = true, desc = "Invert comment selection" })
-
-  map({ "n", "x" }, m.line_force_add,    op_force_add, { expr = true, desc = "Force add line comment" })
-  map({ "n", "x" }, m.line_force_remove, op_force_rmv, { expr = true, desc = "Force remove line comment" })
+  map("n", m.line_toggle,         op_line_toggle,                           { expr = true, desc = "Line comment by motion" })
+  map("n", m.line_toggle_cur,     op_line_toggle_cur,                       { expr = true, desc = "Line comment current line" })
+  map("x", m.line_toggle_visual,  op_line_toggle_v,                         { expr = true, desc = "Line comment selection" })
+  map("n", m.block_toggle,        op_block_toggle,                          { expr = true, desc = "Block comment by motion" })
+  map("n", m.block_toggle_cur,    op_block_toggle_cur,                      { expr = true, desc = "Block comment current line" })
+  map("x", m.block_toggle_visual, op_block_toggle_v,                        { expr = true, desc = "Block comment selection" })
+  map("n", m.line_invert,         op_invert,                                { expr = true, desc = "Invert comment by motion" })
+  map("x", m.line_invert,         op_invert_v,                              { expr = true, desc = "Invert comment selection" })
+  map("n", m.line_force_add,      op_force_add,                             { expr = true, desc = "Force add line comment" })
+  map("x", m.line_force_add,      op_force_add_v,                           { expr = true, desc = "Force add line comment" })
+  map("n", m.line_force_remove,   op_force_rmv,                             { expr = true, desc = "Force remove line comment" })
+  map("x", m.line_force_remove,   op_force_rmv_v,                           { expr = true, desc = "Force remove line comment" })
+  map("n", m.line_add_below,      function() H.insert_comment("below") end, { desc = "Add comment below" })
+  map("n", m.line_add_above,      function() H.insert_comment("above") end, { desc = "Add comment above" })
+  map("n", m.line_add_eol,        function() H.insert_comment("eol")   end, { desc = "Add comment at end of line" })
+  map("n", m.uncomment_auto,      function() H.uncomment_auto()        end, { desc = "Auto detect and uncomment" })
   -- stylua: ignore end
 
   map(
@@ -2803,6 +2898,7 @@ function M.setup(config)
     { desc = "Auto inner line/block textobject" }
   )
 
+  -- TODO: support native multiple cursor
   map("i", m.line_toggle_insert, function()
     local cursor = H.make_cursor(0)
     local range = { cursor.row, cursor.col, cursor.row, cursor.col }
@@ -2811,14 +2907,6 @@ function M.setup(config)
       state_track = H.make_state_track(),
     })
   end, { desc = "Toggle line comment at insert mode" })
-
-  --TODO: eliminate this keymap by `CmdAtom`?
-  if vim.fn.maparg(".", "n") == "" then
-    map("n", m.dot_repeat, function()
-      H.state_track = H.make_state_track()
-      return "."
-    end, { expr = true, desc = "Dot-repeat track cursor for celeste_comment.nvim" })
-  end
 end
 
 -- test only

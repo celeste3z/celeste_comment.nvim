@@ -103,7 +103,6 @@ local T = new_set({
               line_invert = "gcI",
               line_force_add = "gC",
               line_force_remove = "gU",
-              dot_repeat = ".",
             },
             hooks = nil,
           })
@@ -2227,6 +2226,29 @@ T["insert_space"]["insert_space=false does not strip inner space"] = function()
   eq(get_lines(), { "    hello" })
 end
 
+T["insert_space"]["wrapped commentstring (lcs+rcs)"] = function()
+  child.b.celeste_comment_config =
+    { cms_confs = false, insert_space = false, fallback_to_block = "if_line_cms_wrapped" }
+  child.bo.commentstring = "<!--%s-->"
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "<!--hello-->" })
+  feed("gcc")
+  eq(get_lines(), { "hello" })
+end
+
+T["insert_space"]["rcs-only commentstring"] = function()
+  child.b.celeste_comment_config = { cms_confs = false, insert_space = false }
+  child.bo.commentstring = "%s#"
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gcc")
+  eq(get_lines(), { "hello#" })
+  feed("gcc")
+  eq(get_lines(), { "hello" })
+end
+
 -- extra keymap (gco, gcO, gcA) ───────────────────────────────────────────────
 
 T["extra"] = new_set()
@@ -2308,6 +2330,63 @@ T["extra"]["gcA appends --[[ ]] at eol"] = function()
   feed("1")
   eq(get_lines(), { "hello --[[ 1 ]]" })
   eq(get_cursor(), { 1, 12 })
+end
+
+T["extra"]["gcA on empty line with wrapped comment"] = function()
+  child.b.celeste_comment_config = { cms_confs = { wraptest = { "--[[%s]]" } } }
+  child.bo.filetype = "wraptest"
+  child.bo.commentstring = "# %s"
+  set_lines({ "" })
+  set_cursor(1, 0)
+  feed("gcA")
+  eq(get_lines(), { "--[[  ]]" })
+  eq(get_cursor(), { 1, 5 })
+  feed("1")
+  eq(get_lines(), { "--[[ 1 ]]" })
+  eq(get_cursor(), { 1, 6 })
+  feed("<Esc>")
+end
+
+T["extra"]["rcs-only gco inserts marker below"] = function()
+  child.b.celeste_comment_config = { cms_confs = false }
+  child.bo.commentstring = "%s#"
+  set_lines({ "aa", "bb" })
+  set_cursor(1, 0)
+  feed("gco")
+  eq(get_lines(), { "aa", "#", "bb" })
+  eq(get_cursor(), { 2, 0 })
+  feed("x")
+  eq(get_lines(), { "aa", "x#", "bb" })
+  eq(get_cursor(), { 2, 1 })
+  feed("<Esc>")
+end
+
+T["extra"]["rcs-only gcO inserts marker above"] = function()
+  child.b.celeste_comment_config = { cms_confs = false }
+  child.bo.commentstring = "%s#"
+  set_lines({ "aa", "bb" })
+  set_cursor(2, 0)
+  feed("gcO")
+  eq(get_lines(), { "aa", "#", "bb" })
+  eq(get_cursor(), { 2, 0 })
+  feed("x")
+  eq(get_lines(), { "aa", "x#", "bb" })
+  eq(get_cursor(), { 2, 1 })
+  feed("<Esc>")
+end
+
+T["extra"]["rcs-only gcA appends marker at eol"] = function()
+  child.b.celeste_comment_config = { cms_confs = false }
+  child.bo.commentstring = "%s#"
+  set_lines({ "hello" })
+  set_cursor(1, 0)
+  feed("gcA")
+  eq(get_lines(), { "hello  #" })
+  eq(get_cursor(), { 1, 6 })
+  feed("x")
+  eq(get_lines(), { "hello x #" })
+  eq(get_cursor(), { 1, 7 })
+  feed("<Esc>")
 end
 
 -- linewise tests ─────────────────────────────────────────────────────────────
@@ -4551,6 +4630,31 @@ T["keep_selection"]["expand_line o-swapped and backward V"] = function()
   eq(get_lines(), { "  // first line", "  // second line" })
   eq(get_cursor(), { 1, 6 })
   eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
+end
+
+T["keep_selection"]["bugfix : only expand_block should restore cursor, gv should select all block"] = function()
+  child.bo.filetype = "cpp"
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
+  local lines = { "  first line", "  second line" }
+  set_lines(lines)
+  selection(1, 3, 2, 5)
+  feed("gb")
+  eq(get_cursor(), { 2, 5 })
+  eq(get_lines(), { "  f/* irst line", "  seco */nd line" })
+  eq(get_selection(), {})
+  eq(get_cursor(), { 2, 5 })
+  feed("gv")
+  eq(get_cursor(), { 2, 8 })
+  eq(get_selection(), { { 0, 3, 1, 8 }, "v" })
+  feed("o")
+  eq(get_cursor(), { 1, 3 })
+  feed("gb")
+  eq(get_lines(), { "  first line", "  second line" })
+  eq(get_selection(), {})
+  eq(get_cursor(), { 1, 3 })
+  feed("gv")
+  eq(get_selection(), { { 1, 5, 0, 3 }, "v" })
+  eq(get_cursor(), { 1, 3 })
 end
 
 -- Equivalence classes: cover all 16 flag combinations, verifying per-axis
@@ -7692,6 +7796,321 @@ T["detect_indent"]["on: blank line whitespace at and above aligned offset"] = fu
   eq(get_lines(), { "\t\t// foo", "\t\t// \t", "\t\t// ", "\t    // ", "\t\t//     ", "\t\t// bar" })
   feed("gc", "5j")
   eq(get_lines(), { "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" })
+end
+
+-- Forced-motion tests ─────────────────────────────────────────────────────────
+
+T["forced_motion"] = new_set()
+
+T["forced_motion"]["gb V forces linewise on charwise motions"] = function()
+  child.bo.filetype = "cpp"
+  child.bo.commentstring = "// %s"
+  set_lines({ "hello world foo" })
+  set_cursor(1, 0)
+  feed("gb", "V", "iw")
+  eq(get_lines(), { "/* hello world foo */" })
+  feed("u")
+  feed("gb", "V", "2w")
+  eq(get_lines(), { "/* hello world foo */" })
+  feed("u")
+  set_lines({ "a", "b", "c", "d" })
+  set_cursor(1, 0)
+  feed("gb", "V", "2j")
+  eq(get_lines(), { "/* a", "b", "c */", "d" })
+  feed("u")
+  feed("gb", "V", "ip")
+  eq(get_lines(), { "/* a", "b", "c", "d */" })
+  feed("u")
+end
+
+T["forced_motion"]["gb v forces charwise on linewise motions"] = function()
+  child.bo.filetype = "cpp"
+  child.bo.commentstring = "// %s"
+  set_lines({ "a", "", "b" })
+  set_cursor(1, 0)
+  feed("gb", "v", "ip")
+  eq(get_lines(), { "/* a */", "", "b" })
+  feed("u")
+end
+
+T["forced_motion"]["gc V forces linewise on charwise motions"] = function()
+  set_lines({ "hello world foo" })
+  set_cursor(1, 0)
+  feed("gc", "V", "iw")
+  eq(get_lines(), { "# hello world foo" })
+  feed("u")
+  set_lines({ "a", "b", "c", "d" })
+  set_cursor(1, 0)
+  feed("gc", "V", "j")
+  eq(get_lines(), { "# a", "# b", "c", "d" })
+  feed("u")
+  feed("gc", "V", "2j")
+  eq(get_lines(), { "# a", "# b", "# c", "d" })
+  feed("u")
+  feed("gc", "V", "ip")
+  eq(get_lines(), { "# a", "# b", "# c", "# d" })
+  feed("u")
+end
+
+T["forced_motion"]["gc v forces charwise on linewise motions"] = function()
+  set_lines({ "a", "b", "c", "d" })
+  set_cursor(1, 0)
+  feed("gc", "v", "ip")
+  eq(get_lines(), { "# a", "# b", "# c", "d" })
+  feed("u")
+end
+
+T["forced_motion"]["gC V forces linewise"] = function()
+  child.bo.commentstring = "// %s"
+  set_lines({ "hello", "// world", "foo" })
+  set_cursor(1, 0)
+  feed("gC", "V", "j")
+  eq(get_lines(), { "// hello", "// // world", "foo" })
+  feed("u")
+  set_cursor(1, 0)
+  feed("gC", "V", "2j")
+  eq(get_lines(), { "// hello", "// // world", "// foo" })
+  feed("u")
+end
+
+T["forced_motion"]["gU V forces linewise"] = function()
+  child.bo.commentstring = "// %s"
+  set_lines({ "// hello", "// world", "foo" })
+  set_cursor(1, 0)
+  feed("gU", "V", "j")
+  eq(get_lines(), { "hello", "world", "foo" })
+  feed("u")
+  set_lines({ "// hello", "// world", "// foo" })
+  set_cursor(1, 0)
+  feed("gU", "V", "2j")
+  eq(get_lines(), { "hello", "world", "foo" })
+  feed("u")
+end
+
+-- multiple cursor tests ──────────────────────────────────────────────────────
+
+if vim.fn.has("nvim-0.13") == 1 and vim.api.nvim_mcursor ~= nil then
+  local function set_mcursor(line, col)
+    child.api.nvim_win_set_cursor(0, { line, col or 0 })
+    feed("Q")
+  end
+
+  local function clear_mcursor()
+    child.lua_func(function()
+      local ns = vim.api.nvim_create_namespace("nvim.multicursor")
+      vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+    end)
+  end
+
+  local function all_mcursor()
+    return child.lua_func(function()
+      local is_visual = vim.fn.mode():match("[vV\22]") ~= nil
+      local ns = vim.api.nvim_create_namespace(is_visual and "nvim.multicursor.cursor" or "nvim.multicursor")
+      local pcp = vim.pos.cursor()
+      local exts = vim.api.nvim_buf_get_extmarks(0, ns, 0, -1)
+      local res = vim.iter(exts):map(function(e) return { e[2], e[3] } end):totable()
+      res[#res + 1] = { pcp.row, pcp.col }
+      res = vim.iter(res):unique(function(e) return ("%d-%d"):format(e[1], e[2]) end):totable()
+      table.sort(res, function(e1, e2)
+        if e1[1] == e2[1] then return e1[2] < e2[2] end
+        return e1[1] < e2[1]
+      end)
+      return res
+    end)
+  end
+
+  T["multicursor"] = new_set({
+    hooks = {
+      pre_case = function()
+        child.lua_func(function()
+          vim.bo.filetype = "markdown"
+          vim.bo.tabstop = 2
+          vim.bo.shiftwidth = 0
+          vim.bo.expandtab = true
+          vim.treesitter.language.add("markdown")
+          vim.treesitter.language.add("lua")
+          vim.treesitter.language.add("c")
+          vim.treesitter.start()
+        end)
+      end,
+    },
+  })
+
+  T["multicursor"]["works"] = function()
+    child.b.celeste_comment_config = {
+      keep_selection = "never",
+      fallback_to_block = "if_line_cms_wrapped",
+    }
+    local lines = {
+      "```lua",
+      "  print('a')",
+      "  print('bb')",
+      "  print('ccc')",
+      "```",
+      "",
+      "### heading",
+      "```c",
+      '  printf("a");',
+      '  printf("bb");',
+      '  printf("ccc");',
+      "```",
+    }
+    set_lines(lines)
+    child.lua_func(function() vim.treesitter.start() end)
+    set_mcursor(2, 0)
+    set_mcursor(7, 0)
+    set_mcursor(9, 0)
+    feed("q=")
+    feed("w")
+    eq(all_mcursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })
+
+    -- gcc
+    feed("gcc")
+    eq(get_lines(2, 2), { "  -- print('a')" })
+    eq(get_lines(7, 7), { "<!-- ### heading -->" })
+    eq(get_lines(9, 9), { '  // printf("a");' })
+    eq(all_mcursor(), { { 1, 5 }, { 6, 9 }, { 8, 5 } })
+    feed(".")
+    eq(get_lines(2, 2), { "  print('a')" })
+    eq(get_lines(7, 7), { "### heading" })
+    eq(get_lines(9, 9), { '  printf("a");' })
+    eq(all_mcursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })
+
+    -- gbc
+    feed("gbc")
+    eq(get_lines(2, 2), { "  --[[ print('a') ]]" })
+    eq(get_lines(7, 7), { "<!-- ### heading -->" })
+    eq(get_lines(9, 9), { '  /* printf("a"); */' })
+    eq(all_mcursor(), { { 1, 7 }, { 6, 9 }, { 8, 5 } })
+    feed(".")
+    eq(get_lines(2, 2), { "  print('a')" })
+    eq(get_lines(7, 7), { "### heading" })
+    eq(get_lines(9, 9), { '  printf("a");' })
+    eq(all_mcursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })
+
+    clear_mcursor()
+
+    -- visual gc
+    set_mcursor(2, 0)
+    set_mcursor(6, 0)
+    set_mcursor(9, 0)
+    set_mcursor(9, 0) -- BUG: if we dont have this will not pass
+    eq(all_mcursor(), { { 1, 0 }, { 5, 0 }, { 8, 0 } })
+    feed("q=")
+    feed("v", "j", "4l")
+    eq(all_mcursor(), { { 2, 4 }, { 6, 4 }, { 9, 4 } })
+    feed("gc")
+    eq(get_lines(), {
+      "```lua",
+      "  -- print('a')",
+      "  -- print('bb')",
+      "  print('ccc')",
+      "```",
+      "<!-- ",
+      "### heading -->",
+      "```c",
+      '  // printf("a");',
+      '  // printf("bb");',
+      '  printf("ccc");',
+      "```",
+    })
+    eq(all_mcursor(), { { 2, 7 }, { 6, 4 }, { 9, 7 } })
+    feed("<esc>")
+    clear_mcursor()
+
+    -- TODO visual gb
+
+    -- gco
+    set_lines(lines)
+    set_mcursor(2, 0)
+    set_mcursor(6, 0)
+    set_mcursor(9, 0)
+    set_mcursor(9, 0) --BUG
+    eq(all_mcursor(), { { 1, 0 }, { 5, 0 }, { 8, 0 } })
+    feed("q=")
+    feed("gco")
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  -- ",
+      "  print('bb')",
+      "  print('ccc')",
+      "```",
+      "",
+      "<!--  -->",
+      "### heading",
+      "```c",
+      '  printf("a");',
+      "  // ",
+      '  printf("bb");',
+      '  printf("ccc");',
+      "```",
+    })
+    eq(child.api.nvim_get_mode().mode, "i")
+    eq(all_mcursor(), { { 2, 5 }, { 7, 5 }, { 11, 5 } })
+    clear_mcursor()
+    feed("<esc>")
+
+    -- gcO
+    set_lines(lines)
+    set_mcursor(3, 0)
+    set_mcursor(7, 0)
+    set_mcursor(10, 0)
+    set_mcursor(10, 0) --BUG
+    eq(all_mcursor(), { { 2, 0 }, { 6, 0 }, { 9, 0 } })
+    feed("q=")
+    feed("gcO")
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  -- ",
+      "  print('bb')",
+      "  print('ccc')",
+      "```",
+      "",
+      "<!--  -->",
+      "### heading",
+      "```c",
+      '  printf("a");',
+      "  // ",
+      '  printf("bb");',
+      '  printf("ccc");',
+      "```",
+    })
+    eq(child.api.nvim_get_mode().mode, "i")
+    eq(all_mcursor(), { { 2, 5 }, { 7, 5 }, { 11, 5 } })
+    clear_mcursor()
+    feed("<esc>")
+
+    -- gcA
+    set_lines(lines)
+    set_mcursor(3, 0)
+    set_mcursor(7, 0)
+    set_mcursor(10, 0)
+    set_mcursor(10, 0) --BUG
+    eq(all_mcursor(), { { 2, 0 }, { 6, 0 }, { 9, 0 } })
+    feed("q=")
+    feed("gcA")
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  print('bb') -- ",
+      "  print('ccc')",
+      "```",
+      "",
+      "### heading <!--  -->",
+      "```c",
+      '  printf("a");',
+      '  printf("bb"); // ',
+      '  printf("ccc");',
+      "```",
+    })
+    eq(child.api.nvim_get_mode().mode, "i")
+    eq(all_mcursor(), { { 2, 17 }, { 6, 17 }, { 9, 19 } })
+    feed("i")
+    clear_mcursor()
+    feed("<esc>")
+  end
 end
 
 return T
