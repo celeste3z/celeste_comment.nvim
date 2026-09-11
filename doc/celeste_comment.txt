@@ -1,5 +1,5 @@
 *celeste_comment.txt*                 MIT License Copyright (c) 2026 celeste3z
-                               For NVIM v0.12.0    Last change: 2026 August 30
+                            For NVIM v0.12.0    Last change: 2026 September 22
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
@@ -30,15 +30,17 @@ edits and full dot-repeat support.
 
 FEATURES                                            *celeste_comment-features*
 
-- `TextEdits` – unlike Noevim’s built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
-    hackable and composable. This also means that the edits commit method is up to you – `lockmarks` + `vim.api.nvim_buf_set_lines`
-    for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - Line/block comment toggle – fully dot-repeatable with count support
 - Precise keep cursor – cursor position tracks each `TextEdit` precisely
 - Precise keep selection – selection range tracks each `TextEdit` precisely in visual mode
+- Native multicursor support – better native multicursor(nvim-0.13+) support than neovim’s built-in commenting and
+    other commenting plugins.
 - Context-aware comment string resolution via Tree-sitter – comment string adapts to context via Tree-sitter. e.g. supports
     `JSX/TSX` out of the box
 - Textobjects – line, block, and auto textobjects, works without Tree-sitter
+- `TextEdits` – unlike Noevim’s built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
+    hackable and composable. This also means that the edits commit method is up to you – `lockmarks` + `vim.api.nvim_buf_set_lines`
+    for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - VSCode-style indent algorithm – handles mixed tabs and spaces
 - Invert/Force add/Force remove comment – per-line comment action control
 - Insert mode line comment toggle – with cursor sticky support
@@ -55,9 +57,20 @@ COMPARISON                                        *celeste_comment-comparison*
   --------------- ---------------------- ----------- -------------- -------------- ----------------
   Edit model      TextEdits              set_lines   set_lines      set_lines      setline()
 
+  Keep cursor     yes                    no          partial        no             no
+
+  Keep selection  yes                    no          no             no             no
+
+  Multicursor     More complete          limited     limited        limited        limited
+  support                                                                          
+
   Line comment    yes                    yes         yes            yes            yes
 
   Block comment   yes                    no          yes            no             no
+
+  Dot-repeat      yes                    yes         yes            yes            yes
+
+  Count           yes                    yes         yes            yes            yes
 
   Force add       yes                    no          no             no             no
   comment                                                                          
@@ -65,16 +78,8 @@ COMPARISON                                        *celeste_comment-comparison*
   Force remove    yes                    no          no             no             no
   comment                                                                          
 
-  Dot-repeat      yes                    yes         yes            yes            yes
-
-  Count           yes                    yes         yes            yes            yes
-
   Indent          VSCode-style           Simple      Standard       Simple         Minimal
   algorithm                                                                        
-
-  Keep cursor     yes                    no          partial        no             no
-
-  Keep selection  yes                    no          no             no             no
 
   Invert per line yes                    no          no             no             no
 
@@ -98,9 +103,9 @@ INSTALLATION                                    *celeste_comment-installation*
 
 
   [!IMPORTANT]
-  - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-  - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-  - `Pinning to a specific version or commit is recommended.`
+- Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
+- PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
+- `Pinning to a specific version or commit is recommended.`
 
 VIM.PACK (NEOVIM 0.12+) ~
 
@@ -110,7 +115,7 @@ VIM.PACK (NEOVIM 0.12+) ~
         src = "https://github.com/celeste3z/celeste_comment.nvim",
         name = "celeste_comment",
         version = vim.version.range("*"),
-      }
+      },
     })
     require("celeste_comment").setup()
 <
@@ -160,7 +165,6 @@ DEFAULT CONFIG ~
         line_invert          = "",
         line_force_add       = "",
         line_force_remove    = "",
-        dot_repeat           = ".",
       },
     
       hooks = {
@@ -247,7 +251,8 @@ Axis code (concatenate freely, e.g. `+ev` = adjust + expand + keep_visual):
   ablv          +ev    +ev
 Examples:
 
-- `"adjust"` — `gc`/`gb` restore the commented content then exit; `gv` re-enters it.
+- `"adjust"` — after `gc`/`gb`, the `cursor` and `anchor` of the selection will be recomputation by
+    `TextEdits`, then you can use `gv` to restore the visual selection.
 - `"expand_block"` — `gb` on a charwise selection keeps `/* hello */` selected; `gc` is unaffected.
 - `"expand_line"` — `gc` restores in `V` mode; `gb` is unaffected.
 - `"keep_visual"` — stays in visual mode with the original selection.
@@ -435,8 +440,6 @@ Set a mapping to `""` to disable it. Mappings cannot be overridden per buffer
   line_force_add          n,x    —         Force add line comment
 
   line_force_remove       n,x    —         Force remove line comment
-
-  dot_repeat              n      .         Cursor sticky dot-repeat
   --------------------------------------------------------------------------
 
 HOOKS ~
@@ -470,9 +473,7 @@ Example — use `nvim_buf_set_text` instead of `nvim_buf_set_lines` +
 >lua
     vim.b.celeste_comment_config = {
       hooks = {
-        pre_commit_edits = function(ctx)
-          ctx.o_use_set_text = true
-        end,
+        pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
       },
     }
 <
@@ -498,10 +499,8 @@ Example:
     vim.b.celeste_comment_config = {
       hooks = {
         ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
-        cms_conf_resolver = function(ctx)
-          ctx.o_cms_conf = { nil, "/* %s */" }
-        end
-      }
+        cms_conf_resolver = function(ctx) ctx.o_cms_conf = { nil, "/* %s */" } end,
+      },
     }
 <
 
@@ -525,10 +524,8 @@ Example:
     vim.b.celeste_comment_config = {
       hooks = {
         ---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
-        indent_resolver = function(ctx)
-          ctx.o_indent = { indent_size = 2, indent_style = "space" }
-        end
-      }
+        indent_resolver = function(ctx) ctx.o_indent = { indent_size = 2, indent_style = "space" } end,
+      },
     }
 <
 
@@ -562,10 +559,8 @@ comments and dynamic resolvers:
 >lua
     require("celeste_comment").setup({
       cms_confs = {
-        rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
-        mylang = function(ctx)
-          return { "#%s" }
-        end,
+        rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
+        mylang = function(ctx) return { "#%s" } end,
       },
     })
 <
@@ -588,43 +583,14 @@ Initialize the plugin with configuration. Must be called once.
 <
 
 
-M.TRACK_STATE() ~
-
-Tracks cursor and selection state for the next edit operation. Useful in custom
-mappings.
-
->lua
-    vim.keymap.set("n", ".", function()
-      require("celeste_comment").track_state()
-      return "."
-    end, { expr = true })
-<
-
-The tracked state is exposed to hooks as `ctx.state_track`:
-
->lua
-    ---@class Celeste.Comment.StateTrack
-    ---@field cursor?     vim.Pos  original cursor, never modified
-    ---@field endpos?     vim.Pos  original visual-start mark, never modified
-    ---@field mode?       string   visual mode at track time ("v"/"V"/"\22")
-    ---@field adj_cursor? vim.Pos  adjusted cursor after edits
-    ---@field adj_endpos? vim.Pos adjusted selection anchor after edits
-<
-
-`cursor`/`endpos` are the raw pre-edit positions; `adj_cursor`/`adj_endpos` are
-the same positions shifted by the applied edits (and, with `keep_selection =
-"expand_block"` or `"expand_block | keep_visual"`, extended to the block
-comment markers).
-
-
 ACTION ENUM ~
 
 >lua
     ---@enum Celeste.Comment.Action
     M.ACTION = {
-      kToggle      = 1, -- If all lines commented → uncomment; else → comment
-      kInvert      = 2, -- Per-line toggle, each line independently
-      kForceAdd    = 3, -- Add comment to all lines (already-commented get another layer)
+      kToggle = 1, -- If all lines commented → uncomment; else → comment
+      kInvert = 2, -- Per-line toggle, each line independently
+      kForceAdd = 3, -- Add comment to all lines (already-commented get another layer)
       kForceRemove = 4, -- Remove comment from lines that have them; skip uncommented
     }
 <
@@ -635,7 +601,7 @@ COMMENT TYPE ENUM ~
 >lua
     ---@enum Celeste.Comment.CommentType
     M.CMT = {
-      kLine  = 1, -- Line comment
+      kLine = 1, -- Line comment
       kBlock = 2, -- Block comment
     }
 <
@@ -654,7 +620,7 @@ resolution. When set, the built-in resolver chain is bypassed entirely.
       hooks = {
         cms_conf_resolver = function(ctx)
           -- ctx.cursor, ctx.cfg, ctx.range
-          ctx.o_cms_conf = { "//%s", "/*%s*/" }  -- { line, block }
+          ctx.o_cms_conf = { "//%s", "/*%s*/" } -- { line, block }
         end,
       },
     })
@@ -665,9 +631,7 @@ Per-buffer override:
 >lua
     vim.b.celeste_comment_config = {
       hooks = {
-        cms_conf_resolver = function(ctx)
-          ctx.o_cms_conf = { "#%s" }
-        end,
+        cms_conf_resolver = function(ctx) ctx.o_cms_conf = { "#%s" } end,
       },
     }
 <
@@ -680,14 +644,14 @@ built-in table for others.
 
 >lua
     require("celeste_comment").setup({
-    cms_confs = {
-      toml  = { "#%s" },                   -- line only
-      html  = { nil, "<!--%s-->" },        -- block only
-      python = { "#%s", '"""%s"""' },      -- both
-      rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" }, -- multi-token line
-      mylang = function(ctx)               -- dynamic resolver
-        return { "#%s" }
-      end,
+      cms_confs = {
+        toml = { "#%s" }, -- line only
+        html = { nil, "<!--%s-->" }, -- block only
+        python = { "#%s", '"""%s"""' }, -- both
+        rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" }, -- multi-token line
+        mylang = function(ctx) -- dynamic resolver
+          return { "#%s" }
+        end,
       },
     })
 <
@@ -780,9 +744,7 @@ regular marks and extmarks on non-modified parts:
 >lua
     vim.b.celeste_comment_config = {
       hooks = {
-        pre_commit_edits = function(ctx)
-          ctx.o_use_set_text = true
-        end,
+        pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
       },
     }
 <

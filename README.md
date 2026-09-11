@@ -3,8 +3,6 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/github/v/release/celeste3z/celeste_comment.nvim?style=for-the-badge&label=version)](https://github.com/celeste3z/celeste_comment.nvim/releases)
-[![License](https://img.shields.io/github/license/celeste3z/celeste_comment.nvim?style=for-the-badge)](LICENSE)
 [![Neovim](https://img.shields.io/badge/Neovim-%3E%3D0.12.0-green?style=for-the-badge)](https://neovim.io)
 [![Maintained](https://img.shields.io/badge/maintenance-actively--developed-brightgreen?style=for-the-badge)](https://github.com/celeste3z/celeste_comment.nvim)
 
@@ -22,22 +20,22 @@
 - [Showcase](#showcase)
 - [What it doesn't do](#what-it-doesnt-do)
 - [Limitations](#limitations)
-- [Future work](#future-work)
 - [Acknowledgments](#acknowledgments)
 
 <!--toc:end-->
 
 ## Features
 
-- **`TextEdits`** -- unlike Noevim's built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
-  hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
-  for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - **Line/block comment toggle** -- fully dot-repeatable with count support
 - **Precise keep cursor** -- cursor position tracks each `TextEdit` precisely
 - **Precise keep selection** -- selection range tracks each `TextEdit` precisely in visual mode
+- **Native multicursor support** -- better native multicursor(nvim-0.13+) support than neovim's built-in commenting and other commenting plugins
 - **Context-aware comment string resolution via Tree-sitter** -- comment string adapts to context via Tree-sitter. e.g. supports
   `JSX/TSX` out of the box
 - **Textobjects** -- line, block, and auto textobjects, works without Tree-sitter
+- **`TextEdits`** -- unlike Noevim's built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
+  hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
+  for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - **VSCode-style indent algorithm** -- handles mixed tabs and spaces
 - **Invert/Force add/Force remove comment** -- per-line comment action control
 - **Insert mode line comment toggle** -- with cursor sticky support
@@ -50,20 +48,21 @@
 | Feature                  | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                   | [Neovim built-in](https://neovim.io/doc/user/lua.html#vim._comment) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)            | [vim-commentary](https://github.com/tpope/vim-commentary) |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
 | **Edit model**           | **TextEdits** — edits as range+text objects<br>• commit changes via `nvim_buf_set_text` or `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• Vim `setline()`              |
-| **Line comment**         | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
-| **Block comment**        | ✅                                                                                                                          | ❌                                                                  | ✅                                                            | ❌                                                                  | ❌                                                        |
-| **Force add comment**    | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Force remove comment** | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Dot-repeat**           | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
-| **Count**                | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
-| **Indent algorithm**     | **VSCode-style** — min visible col<br>• handle mixed tab/space                                                              | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Minimal — `^\s*\zs`<br>• optional startofline             |
 | **Keep cursor**          | **Precise tracking** — cursor adjusts per TextEdit                                                                          | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                                  | ❌                                                        |
 | **Keep selection**       | **Precise tracking** — selection adjusts per TextEdit                                                                       | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Invert per line**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
+| **Multicursor support**  | **More complete** native multicursor support                                                                                | Limited support                                                     | Limited support                                               | Limited support                                                     | Limited support                                           |
+| **Line comment**         | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
+| **Block comment**        | ✅                                                                                                                          | ❌                                                                  | ✅                                                            | ❌                                                                  | ❌                                                        |
+| **Dot-repeat**           | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
+| **Count**                | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
 | **Line textobject**      | ✅                                                                                                                          | ✅                                                                  | ❌                                                            | ✅                                                                  | ✅                                                        |
 | **Block textobject**     | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Textobject auto**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 | **Uncomment auto**       | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ✅                                                        |
+| **Indent algorithm**     | **VSCode-style** — min visible col<br>• handle mixed tab/space                                                              | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Minimal — `^\s*\zs`<br>• optional startofline             |
+| **Invert per line**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
+| **Force add comment**    | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
+| **Force remove comment** | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
 
 ## Requirements
 
@@ -108,9 +107,10 @@ require("celeste_comment").setup()
 
   -- Restore selection after commenting.
   -- Possible values: "never" | "adjust" | "expand_block" | "expand_line" | "keep_visual"
+  --
   -- Can also combine, e.g. "expand_line | keep_visual" which means: force line comments to
   -- `V` mode and stay in visual mode
-  -- See `:help celeste_comment-config-keep_selection` for more details
+  -- See `:help celeste_comment-config-keep_selection` for more details.
   keep_selection         = "never",
 
   -- Insert space between comment marker and text.
@@ -200,13 +200,6 @@ require("celeste_comment").setup()
     line_force_add       = "",
     -- Force remove line comment (n, x), example `gCU`
     line_force_remove    = "",
-
-    -- Cursor sticky dot-repeat.
-    -- If a "." mapping already exists, this will not override it.
-    -- You can also call `require("celeste_comment").track_state()` in your
-    -- own dot-repeat keymap to enable sticky cursor behavior.
-    -- See `:help celeste_comment-api` for more details.
-    dot_repeat           = ".",
   },
 
   hooks = {
@@ -216,8 +209,6 @@ require("celeste_comment").setup()
     post_commit_edits    = nil,
     -- Custom comment string resolver function
     cms_conf_resolver    = nil,
-    -- Custom indent resolver function
-    indent_resolver      = nil,
   },
 }
 ```
@@ -270,23 +261,28 @@ See `:help celeste_comment-configuration` for details.
 ## Showcase
 
 <div align="center">
+  <img src="https://github.com/user-attachments/assets/a9ce0290-3465-4e11-854f-74080e62b974" alt="Native multicursor support">
+  <p><em>Better native multicursor support</a></em></p>
+</div>
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/58a8e554-cf6b-40c0-aa1b-13110bbd1dba" alt="Context-aware comment string resolution via Tree-sitter">
+  <p><em>Context-aware comment string resolution via Tree-sitter</em></p>
+</div>
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/42deb618-74c2-4589-9c7c-2f1b8441f487" alt="Keep selection when toggle comments in visual mode">
+  <p><em>Keep selection when toggle comments in visual mode</em></p>
+</div>
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/49812f9f-5f1b-44d7-b52a-e46fdccd322f" alt="Commenting in insert mode with keep cursor">
+  <p><em>Commenting in insert mode with keep cursor</em></p>
+</div>
+
+<div align="center">
 <img src="https://github.com/user-attachments/assets/c4255b81-926a-4ab7-ac3e-d49b77e980a1" alt="Line/Block comment toggle, textobjects, gcu">
 <p><em>Line/Block comment toggle, textobjects, gcu</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/49812f9f-5f1b-44d7-b52a-e46fdccd322f" alt="Commenting in insert mode with keep cursor">
-<p><em>Commenting in insert mode with keep cursor</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/58a8e554-cf6b-40c0-aa1b-13110bbd1dba" alt="Context-aware comment string resolution via Tree-sitter">
-<p><em>Context-aware comment string resolution via Tree-sitter</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/42deb618-74c2-4589-9c7c-2f1b8441f487" alt="Keep selection when toggle comments in visual mode">
-<p><em>Keep selection when toggle comments in visual mode</em></p>
 </div>
 
 <div align="center">
@@ -302,11 +298,6 @@ See `:help celeste_comment-configuration` for details.
 <div align="center">
 <img src="https://github.com/user-attachments/assets/bfd93574-ecef-410f-8942-8300b9999813" alt="Cursor sticky and Dot-repeat">
 <p><em>Cursor sticky + Dot-repeat</em></p>
-</div>
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/7af734f5-8daa-41e0-93d9-f597866d7517" alt="With multicursor.nvim">
-<p><em>With <a href="https://github.com/jake-stewart/multicursor.nvim">multicursor.nvim</a></em></p>
 </div>
 
 ## What it doesn't do
@@ -329,12 +320,7 @@ See `:help celeste_comment-configuration` for details.
   - Scan range is limited to `block_textobj_nlines` (default 200 lines).
 
 - **Visual block mode (`<C-v>`)** — Comments are applied per-line,
-  not per-column. For column-wise commenting, use a multicursor plugin
-  like [multicursor.nvim](https://github.com/jake-stewart/multicursor.nvim).
-
-## Future work
-
-- Integrated with Neovim's builtin multicursor.
+  not per-column. For column-wise commenting, use multicursor.
 
 ## Acknowledgments
 

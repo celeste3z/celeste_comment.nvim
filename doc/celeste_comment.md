@@ -12,15 +12,17 @@ edits and full dot-repeat support.
 
 ## Features
 
-- `TextEdits` -- unlike Noevim's built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
-  hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
-  for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - Line/block comment toggle -- fully dot-repeatable with count support
 - Precise keep cursor -- cursor position tracks each `TextEdit` precisely
 - Precise keep selection -- selection range tracks each `TextEdit` precisely in visual mode
+- Native multicursor support -- better native multicursor(nvim-0.13+) support than neovim's built-in commenting and
+  other commenting plugins.
 - Context-aware comment string resolution via Tree-sitter -- comment string adapts to context via Tree-sitter. e.g. supports
   `JSX/TSX` out of the box
 - Textobjects -- line, block, and auto textobjects, works without Tree-sitter
+- `TextEdits` -- unlike Noevim's built-in or other comment plugins, changes are modeled as `TextEdits`, making it more
+  hackable and composable. This also means that the edits commit method is up to you -- `lockmarks` + `vim.api.nvim_buf_set_lines`
+  for simplicity and performance, or `vim.api.nvim_buf_set_text` for more control (e.g. preserve regular marks and extmarks)
 - VSCode-style indent algorithm -- handles mixed tabs and spaces
 - Invert/Force add/Force remove comment -- per-line comment action control
 - Insert mode line comment toggle -- with cursor sticky support
@@ -33,15 +35,16 @@ edits and full dot-repeat support.
 | Feature              | celeste_comment.nvim | Neovim built-in | Comment.nvim | mini.comment | vim-commentary |
 | -------------------- | -------------------- | --------------- | ------------ | ------------ | -------------- |
 | Edit model           | TextEdits            | set_lines       | set_lines    | set_lines    | setline()      |
-| Line comment         | yes                  | yes             | yes          | yes          | yes            |
-| Block comment        | yes                  | no              | yes          | no           | no             |
-| Force add comment    | yes                  | no              | no           | no           | no             |
-| Force remove comment | yes                  | no              | no           | no           | no             |
-| Dot-repeat           | yes                  | yes             | yes          | yes          | yes            |
-| Count                | yes                  | yes             | yes          | yes          | yes            |
-| Indent algorithm     | VSCode-style         | Simple          | Standard     | Simple       | Minimal        |
 | Keep cursor          | yes                  | no              | partial      | no           | no             |
 | Keep selection       | yes                  | no              | no           | no           | no             |
+| Multicursor support  | More complete        | limited         | limited      | limited      | limited        |
+| Line comment         | yes                  | yes             | yes          | yes          | yes            |
+| Block comment        | yes                  | no              | yes          | no           | no             |
+| Dot-repeat           | yes                  | yes             | yes          | yes          | yes            |
+| Count                | yes                  | yes             | yes          | yes          | yes            |
+| Force add comment    | yes                  | no              | no           | no           | no             |
+| Force remove comment | yes                  | no              | no           | no           | no             |
+| Indent algorithm     | VSCode-style         | Simple          | Standard     | Simple       | Minimal        |
 | Invert per line      | yes                  | no              | no           | no           | no             |
 | Line textobject      | yes                  | yes             | no           | yes          | yes            |
 | Block textobject     | yes                  | no              | no           | no           | no             |
@@ -55,12 +58,6 @@ edits and full dot-repeat support.
 
 ## Installation
 
-> [!IMPORTANT]
->
-> - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-> - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-> - `Pinning to a specific version or commit is recommended.`
-
 ### vim.pack (Neovim 0.12+)
 
 ```lua
@@ -69,7 +66,7 @@ vim.pack.add({
     src = "https://github.com/celeste3z/celeste_comment.nvim",
     name = "celeste_comment",
     version = vim.version.range("*"),
-  }
+  },
 })
 require("celeste_comment").setup()
 ```
@@ -116,7 +113,6 @@ require("celeste_comment").setup()
     line_invert          = "",
     line_force_add       = "",
     line_force_remove    = "",
-    dot_repeat           = ".",
   },
 
   hooks = {
@@ -147,13 +143,13 @@ Controls how the visual selection is restored after commenting. The plugin
 tracks the original cursor and selection anchor and adjusts them through each
 edit operation.
 
-| Flag             | Behavior                                                                      |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `"never"`        | Do not restore the selection.                                                 |
-| `"adjust"`       | Restore the selection to the commented content (precise per-edit tracking).   |
+| Flag             | Behavior                                                                       |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `"never"`        | Do not restore the selection.                                                  |
+| `"adjust"`       | Restore the selection to the commented content (precise per-edit tracking).    |
 | `"expand_block"` | Block comments only — extend the selection to cover the added `/* */` markers. |
-| `"expand_line"`  | Line comments only — restore in Visual-Line (`V`) mode.                       |
-| `"keep_visual"`  | Stay in visual mode after commenting (default is to exit to normal mode).     |
+| `"expand_line"`  | Line comments only — restore in Visual-Line (`V`) mode.                        |
+| `"keep_visual"`  | Stay in visual mode after commenting (default is to exit to normal mode).      |
 
 Values can be combined with `|`, e.g. `"adjust | keep_visual"`.
 
@@ -164,7 +160,7 @@ original selection.
 `expand_block` and `expand_line` are axis-specific (block-only and line-only),
 so each combination decomposes into a per-comment-type behavior.
 
-Flag shorthand: `a` = adjust   `b` = expand_block   `l` = expand_line   `v` = keep_visual
+Flag shorthand: `a` = adjust `b` = expand_block `l` = expand_line `v` = keep_visual
 
 Axis code (concatenate freely, e.g. `+ev` = adjust + expand + keep_visual):
 
@@ -173,28 +169,29 @@ Axis code (concatenate freely, e.g. `+ev` = adjust + expand + keep_visual):
 - `e` = expand — `V` for line comments, block markers for block comments
 - `v` = keep_visual — stay in visual mode
 
-| Combination | Line | Block |
-| ----------- | ---- | ----- |
-| `never`     | `-`  | `-`   |
-| `a`         | `+`  | `+`   |
-| `b`         | `-`  | `+e`  |
-| `ab`        | `+`  | `+e`  |
-| `l`         | `+e` | `-`   |
-| `al`        | `+e` | `+`   |
-| `bl`        | `+e` | `+e`  |
-| `abl`       | `+e` | `+e`  |
-| `v`         | `-v` | `-v`  |
-| `av`        | `+v` | `+v`  |
-| `bv`        | `-v` | `+ev` |
-| `abv`       | `+v` | `+ev` |
-| `lv`        | `+ev`| `-v`  |
-| `alv`       | `+ev`| `+v`  |
-| `blv`       | `+ev`| `+ev` |
-| `ablv`      | `+ev`| `+ev` |
+| Combination | Line  | Block |
+| ----------- | ----- | ----- |
+| `never`     | `-`   | `-`   |
+| `a`         | `+`   | `+`   |
+| `b`         | `-`   | `+e`  |
+| `ab`        | `+`   | `+e`  |
+| `l`         | `+e`  | `-`   |
+| `al`        | `+e`  | `+`   |
+| `bl`        | `+e`  | `+e`  |
+| `abl`       | `+e`  | `+e`  |
+| `v`         | `-v`  | `-v`  |
+| `av`        | `+v`  | `+v`  |
+| `bv`        | `-v`  | `+ev` |
+| `abv`       | `+v`  | `+ev` |
+| `lv`        | `+ev` | `-v`  |
+| `alv`       | `+ev` | `+v`  |
+| `blv`       | `+ev` | `+ev` |
+| `ablv`      | `+ev` | `+ev` |
 
 Examples:
 
-- `"adjust"` — `gc`/`gb` restore the commented content then exit; `gv` re-enters it.
+- `"adjust"` — after `gc`/`gb`, the `cursor` and `anchor` of the selection will be recomputation by
+  `TextEdits`, then you can use `gv` to restore the visual selection.
 - `"expand_block"` — `gb` on a charwise selection keeps `/* hello */` selected; `gc` is unaffected.
 - `"expand_line"` — `gc` restores in `V` mode; `gb` is unaffected.
 - `"keep_visual"` — stays in visual mode with the original selection.
@@ -357,7 +354,6 @@ Use buffer-local configuration (see `:h celeste_comment-configuration`) only for
 | `line_invert`         | `n,x` | —       | Invert comment per line        |
 | `line_force_add`      | `n,x` | —       | Force add line comment         |
 | `line_force_remove`   | `n,x` | —       | Force remove line comment      |
-| `dot_repeat`          | `n`   | `.`     | Cursor sticky dot-repeat       |
 
 ### Hooks
 
@@ -387,9 +383,7 @@ Example — use `nvim_buf_set_text` instead of `nvim_buf_set_lines` + `lockmarks
 ```lua
 vim.b.celeste_comment_config = {
   hooks = {
-    pre_commit_edits = function(ctx)
-      ctx.o_use_set_text = true
-    end,
+    pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
   },
 }
 ```
@@ -414,10 +408,8 @@ Example:
 vim.b.celeste_comment_config = {
   hooks = {
     ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
-    cms_conf_resolver = function(ctx)
-      ctx.o_cms_conf = { nil, "/* %s */" }
-    end
-  }
+    cms_conf_resolver = function(ctx) ctx.o_cms_conf = { nil, "/* %s */" } end,
+  },
 }
 ```
 
@@ -440,10 +432,8 @@ Example:
 vim.b.celeste_comment_config = {
   hooks = {
     ---@param ctx Celeste.Comment.Hooks.IndentResolver.Ctx
-    indent_resolver = function(ctx)
-      ctx.o_indent = { indent_size = 2, indent_style = "space" }
-    end
-  }
+    indent_resolver = function(ctx) ctx.o_indent = { indent_size = 2, indent_style = "space" } end,
+  },
 }
 ```
 
@@ -475,10 +465,8 @@ priority):
 ```lua
 require("celeste_comment").setup({
   cms_confs = {
-    rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
-    mylang = function(ctx)
-      return { "#%s" }
-    end,
+    rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" },
+    mylang = function(ctx) return { "#%s" } end,
   },
 })
 ```
@@ -498,41 +486,14 @@ Initialize the plugin with configuration. Must be called once.
 require("celeste_comment").setup({ keep_cursor = true })
 ```
 
-### `M.track_state()`
-
-Tracks cursor and selection state for the next edit operation. Useful in custom mappings.
-
-```lua
-vim.keymap.set("n", ".", function()
-  require("celeste_comment").track_state()
-  return "."
-end, { expr = true })
-```
-
-The tracked state is exposed to hooks as `ctx.state_track`:
-
-```lua
----@class Celeste.Comment.StateTrack
----@field cursor?     vim.Pos  original cursor, never modified
----@field endpos?     vim.Pos  original visual-start mark, never modified
----@field mode?       string   visual mode at track time ("v"/"V"/"\22")
----@field adj_cursor? vim.Pos  adjusted cursor after edits
----@field adj_endpos? vim.Pos adjusted selection anchor after edits
-```
-
-`cursor`/`endpos` are the raw pre-edit positions; `adj_cursor`/`adj_endpos`
-are the same positions shifted by the applied edits (and, with
-`keep_selection = "expand_block"` or `"expand_block | keep_visual"`,
-extended to the block comment markers).
-
 ### Action enum
 
 ```lua
 ---@enum Celeste.Comment.Action
 M.ACTION = {
-  kToggle      = 1, -- If all lines commented → uncomment; else → comment
-  kInvert      = 2, -- Per-line toggle, each line independently
-  kForceAdd    = 3, -- Add comment to all lines (already-commented get another layer)
+  kToggle = 1, -- If all lines commented → uncomment; else → comment
+  kInvert = 2, -- Per-line toggle, each line independently
+  kForceAdd = 3, -- Add comment to all lines (already-commented get another layer)
   kForceRemove = 4, -- Remove comment from lines that have them; skip uncommented
 }
 ```
@@ -542,7 +503,7 @@ M.ACTION = {
 ```lua
 ---@enum Celeste.Comment.CommentType
 M.CMT = {
-  kLine  = 1, -- Line comment
+  kLine = 1, -- Line comment
   kBlock = 2, -- Block comment
 }
 ```
@@ -559,7 +520,7 @@ require("celeste_comment").setup({
   hooks = {
     cms_conf_resolver = function(ctx)
       -- ctx.cursor, ctx.cfg, ctx.range
-      ctx.o_cms_conf = { "//%s", "/*%s*/" }  -- { line, block }
+      ctx.o_cms_conf = { "//%s", "/*%s*/" } -- { line, block }
     end,
   },
 })
@@ -570,9 +531,7 @@ Per-buffer override:
 ```lua
 vim.b.celeste_comment_config = {
   hooks = {
-    cms_conf_resolver = function(ctx)
-      ctx.o_cms_conf = { "#%s" }
-    end,
+    cms_conf_resolver = function(ctx) ctx.o_cms_conf = { "#%s" } end,
   },
 }
 ```
@@ -584,14 +543,14 @@ the built-in table for others.
 
 ```lua
 require("celeste_comment").setup({
-cms_confs = {
-  toml  = { "#%s" },                   -- line only
-  html  = { nil, "<!--%s-->" },        -- block only
-  python = { "#%s", '"""%s"""' },      -- both
-  rust   = { { "//%s", "///%s", "//!%s" }, "/*%s*/" }, -- multi-token line
-  mylang = function(ctx)               -- dynamic resolver
-    return { "#%s" }
-  end,
+  cms_confs = {
+    toml = { "#%s" }, -- line only
+    html = { nil, "<!--%s-->" }, -- block only
+    python = { "#%s", '"""%s"""' }, -- both
+    rust = { { "//%s", "///%s", "//!%s" }, "/*%s*/" }, -- multi-token line
+    mylang = function(ctx) -- dynamic resolver
+      return { "#%s" }
+    end,
   },
 })
 ```
@@ -680,9 +639,7 @@ regular marks and extmarks on non-modified parts:
 ```lua
 vim.b.celeste_comment_config = {
   hooks = {
-    pre_commit_edits = function(ctx)
-      ctx.o_use_set_text = true
-    end,
+    pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
   },
 }
 ```
