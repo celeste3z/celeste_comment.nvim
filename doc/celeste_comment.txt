@@ -53,7 +53,7 @@ COMPARISON                                        *celeste_comment-comparison*
 
   -------------------------------------------------------------------------------------------------
   Feature         celeste_comment.nvim   Neovim      Comment.nvim   mini.comment   vim-commentary
-                                         built-in                                  
+                                         built-in
   --------------- ---------------------- ----------- -------------- -------------- ----------------
   Edit model      TextEdits              set_lines   set_lines      set_lines      setline()
 
@@ -62,7 +62,7 @@ COMPARISON                                        *celeste_comment-comparison*
   Keep selection  yes                    no          no             no             no
 
   Multicursor     More complete          limited     limited        limited        limited
-  support                                                                          
+  support
 
   Line comment    yes                    yes         yes            yes            yes
 
@@ -73,20 +73,20 @@ COMPARISON                                        *celeste_comment-comparison*
   Count           yes                    yes         yes            yes            yes
 
   Force add       yes                    no          no             no             no
-  comment                                                                          
+  comment
 
   Force remove    yes                    no          no             no             no
-  comment                                                                          
+  comment
 
   Indent          VSCode-style           Simple      Standard       Simple         Minimal
-  algorithm                                                                        
+  algorithm
 
   Invert per line yes                    no          no             no             no
 
   Line textobject yes                    yes         no             yes            yes
 
   Block           yes                    no          no             no             no
-  textobject                                                                       
+  textobject
 
   Textobject auto yes                    no          no             no             no
 
@@ -101,11 +101,6 @@ REQUIREMENTS                                    *celeste_comment-requirements*
 
 INSTALLATION                                    *celeste_comment-installation*
 
-
-  [!IMPORTANT]
-- Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` -> `0.2.0`)
-- PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-- `Pinning to a specific version or commit is recommended.`
 
 VIM.PACK (NEOVIM 0.12+) ~
 
@@ -146,7 +141,7 @@ DEFAULT CONFIG ~
       ignore_empty_lines     = "always", -- How to handle empty lines
       fallback_to_block      = "if_line_cms_wrapped", -- Fallback line→block comment
       log_level              = vim.log.levels.OFF, -- Log level (nvim-0.13+)
-    
+
       mappings = {
         line_toggle          = "gc",
         line_toggle_cur      = "gcc",
@@ -166,7 +161,7 @@ DEFAULT CONFIG ~
         line_force_add       = "",
         line_force_remove    = "",
       },
-    
+
       hooks = {
         pre_commit_edits     = nil,
         cms_conf_resolver    = nil,
