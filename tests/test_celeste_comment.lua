@@ -8058,7 +8058,7 @@ if vim.fn.has("nvim-0.13") == 1 and vim.api.nvim_mcursor ~= nil then
     child.lua_func(function() vim.treesitter.start() end)
     set_mcursor(2, 0)
     set_mcursor(7, 0)
-    set_mcursor(9, 0)
+    set_cursor(9, 0)
     feed("q=")
     feed("w")
     eq(all_mcursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })

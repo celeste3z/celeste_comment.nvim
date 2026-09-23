@@ -2072,10 +2072,7 @@ function H.expand_block(state, motion, edits, csi)
   local rcs_end = rcs.range[2] + shift + #rcs.text[1]
   if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
 
-  local backward = (state.cursor.row < state.anchor.row)
-    or (state.cursor.row == state.anchor.row and state.cursor.col < state.anchor.col)
-
-  if backward then return { rcs.range[1], rcs_end, lcs.range[1], lcs.range[2] } end
+  if state.cursor < state.anchor then return { rcs.range[1], rcs_end, lcs.range[1], lcs.range[2] } end
   return { lcs.range[1], lcs.range[2], rcs.range[1], rcs_end }
 end
 

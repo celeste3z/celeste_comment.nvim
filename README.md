@@ -1,12 +1,17 @@
 <h1 align="center">celeste_comment.nvim</h1>
-<p align="center"><b>Batteries-included</b> commenting plugin — line/block comment, textobjects, real sticky cursor, and more!</p>
 
 <div align="center">
 
 [![Neovim](https://img.shields.io/badge/Neovim-%3E%3D0.12.0-green?style=for-the-badge)](https://neovim.io)
-[![Maintained](https://img.shields.io/badge/maintenance-actively--developed-brightgreen?style=for-the-badge)](https://github.com/celeste3z/celeste_comment.nvim)
+[![Maintenance mode](https://img.shields.io/badge/status-maintenance--mode-yellow?style=for-the-badge)](https://github.com/celeste3z/celeste_comment.nvim)
 
 </div>
+
+> [!IMPORTANT]
+>
+> **_This plugin has done what it was supposed to do, and all that it could do._**
+>
+> This plugin is in maintenance mode now. No more new features will be added in general — only bug fixes. I still use it every day myself.
 
 <!--toc:start-->
 
@@ -16,6 +21,7 @@
 - [Installation](#installation)
   - [vim.pack (Neovim 0.12+)](#vimpack-neovim-012)
   - [lazy.nvim](#lazynvim)
+  - [vim-plug](#vim-plug)
 - [Default Configuration](#default-configuration)
 - [Showcase](#showcase)
 - [What it doesn't do](#what-it-doesnt-do)
@@ -45,24 +51,24 @@
 
 ## Comparison
 
-| Feature                  | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                   | [Neovim built-in](https://neovim.io/doc/user/lua.html#vim._comment) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)            | [vim-commentary](https://github.com/tpope/vim-commentary) |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
-| **Edit model**           | **TextEdits** — edits as range+text objects<br>• commit changes via `nvim_buf_set_text` or `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• Vim `setline()`              |
-| **Keep cursor**          | **Precise tracking** — cursor adjusts per TextEdit                                                                          | ❌                                                                  | Imprecise restore — save/restore<br>• no edit adjustment      | ❌                                                                  | ❌                                                        |
-| **Keep selection**       | **Precise tracking** — selection adjusts per TextEdit                                                                       | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Multicursor support**  | **More complete** native multicursor support                                                                                | Limited support                                                     | Limited support                                               | Limited support                                                     | Limited support                                           |
-| **Line comment**         | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
-| **Block comment**        | ✅                                                                                                                          | ❌                                                                  | ✅                                                            | ❌                                                                  | ❌                                                        |
-| **Dot-repeat**           | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
-| **Count**                | ✅                                                                                                                          | ✅                                                                  | ✅                                                            | ✅                                                                  | ✅                                                        |
-| **Line textobject**      | ✅                                                                                                                          | ✅                                                                  | ❌                                                            | ✅                                                                  | ✅                                                        |
-| **Block textobject**     | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Textobject auto**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Uncomment auto**       | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ✅                                                        |
-| **Indent algorithm**     | **VSCode-style** — min visible col<br>• handle mixed tab/space                                                              | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Minimal — `^\s*\zs`<br>• optional startofline             |
-| **Invert per line**      | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Force add comment**    | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
-| **Force remove comment** | ✅                                                                                                                          | ❌                                                                  | ❌                                                            | ❌                                                                  | ❌                                                        |
+| Feature                  | [celeste_comment.nvim](https://github.com/celeste3z/celeste_comment.nvim)                                                   | [Neovim built-in](https://neovim.io/doc/user/various/#_3.-commenting) | [Comment.nvim](https://github.com/numToStr/Comment.nvim)      | [mini.comment](https://github.com/echasnovski/mini.nvim)            | [vim-commentary](https://github.com/tpope/vim-commentary) |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
+| **Edit model**           | **TextEdits** — edits as range+text objects<br>• commit changes via `nvim_buf_set_text` or `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)         | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks) | Direct line replacement<br>• `nvim_buf_set_lines` (lockmarks)       | Direct line replacement<br>• Vim `setline()`              |
+| **Keep cursor**          | **Precise tracking** — cursor adjusts per TextEdit                                                                          | No                                                                    | Imprecise restore — save/restore<br>• no edit adjustment      | No                                                                  | No                                                        |
+| **Keep selection**       | **Precise tracking** — selection adjusts per TextEdit                                                                       | No                                                                    | No                                                            | No                                                                  | No                                                        |
+| **Multicursor support**  | **More complete** native multicursor support                                                                                | Limited support                                                       | Limited support                                               | Limited support                                                     | Limited support                                           |
+| **Line comment**         | Yes                                                                                                                         | Yes                                                                   | Yes                                                           | Yes                                                                 | Yes                                                       |
+| **Block comment**        | Yes                                                                                                                         | No                                                                    | Yes                                                           | No                                                                  | No                                                        |
+| **Dot-repeat**           | Yes                                                                                                                         | Yes                                                                   | Yes                                                           | Yes                                                                 | Yes                                                       |
+| **Count**                | Yes                                                                                                                         | Yes                                                                   | Yes                                                           | Yes                                                                 | Yes                                                       |
+| **Line textobject**      | Yes                                                                                                                         | Yes                                                                   | No                                                            | Yes                                                                 | Yes                                                       |
+| **Block textobject**     | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
+| **Textobject auto**      | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
+| **Uncomment auto**       | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | Yes                                                       |
+| **Indent algorithm**     | **VSCode-style** — min visible col<br>• handle mixed tab/space                                                              | Simple — min whitespace prefix<br>• does not handle mixed tab/space   | Standard — shiftwidth/tabstop                                 | Simple — min whitespace prefix<br>• does not handle mixed tab/space | Minimal — `^\s*\zs`<br>• optional startofline             |
+| **Invert per line**      | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
+| **Force add comment**    | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
+| **Force remove comment** | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
 
 ## Requirements
 
@@ -71,19 +77,12 @@
 
 ## Installation
 
-> [!IMPORTANT]
->
-> - Breaking changes may occur in MINOR version bumps (e.g. `0.1.0` → `0.2.0`).
-> - PATCH bumps (e.g. `0.1.0` → `0.1.1`) are backward compatible.
-> - `Pinning to a specific version or commit is recommended.`
-
 ### vim.pack (Neovim 0.12+)
 
 ```lua
 vim.pack.add({
   {
     src = "https://github.com/celeste3z/celeste_comment.nvim",
-    name = "celeste_comment",
     version = vim.version.range("*"),
   },
 })
@@ -95,6 +94,16 @@ require("celeste_comment").setup()
 
 ```lua
 { "celeste3z/celeste_comment.nvim", lazy = false, opts = {} }
+```
+
+### vim-plug
+
+```vim
+call plug#begin()
+Plug 'celeste3z/celeste_comment.nvim'
+call plug#end()
+
+lua require("celeste_comment").setup()
 ```
 
 ## Default Configuration
@@ -111,6 +120,8 @@ require("celeste_comment").setup()
   -- Can also combine, e.g. "expand_line | keep_visual" which means: force line comments to
   -- `V` mode and stay in visual mode
   -- See `:help celeste_comment-config-keep_selection` for more details.
+  --
+  -- Recommend "adjust | expand_block" personally.
   keep_selection         = "never",
 
   -- Insert space between comment marker and text.
@@ -121,11 +132,6 @@ require("celeste_comment").setup()
 
   -- Match comment markers case-insensitively (e.g. `@REM` vs `@rem` vs `@rEm`)
   case_insensitive       = false,
-
-  -- Detect indent size and indent style (tabs vs spaces) from buffer content.
-  -- Does not modify any buffer options. See `:help celeste_comment-config-detect_indent`
-  -- for more details.
-  detect_indent          = false,
 
   -- Whether to use `vim.api.nvim_buf_set_text` to commit edits.
   -- `nvim_buf_set_text` only modifies parts of lines, preserving regular marks and
@@ -152,6 +158,11 @@ require("celeste_comment").setup()
 
   -- Log level (nvim-0.13+). Ignored on older versions.
   log_level              = vim.log.levels.OFF,
+
+  -- Detect indent size and indent style (tabs vs spaces) from buffer content.
+  -- Does not modify any buffer options. See `:help celeste_comment-config-detect_indent`
+  -- for more details.
+  detect_indent          = false,
 
   -- Comment string configuration.
   cms_confs              = nil,
@@ -203,9 +214,9 @@ require("celeste_comment").setup()
   },
 
   hooks = {
-    -- Called before commit edits, receives context
+    -- Called before commit edits
     pre_commit_edits     = nil,
-    -- Called after commit edits, receives context
+    -- Called after commit edits
     post_commit_edits    = nil,
     -- Custom comment string resolver function
     cms_conf_resolver    = nil,

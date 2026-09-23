@@ -64,7 +64,6 @@ edits and full dot-repeat support.
 vim.pack.add({
   {
     src = "https://github.com/celeste3z/celeste_comment.nvim",
-    name = "celeste_comment",
     version = vim.version.range("*"),
   },
 })
