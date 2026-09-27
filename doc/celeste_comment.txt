@@ -1,5 +1,5 @@
 *celeste_comment.txt*                 MIT License Copyright (c) 2026 celeste3z
-                            For NVIM v0.12.0    Last change: 2026 September 22
+                            For NVIM v0.12.0    Last change: 2026 September 27
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
@@ -108,7 +108,6 @@ VIM.PACK (NEOVIM 0.12+) ~
     vim.pack.add({
       {
         src = "https://github.com/celeste3z/celeste_comment.nvim",
-        name = "celeste_comment",
         version = vim.version.range("*"),
       },
     })
