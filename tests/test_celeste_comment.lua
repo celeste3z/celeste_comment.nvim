@@ -7959,7 +7959,7 @@ end
 
 -- multiple cursor tests ──────────────────────────────────────────────────────
 
-if vim.fn.has("nvim-0.13") == 1 and vim.api.nvim_mcursor ~= nil then
+if vim.fn.has("nvim-0.13") == 1 then
   local function set_mcursor(line, col)
     child.api.nvim_win_set_cursor(0, { line, col or 0 })
     feed("Q")

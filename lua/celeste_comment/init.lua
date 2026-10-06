@@ -2950,6 +2950,7 @@ function M.setup(config)
     { desc = "Auto inner line/block textobject" }
   )
 
+  -- FIXME: pending issue: https://github.com/neovim/neovim/issues/42205
   -- TODO: support native multiple cursor
   map("i", m.line_toggle_insert, function()
     local cursor = H.make_cursor(0)
