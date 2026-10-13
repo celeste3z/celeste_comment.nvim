@@ -370,6 +370,9 @@ do
   ---@return boolean
   function H.mcursor_active() return false end
 
+  ---@return vim.api.keyset.get_extmark_item[]
+  function H.mcursor_extmarks() return {} end
+
   if HAS_NVIM_013 then
     ---@param f fun(motion:Celeste.Comment.Motion)
     function H.apply_operator(f)
@@ -378,8 +381,12 @@ do
     end
 
     local MCURSOR_NS = vim.api.nvim_create_namespace("nvim.multicursor")
+
     ---@return boolean
     function H.mcursor_active() return #vim.api.nvim_buf_get_extmarks(0, MCURSOR_NS, 0, -1, { limit = 1 }) > 0 end
+
+    ---@return vim.api.keyset.get_extmark_item[]
+    function H.mcursor_extmarks() return vim.api.nvim_buf_get_extmarks(0, MCURSOR_NS, 0, -1, {}) end
   end
 
   if vim.fn.has("nvim-0.12.2") == 1 then
@@ -2104,8 +2111,9 @@ end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
 function H.restore_state(ctx)
-  local cfg, state = ctx.cfg, ctx.state_track
+  local cfg, state, invoke_ctx = ctx.cfg, ctx.state_track, ctx.invoke_ctx or {}
   if not state then return end
+  if invoke_ctx.insmode then return end
 
   local keep_visual = (bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kKeepVisual) ~= 0)
   local range, mode = H.keep_selection_expand(state, cfg.keep_selection, ctx.ctype, ctx.motion, ctx.edits, ctx.csi)
@@ -2758,6 +2766,40 @@ function H.visual_action(ctype, opts)
   H.make_action_range(cms_ref_pos, range, ctype, action, motion, { cfg = opts.cfg, state_track = state_track })
 end
 
+---Insert mode action
+---@param ctype Celeste.Comment.CommentType
+---@param opts Celeste.Comment.InvokeCtx?
+function H.insert_action(ctype, opts)
+  if H.is_disabled({ check_modifiable = true }) then return end
+  opts = opts or {}
+  local cfg = H.buf_config(opts.cfg)
+  local action = opts.action or M.ACTION.kToggle
+
+  ---@param pos vim.Pos
+  ---@return vim.Pos
+  local function f(pos)
+    local range = { pos.row, pos.col, pos.row, pos.col } ---@type Celeste.Comment.Range4
+    local state_track = { cursor = H.pos_clone(pos), ncursor = H.pos_clone(pos) } ---@type Celeste.Comment.StateTrack
+    H.make_action_range(H.pos_clone(pos), range, ctype, action, "line", { insmode = true, state_track = state_track })
+    return assert(cfg.keep_cursor and state_track.ncursor or state_track.cursor)
+  end
+
+  local pc = H.make_cursor(0)
+  local ec = H.mcursor_extmarks()
+
+  local npc = f(pc)
+  vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(npc))
+
+  if #ec == 0 then return end
+
+  local ns = vim.api.nvim_create_namespace("nvim.multicursor")
+  for _, e in ipairs(ec) do
+    local c = H.make_pos(pc.buf, e[2], e[3])
+    local nc = (c == pc) and npc or f(c)
+    vim.api.nvim_buf_set_extmark(nc.buf, ns, nc.row, nc.col, { id = e[1] })
+  end
+end
+
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.InvokeCtx
 ---@return fun():string
@@ -2949,17 +2991,12 @@ function M.setup(config)
     cmd("textobject_auto(true)"),
     { desc = "Auto inner line/block textobject" }
   )
-
-  -- FIXME: pending issue: https://github.com/neovim/neovim/issues/42205
-  -- TODO: support native multiple cursor
-  map("i", m.line_toggle_insert, function()
-    local cursor = H.make_cursor(0)
-    local range = { cursor.row, cursor.col, cursor.row, cursor.col }
-    H.make_action_range(cursor, range, C.kLine, A.kToggle, "line", {
-      insmode = true,
-      state_track = H.make_state_track(),
-    })
-  end, { desc = "Toggle line comment at insert mode" })
+  map(
+    "i",
+    m.line_toggle_insert,
+    function() H.insert_action(C.kLine, { action = A.kToggle }) end,
+    { desc = "Toggle line comment at insert mode" }
+  )
 end
 
 -- test only

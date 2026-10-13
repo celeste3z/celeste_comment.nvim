@@ -8337,6 +8337,82 @@ if vim.fn.has("nvim-0.13") == 1 then
     eq(all_mselections(), { { 1, 9, 2, 10 }, { 5, 5, 6, 6 }, { 8, 8, 9, 11 } })
     feed("<esc>")
     clear_mcursor()
+
+    -- insert mode comment toggle
+    set_lines(lines)
+    set_mcursor(3, 12)
+    set_mcursor(4, 3)
+    set_mcursor(7, 10)
+    set_mcursor(10, 13)
+    set_cursor(11, 3)
+    eq(all_mcursor(), { { 2, 12 }, { 3, 3 }, { 6, 10 }, { 9, 13 }, { 10, 3 } })
+    feed("a")
+    eq(all_mcursor(), { { 2, 13 }, { 3, 4 }, { 6, 11 }, { 9, 14 }, { 10, 4 } })
+    feed("<c-/>")
+    eq(all_mcursor(), { { 2, 16 }, { 3, 7 }, { 6, 16 }, { 9, 17 }, { 10, 7 } })
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  -- print('bb')",
+      "  -- print('ccc')",
+      "```",
+      "",
+      "<!-- ### heading -->",
+      "```c",
+      '  printf("a");',
+      '  // printf("bb");',
+      '  // printf("ccc");',
+      "```",
+    })
+    feed("<c-/>")
+    eq(all_mcursor(), { { 2, 13 }, { 3, 4 }, { 6, 11 }, { 9, 14 }, { 10, 4 } })
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  print('bb')",
+      "  print('ccc')",
+      "```",
+      "",
+      "### heading",
+      "```c",
+      '  printf("a");',
+      '  printf("bb");',
+      '  printf("ccc");',
+      "```",
+    })
+    feed("<c-/>")
+    feed("@")
+    eq(all_mcursor(), { { 2, 17 }, { 3, 8 }, { 6, 17 }, { 9, 18 }, { 10, 8 } })
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  -- print('bb')@",
+      "  -- pr@int('ccc')",
+      "```",
+      "",
+      "<!-- ### heading@ -->",
+      "```c",
+      '  printf("a");',
+      '  // printf("bb")@;',
+      '  // pr@intf("ccc");',
+      "```",
+    })
+    feed("<esc>")
+    eq(child.api.nvim_get_mode().mode, "n")
+    eq(get_lines(), {
+      "```lua",
+      "  print('a')",
+      "  -- print('bb')@",
+      "  -- pr@int('ccc')",
+      "```",
+      "",
+      "<!-- ### heading@ -->",
+      "```c",
+      '  printf("a");',
+      '  // printf("bb")@;',
+      '  // pr@intf("ccc");',
+      "```",
+    })
   end
 
   T["multicursor"]["keep_selection works"] = function()
