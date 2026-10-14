@@ -358,6 +358,15 @@ do
     return "nil"
   end
 
+  ---@param buf integer
+  ---@param row integer 0-indexed
+  ---@param col integer 0-indexed
+  ---@return vim.treesitter.CaptureInfo[]
+  function H.treesitter_get_captures_at_pos(buf, row, col)
+    --- @diagnostic disable-next-line: deprecated
+    return vim.treesitter.get_captures_at_pos(buf, row, col)
+  end
+
   ---@type ((fun(motion:Celeste.Comment.Motion))|string)?
   H.sentinel = "v:lua.require'celeste_comment'.H.operator"
 
@@ -379,6 +388,12 @@ do
       H.sentinel = f
       vim.go.operatorfunc = f
     end
+
+    ---@param buf integer
+    ---@param row integer 0-indexed
+    ---@param col integer 0-indexed
+    ---@return vim.treesitter.CaptureInfo[]
+    function H.treesitter_get_captures_at_pos(buf, row, col) return vim.treesitter.get_captures(buf, { row, col }) end
 
     local MCURSOR_NS = vim.api.nvim_create_namespace("nvim.multicursor")
 
@@ -743,7 +758,7 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
   local ok, parser = pcall(vim.treesitter.get_parser, pos.buf, "")
   if not ok or parser == nil then return end
 
-  local caps = vim.treesitter.get_captures_at_pos(pos.buf, pos.row, pos.col)
+  local caps = H.treesitter_get_captures_at_pos(pos.buf, pos.row, pos.col)
   for i = #caps, 1, -1 do
     local id, metadata = caps[i].id, caps[i].metadata
     local md_cms = metadata["bo.commentstring"] or metadata[id] and metadata[id]["bo.commentstring"]
