@@ -58,6 +58,34 @@ end
 local make_pos = function(buf, row, col) return vim.pos(row, col, { buf = buf }) end
 if vim.fn.has("nvim-0.12.2") == 1 then make_pos = function(buf, row, col) return vim.pos(buf, row, col) end end
 
+local function mock_child_msg()
+  child.lua_func(function()
+    _G.__echo_info = {}
+    _G.__old_nvim_echo = vim.api.nvim_echo
+    ---@diagnostic disable-next-line: duplicate-set-field
+    vim.api.nvim_echo = function(chunks, _, _)
+      local msg = vim.iter(chunks):fold("", function(acc, chunk)
+        acc = acc .. chunk[1]
+        return acc
+      end)
+      __echo_info[#__echo_info + 1] = msg
+    end
+  end)
+end
+
+local function unmock_child_msg()
+  child.lua_func(function()
+    _G.__echo_info = nil
+    vim.api.nvim_echo = _G.__old_nvim_echo
+  end)
+end
+
+local function clear_child_msg()
+  child.lua_func(function() _G.__echo_info = {} end)
+end
+
+local function child_msg() return child.lua_get([[__echo_info]]) end
+
 local T = new_set({
   hooks = {
     pre_case = function()
@@ -5346,6 +5374,57 @@ T["treesitter"]["works across combined injections"] = function()
   eq(get_cursor(), { 2, 3 })
 end
 
+T["treesitter"]["use correct position to get comment string"] = function()
+  mock_child_msg()
+  child.lua_func(function()
+    vim.bo.filetype = "lua"
+    vim.treesitter.query.set(
+      "lua",
+      "injections",
+      [[
+      ((function_call
+        name: (_) @_vimcmd_identifier
+        arguments: (arguments
+          (string
+            content: _ @injection.content)))
+        (#eq? @_vimcmd_identifier "vim.cmd")
+        (#set! injection.language "vim")
+        (#set! injection.combined))
+    ]]
+    )
+    vim.treesitter.start()
+  end)
+  local lines = { "vim.cmd([[some text]])" }
+  set_lines(lines)
+  set_cursor(1, 9)
+  feed("gcc")
+  eq(get_lines(), { "-- vim.cmd([[some text]])" })
+  eq(get_cursor(), { 1, 12 })
+  feed("gcc")
+  eq(get_lines(), lines)
+  eq(get_cursor(), { 1, 9 })
+  feed("gbiw")
+  eq(get_lines(), { "vim.cmd--[[ ([[ ]]some text]])" })
+  eq(get_cursor(), { 1, 14 })
+  feed("gbgb")
+  eq(get_lines(), lines)
+  eq(get_cursor(), { 1, 9 })
+  eq(child_msg(), {})
+
+  set_cursor(1, 10)
+  feed("gbiw")
+  eq(get_lines(), lines)
+  eq(get_cursor(), { 1, 10 })
+  eq(child_msg(), { "No available block comment string config" })
+  clear_child_msg()
+  feed("gciw")
+  eq(get_lines(), { "-- vim.cmd([[some text]])" })
+  eq(get_cursor(), { 1, 13 })
+  eq(child_msg(), {})
+
+  unmock_child_msg()
+end
+
 -- extract from options comments ──────────────────────────────────────────────
 
 T["from_options_comments"] = new_set()
@@ -5655,38 +5734,18 @@ end
 
 -- warning msg tests ──────────────────────────────────────────────────────────
 
-local function clear_child_msg()
-  child.lua_func(function() _G.__echo_info = {} end)
-end
-
-local function child_msg() return child.lua_get([[__echo_info]]) end
-
 T["warning"] = new_set({
   hooks = {
     pre_case = function()
+      mock_child_msg()
       child.lua_func(function()
-        _G.__echo_info = {}
-        _G.__old_nvim_echo = vim.api.nvim_echo
-        ---@diagnostic disable-next-line: duplicate-set-field
-        vim.api.nvim_echo = function(chunks, _, _)
-          local msg = vim.iter(chunks):fold("", function(acc, chunk)
-            acc = acc .. chunk[1]
-            return acc
-          end)
-          __echo_info[#__echo_info + 1] = msg
-        end
         vim.b.celeste_comment_config = { cms_confs = false, fallback_to_block = "never" }
         vim.bo.filetype = "unknown"
         vim.bo.commentstring = ""
         vim.b.celeste_comment_block_commentstring = ""
       end)
     end,
-    post_case = function()
-      child.lua_func(function()
-        _G.__echo_info = nil
-        vim.api.nvim_echo = _G.__old_nvim_echo
-      end)
-    end,
+    post_case = function() unmock_child_msg() end,
   },
 })
 

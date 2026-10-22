@@ -320,8 +320,35 @@ local LOG_LEVEL2NAME = {
 }
 -- stylua: ignore end
 
-local HAS_NVIM_012 = vim.fn.has("nvim-0.12") == 1
-local HAS_NVIM_013 = vim.fn.has("nvim-0.13") == 1
+---@param pos vim.Pos
+---@return integer
+function H.pos_to_offset(pos) return vim.api.nvim_buf_get_offset(pos.buf, pos.row) + pos.col end
+
+---@overload fun(pos:vim.Pos?):vim.Pos?
+---@overload fun(pos:vim.Pos):vim.Pos
+function H.pos_clone(pos)
+  if pos then return H.make_pos(pos.buf, pos.row, pos.col) end
+end
+
+---@param pos? vim.Pos
+---@return string
+function H.pos_to_string(pos)
+  if pos then return ("{%s, %s, %s}"):format(pos.row, pos.col, pos.buf) end
+  return "nil"
+end
+
+---@param pos vim.Pos
+---@return vim.Pos
+function H.pos_to_start_column(pos)
+  local line = vim.fn.getline(pos.row + 1) --[[@as string]]
+  local start_col = line:match("^%s*()") --[[@as integer]]
+  if start_col then return H.make_pos(pos.buf, pos.row, start_col - 1) end
+  return H.pos_clone(pos)
+end
+
+local HAS_NVIM_012_0 = vim.fn.has("nvim-0.12.0") == 1
+local HAS_NVIM_012_2 = vim.fn.has("nvim-0.12.2") == 1
+local HAS_NVIM_013_0 = vim.fn.has("nvim-0.13.0") == 1
 
 ---TODO: delete this if we drop support for nvim-0.12
 do
@@ -339,23 +366,6 @@ do
     end
 
     return buf, pos
-  end
-
-  ---@param pos vim.Pos
-  ---@return integer
-  function H.pos_to_offset(pos) return vim.api.nvim_buf_get_offset(pos.buf, pos.row) + pos.col end
-
-  ---@overload fun(pos:vim.Pos?):vim.Pos?
-  ---@overload fun(pos:vim.Pos):vim.Pos
-  function H.pos_clone(pos)
-    if pos then return H.make_pos(pos.buf, pos.row, pos.col) end
-  end
-
-  ---@param pos? vim.Pos
-  ---@return string
-  function H.pos_to_string(pos)
-    if pos then return ("{%s, %s, %s}"):format(pos.row, pos.col, pos.buf) end
-    return "nil"
   end
 
   ---@param buf integer
@@ -382,7 +392,7 @@ do
   ---@return vim.api.keyset.get_extmark_item[]
   function H.mcursor_extmarks() return {} end
 
-  if HAS_NVIM_013 then
+  if HAS_NVIM_013_0 then
     ---@param f fun(motion:Celeste.Comment.Motion)
     function H.apply_operator(f)
       H.sentinel = f
@@ -404,7 +414,7 @@ do
     function H.mcursor_extmarks() return vim.api.nvim_buf_get_extmarks(0, MCURSOR_NS, 0, -1, {}) end
   end
 
-  if vim.fn.has("nvim-0.12.2") == 1 then
+  if HAS_NVIM_012_2 then
     ---@param buf integer
     ---@param pos [integer, integer] (lnum, col) tuple
     ---@return vim.Pos
@@ -420,7 +430,7 @@ do
     ---@param col integer 0-indexed
     function H.make_pos(buf, row, col) return vim.pos(buf, row, col) end
 
-    if HAS_NVIM_013 then
+    if HAS_NVIM_013_0 then
       ---@param pos vim.Pos
       ---@return [integer, integer]
       function H.pos_to_cursor(pos) return pos:to_cursor() end
@@ -457,7 +467,7 @@ end
 
 ---@param level vim.log.levels
 ---@return boolean
-function H.should_log(level) return level >= H.config.log_level and HAS_NVIM_013 end
+function H.should_log(level) return level >= H.config.log_level and HAS_NVIM_013_0 end
 
 ---@param level vim.log.levels
 ---@vararg any
@@ -605,7 +615,7 @@ H.comment_string_confs = {
 function H.is_disabled(opt)
   opt = opt or {}
   local chunks = { { "celeste_comment.nvim", "DiagnosticSignHint" } }
-  if not HAS_NVIM_012 then
+  if not HAS_NVIM_012_0 then
     chunks[#chunks + 1] = { " requires nvim-0.12", "WarningMsg" }
   elseif vim.g.celeste_comment_disable == true or vim.b.celeste_comment_disable == true then
     chunks[#chunks + 1] = { " disabled", "WarningMsg" }
@@ -725,15 +735,6 @@ function H.ltree_contains(ltree, pos)
   return false
 end
 
----@param pos vim.Pos
----@return vim.Pos
-function H.adjust_to_start_column_pos(pos)
-  local line = vim.fn.getline(pos.row + 1) --[[@as string]]
-  local start_col = line:match("^%s*()") --[[@as integer]]
-  if start_col then return H.make_pos(pos.buf, pos.row, start_col - 1) end
-  return pos
-end
-
 ---Based on https://github.com/neovim/neovim/blob/master/runtime/lua/vim/_comment.lua
 ---@param ctx Celeste.Comment.Hooks.CmsConfResolver.Ctx
 function H.nvim_builtin_like_cms_conf_resolver(ctx)
@@ -747,7 +748,7 @@ function H.nvim_builtin_like_cms_conf_resolver(ctx)
     if bcs.s and bcs.e and bcs.s.str ~= "" and bcs.e.str ~= "" then return ("%s%%s%s"):format(bcs.s.str, bcs.e.str) end
   end
 
-  local pos = H.adjust_to_start_column_pos(ctx.cursor)
+  local pos = ctx.cursor
   local filetype = vim.bo[pos.buf].filetype
 
   ctx.o_cms_conf = {
@@ -898,7 +899,7 @@ end
 function H.default_cms_conf_resolver(ctx)
   if ctx.cfg.cms_confs == false then return end
 
-  local pos = H.adjust_to_start_column_pos(ctx.cursor)
+  local pos = ctx.cursor
   local dptree ---@type vim.treesitter.LanguageTree?
   local ok, parser = pcall(vim.treesitter.get_parser, pos.buf, "")
   if ok and parser ~= nil then
@@ -2673,7 +2674,9 @@ function H.textobject_linewise(inner)
 
   if cfg.fallback_to_block ~= M.FBK2BLOCK.kNever then return H.textobject_auto(inner) end
 
-  local csi = H.resolve(cursor, M.CMT.kLine, cfg)
+  local cms_ref_pos = H.pos_to_start_column(cursor)
+
+  local csi = H.resolve(cms_ref_pos, M.CMT.kLine, cfg)
   if not csi then return end
 
   H.select_range((H.compute_linecomment_range(cfg, cursor, csi, inner)), {
@@ -2696,6 +2699,7 @@ function H.textobject_blockwise(inner)
   H.select_range((H.compute_blockcomment_range(cfg, cursor, csi, nil, inner)), { mode = "v", end_inclusive = true })
 end
 
+---TODO: refactor, implement this by `make_actionx`?
 ---@param kind 'above'|'below'|'eol'
 function H.insert_comment(kind)
   if H.is_disabled({ check_modifiable = true }) then return end
@@ -2703,8 +2707,9 @@ function H.insert_comment(kind)
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
   local buf = cursor.buf
+  local cms_ref_pos = H.pos_to_start_column(cursor)
 
-  local csi = H.resolve(cursor, M.CMT.kLine, cfg)
+  local csi = H.resolve(cms_ref_pos, M.CMT.kLine, cfg)
   if not csi then return end
 
   local rcs_only = csi.olcs == ""
@@ -2750,7 +2755,10 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
   local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
-  local csi, n_ctype = H.resolve(cursor, ctype, cfg, range)
+  local cms_ref_pos = H.pos_to_start_column(cursor)
+  if ctype ~= M.CMT.kLine and motion ~= "line" and cms_ref_pos <= cursor then cms_ref_pos = H.pos_clone(cursor) end
+
+  local csi, n_ctype = H.resolve(cms_ref_pos, ctype, cfg, range)
   if not csi or not n_ctype then return end
 
   -- Like VSCode/Zed, always expand selection to line boundaries if fallback to block
