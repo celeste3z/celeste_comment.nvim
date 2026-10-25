@@ -1160,6 +1160,74 @@ function H.match_line_comment(line, row, csi, opts)
   return { matched = false }
 end
 
+---@class Celeste.Comment.EolMarker
+---@field p   Celeste.Comment.CommentStringInfo.Pairs
+---@field idx integer
+---@field csi Celeste.Comment.CommentStringInfo
+
+---@param line string
+---@param row integer
+---@param all_csi Celeste.Comment.CommentStringInfo[]
+---@return Celeste.Comment.MatchLineComment.Result
+function H.match_eol_line_comment(line, row, all_csi)
+  local first = line:find("%S")
+  if not first then return { matched = false } end
+
+  ---@type Celeste.Comment.EolMarker[]
+  local cands = {}
+  for _, csi in pairs(all_csi) do
+    for idx, p in ipairs(csi.pairs) do
+      if p.traw[1] ~= "" then cands[#cands + 1] = { p = p, idx = idx, csi = csi } end
+    end
+  end
+
+  ---@param pos integer
+  ---@return Celeste.Comment.EolMarker? marker
+  ---@return integer? s
+  local function find_marker(pos)
+    local marker, bs
+    for _, c in ipairs(cands) do
+      local s = line:find(c.p.tesc[1], pos)
+      if s and (not marker or s < bs or (s == bs and #c.p.traw[1] > #marker.p.traw[1])) then
+        marker, bs = c, s
+      end
+    end
+    return marker, bs
+  end
+
+  local n = #line
+  local pos = first
+  while pos <= n do
+    local marker, s = find_marker(pos)
+    if not marker then break end
+    ---@cast s integer
+    local p = marker.p
+    local prev = s > 1 and line:byte(s - 1) or nil
+
+    if p.traw[2] ~= "" then
+      -- wrapped comment: skip to the closer on this line
+      local e = line:find(p.tesc[2], s + #p.traw[1])
+      if not e then break end
+      pos = e + #p.traw[2]
+    elseif s == first then
+      -- comment at line start, not an end-of-line comment
+      return { matched = false }
+    elseif prev == CHAR_CODE.SPACE or prev == CHAR_CODE.TAB then
+      local m = #p.traw[1]
+      local pad = H.match_byte(line, s + m - 1, p.tout[1], m, 1, marker.csi.ci)
+      local lcs_pos = { row, s - 1, s + m + pad - 2 } ---@type Celeste.Comment.Range3
+      local res = { matched = true, idx = marker.idx, lcs_pos = lcs_pos }
+      local istart = lcs_pos[3] + 1
+      if n - 1 >= istart then res.inner = { row, istart, n - 1 } end
+      return res
+    else
+      pos = s + 1
+    end
+  end
+
+  return { matched = false }
+end
+
 ---@param cur_visible_col integer current visible column
 ---@param byte            integer byte value of current character
 ---@param indent_size     integer
@@ -2326,6 +2394,27 @@ function H.compute_linecomment_range(cfg, cursor, csi, inner)
   return { lnum_from - 1, cursor.col, lnum_to - 1, cursor.col }
 end
 
+---@param cursor vim.Pos
+---@param all_csi Celeste.Comment.CommentStringInfo[]
+---@param inner? boolean
+---@return Celeste.Comment.Range4?
+function H.compute_eol_linecomment_range(cursor, all_csi, inner)
+  local line = vim.api.nvim_buf_get_lines(cursor.buf, cursor.row, cursor.row + 1, false)[1] or ""
+  local res = H.match_eol_line_comment(line, cursor.row, all_csi)
+  if not res.matched then return end
+
+  ---@cast res.lcs_pos Celeste.Comment.Range3
+  local lcs = res.lcs_pos
+  if cursor.col < lcs[2] or cursor.col > #line - 1 then return end
+
+  if inner then
+    if not res.inner then return end
+    return { res.inner[1], res.inner[2], res.inner[1], res.inner[3] }
+  end
+
+  return { cursor.row, lcs[2], cursor.row, #line - 1 }
+end
+
 ---@class Celeste.Comment.BlockMatchPair.Res
 ---@field range   Celeste.Comment.Range4
 ---@field lcs_len integer
@@ -2595,10 +2684,13 @@ end
 ---@param cfg Celeste.Comment.Opts
 ---@param cursor vim.Pos
 ---@param inner? boolean
+---@param opts? { match_eol?: boolean }
 ---@return Celeste.Comment.Range4?
 ---@return Celeste.Comment.CommentType?
 ---@return Celeste.Comment.CommentStringInfo?
-function H.compute_x_comment_range(cfg, cursor, inner)
+---@return boolean? true: linewise, false: blockwise
+function H.compute_x_comment_range(cfg, cursor, inner, opts)
+  opts = opts or {}
   local all_csi = H.make_all_csi(cursor, cfg, nil, false)
   if not all_csi then return end
   local lcsi, bcsi = all_csi[M.CMT.kLine], all_csi[M.CMT.kBlock]
@@ -2615,20 +2707,26 @@ function H.compute_x_comment_range(cfg, cursor, inner)
     local r
     if lcsi.wrapped and cfg.fallback_to_block == M.FBK2BLOCK.kIfLineCmsWrapped then
       r = H.compute_blockcomment_range(cfg, cursor, lcsi, nil, inner)
-      if r then return r, M.CMT.kBlock, lcsi end
+      if r then return r, M.CMT.kBlock, lcsi, false end
     end
 
     if bprefix and bcsi then
       r = H.compute_blockcomment_range(cfg, cursor, bcsi, nil, inner)
-      if r then return r, M.CMT.kBlock, bcsi end
+      if r then return r, M.CMT.kBlock, bcsi, false end
     end
 
     r = H.compute_linecomment_range(cfg, cursor, lcsi, inner)
-    if r then return r, M.CMT.kLine, lcsi end
+    if r then return r, M.CMT.kLine, lcsi, not inner end
   end
 
   if not bprefix and bcsi then
-    return H.compute_blockcomment_range(cfg, cursor, bcsi, nil, inner), M.CMT.kBlock, bcsi
+    local r = H.compute_blockcomment_range(cfg, cursor, bcsi, nil, inner)
+    if r then return r, M.CMT.kBlock, bcsi, false end
+  end
+
+  if opts.match_eol then
+    local r = H.compute_eol_linecomment_range(cursor, all_csi, inner)
+    if r then return r, M.CMT.kLine, lcsi, false end
   end
 end
 
@@ -2638,9 +2736,9 @@ function H.textobject_auto(inner)
   if H.is_disabled() then return end
   local cfg = H.buf_config()
   local cursor = H.make_cursor(0)
-  local range, ctype = H.compute_x_comment_range(cfg, cursor, inner)
+  local range, ctype, _, linewise = H.compute_x_comment_range(cfg, cursor, inner, { match_eol = true })
   if not range or not ctype then return end
-  H.select_range(range, { mode = inner and "v" or (ctype == M.CMT.kLine and "V" or "v"), end_inclusive = true })
+  H.select_range(range, { mode = linewise and "V" or "v", end_inclusive = true })
 end
 
 --- Auto-detect and remove comment

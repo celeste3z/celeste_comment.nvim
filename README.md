@@ -185,7 +185,6 @@ lua require("celeste_comment").setup()
     block_toggle_visual  = "gb",
 
     -- All textobjects below works without treesitter
-    -- NOTE: not works for end of line comment, like 'some code -- comment here'
     -- Linewise textobject outer (o)
     line_textobject      = "gc",
     -- Blockwise textobject outer (o)
@@ -328,6 +327,10 @@ See `:help celeste_comment-configuration` for details.
 - **Textobject limitations**
   - Comment-like tokens inside strings or literals may be mistakenly
     detected as comments (e.g., `char *s = "// not a comment";`).
+  - End-of-line comments (`some code -- comment`) are only handled by
+    `auto_textobject` / `auto_textobject_inner`, and only on the cursor line.
+    The marker must be preceded by whitespace; `some code--comment` is not
+    treated as a comment.
   - Scan range is limited to `block_textobj_nlines` (default 200 lines).
 
 - **Visual block mode (`<C-v>`)** — Comments are applied per-line,

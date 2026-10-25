@@ -3451,6 +3451,162 @@ T["textobject"]["auto inner"] = function()
   eq(get_lines(), { "# ", "/*  */" })
 end
 
+T["textobject"]["auto eol line comment"] = function()
+  local lines = { "x = 1 # hello world" }
+
+  set_lines(lines)
+  set_cursor(1, 9)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 6, 0, 18 }, "v" })
+  feed("<Esc>")
+
+  set_cursor(1, 9)
+  feed("v", "gia")
+  eq(get_selection(), { { 0, 8, 0, 18 }, "v" })
+  feed("<Esc>")
+
+  set_cursor(1, 9)
+  feed("d", "ga")
+  eq(get_lines(), { "x = 1 " })
+
+  set_lines(lines)
+  set_cursor(1, 9)
+  feed("d", "gia")
+  eq(get_lines(), { "x = 1 # " })
+
+  -- cursor on code or on the whitespace before the marker: no match
+  set_lines(lines)
+  set_cursor(1, 0)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), lines)
+  set_cursor(1, 5)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), lines)
+
+  -- marker must be preceded by whitespace
+  set_lines({ "x=1#hi" })
+  set_cursor(1, 4)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), { "x=1#hi" })
+
+  -- skip a marker not preceded by whitespace, match the next one
+  set_lines({ "a#b # c" })
+  set_cursor(1, 6)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 4, 0, 6 }, "v" })
+  feed("<Esc>")
+
+  -- lua: -- and --[[ share the same prefix
+  child.bo.filetype = "lua"
+  local lua_lines = { "local x = 1 -- hello" }
+
+  set_lines(lua_lines)
+  set_cursor(1, 16)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 12, 0, 19 }, "v" })
+  feed("<Esc>")
+
+  set_cursor(1, 16)
+  feed("v", "gia")
+  eq(get_selection(), { { 0, 15, 0, 19 }, "v" })
+  feed("<Esc>")
+
+  -- trailing block comment is skipped, only the line comment after it is matched
+  set_lines({ "local x = 1 --[[ a ]] -- tail" })
+  set_cursor(1, 26)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 22, 0, 28 }, "v" })
+  feed("<Esc>")
+  set_cursor(1, 26)
+  feed("v", "gia")
+  eq(get_selection(), { { 0, 25, 0, 28 }, "v" })
+  feed("<Esc>")
+
+  -- empty content: outer selects the marker, inner does nothing
+  set_lines({ "x --" })
+  set_cursor(1, 3)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 2, 0, 3 }, "v" })
+  feed("<Esc>")
+  set_cursor(1, 3)
+  feed("d", "gia", "<Esc>")
+  eq(get_lines(), { "x --" })
+
+  -- block comment at end of line, cursor after it: no match
+  set_lines({ "local x = 1 --[[ hi ]] " })
+  set_cursor(1, 22)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), { "local x = 1 --[[ hi ]] " })
+
+  -- unclosed block comment (no closer in the whole buffer): no match
+  set_lines({ "local x = 1 --[[ open" })
+  set_cursor(1, 18)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), { "local x = 1 --[[ open" })
+  set_cursor(1, 18)
+  feed("d", "gia", "<Esc>")
+  eq(get_lines(), { "local x = 1 --[[ open" })
+
+  -- block comment closed on a later line: block wins, EOL fallback is not used
+  set_lines({ "local x = 1 --[[ open", "still", " ]]" })
+  set_cursor(1, 18)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 12, 2, 2 }, "v" })
+  feed("<Esc>")
+  set_cursor(1, 18)
+  feed("v", "gia")
+  eq(get_selection(), { { 0, 17, 1, 4 }, "v" })
+  feed("<Esc>")
+
+  -- once an unclosed block is seen, later markers on the line are not line comments
+  set_lines({ "local x = 1 --[[ // not comment" })
+  set_cursor(1, 21)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), { "local x = 1 --[[ // not comment" })
+
+  -- uncomment_auto does not handle eol comments
+  set_lines(lua_lines)
+  set_cursor(1, 16)
+  feed("gcu")
+  eq(get_lines(), lua_lines)
+
+  -- cpp: multi-char closer adjacency and block skipping
+  child.bo.filetype = "cpp"
+  local cpp_lines = { "int x = 1; /* a // b */ // tail" }
+
+  set_lines(cpp_lines)
+  set_cursor(1, 28)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 24, 0, 30 }, "v" })
+  feed("<Esc>")
+
+  set_cursor(1, 28)
+  feed("v", "gia")
+  eq(get_selection(), { { 0, 27, 0, 30 }, "v" })
+  feed("<Esc>")
+
+  set_cursor(1, 28)
+  feed("d", "ga")
+  eq(get_lines(), { "int x = 1; /* a // b */ " })
+
+  -- block comment starting at the first non-blank: skipped, no match
+  set_lines({ "/* a // b */ x" })
+  set_cursor(1, 13)
+  feed("d", "ga", "<Esc>")
+  eq(get_lines(), { "/* a // b */ x" })
+
+  -- multi-char closer followed immediately by code (regression)
+  set_lines({ "/* a */*p = 1; // tail" })
+  set_cursor(1, 18)
+  feed("v", "ga")
+  eq(get_selection(), { { 0, 15, 0, 21 }, "v" })
+  feed("<Esc>")
+  set_cursor(1, 18)
+  feed("v", "gia")
+  eq(get_selection(), { { 0, 18, 0, 21 }, "v" })
+  feed("<Esc>")
+end
+
 -- Referenced from: https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L797
 T["textobject"]["respect tree-sitter injections"] = function()
   child.lua_func(function()
@@ -8395,6 +8551,91 @@ if vim.fn.has("nvim-0.13") == 1 then
     feed("v", "ic")
     eq(all_mselections(), { { 1, 9, 2, 10 }, { 5, 5, 6, 6 }, { 8, 8, 9, 11 } })
     feed("<esc>")
+    clear_mcursor()
+
+    -- auto textobject on end-of-line comments (lua + c in one session)
+    set_lines({
+      "```lua",
+      "local a = 1 -- aaa",
+      "local bb = 2 -- bbb",
+      "local ccc = 3 -- ccc",
+      "```",
+      "```c",
+      "int x = 1; /* a // b */ // tail",
+      "int x = 1; /* a // b */ // tail",
+      "```",
+    })
+    set_mcursor(2, 16)
+    set_mcursor(3, 17)
+    set_mcursor(4, 18)
+    set_mcursor(7, 28)
+    set_cursor(8, 28)
+    feed("q=")
+    feed("v", "ga")
+    eq(all_mselections(), {
+      { 1, 12, 1, 17 },
+      { 2, 13, 2, 18 },
+      { 3, 14, 3, 19 },
+      { 6, 24, 6, 30 },
+      { 7, 24, 7, 30 },
+    })
+    feed("<esc>")
+    feed("v", "gia")
+    eq(all_mselections(), {
+      { 1, 15, 1, 17 },
+      { 2, 16, 2, 18 },
+      { 3, 17, 3, 19 },
+      { 6, 27, 6, 30 },
+      { 7, 27, 7, 30 },
+    })
+    feed("<esc>")
+    feed("d", "ga")
+    eq(get_lines(), {
+      "```lua",
+      "local a = 1 ",
+      "local bb = 2 ",
+      "local ccc = 3 ",
+      "```",
+      "```c",
+      "int x = 1; /* a // b */ ",
+      "int x = 1; /* a // b */ ",
+      "```",
+    })
+
+    -- skip block comments on the same line, per cursor
+    clear_mcursor()
+    set_lines({
+      "```lua",
+      "local x = 1 --[[ a ]] -- tail",
+      "local x = 1 --[[ a ]] -- tail",
+      "local x = 1 --[[ a ]] -- tail",
+      "```",
+    })
+    set_mcursor(2, 26)
+    set_mcursor(3, 26)
+    set_cursor(4, 26)
+    feed("q=")
+    feed("v", "ga")
+    eq(all_mselections(), { { 1, 22, 1, 28 }, { 2, 22, 2, 28 }, { 3, 22, 3, 28 } })
+    feed("<esc>")
+    feed("v", "gia")
+    eq(all_mselections(), { { 1, 25, 1, 28 }, { 2, 25, 2, 28 }, { 3, 25, 3, 28 } })
+    feed("<esc>")
+
+    -- empty content: outer selects the marker, inner / gcu do nothing
+    clear_mcursor()
+    set_lines({ "```lua", "x --", "xx --", "xxx --", "```" })
+    set_mcursor(2, 3)
+    set_mcursor(3, 4)
+    set_cursor(4, 5)
+    feed("q=")
+    feed("v", "ga")
+    eq(all_mselections(), { { 1, 2, 1, 3 }, { 2, 3, 2, 4 }, { 3, 4, 3, 5 } })
+    feed("<esc>")
+    feed("d", "gia", "<esc>")
+    eq(get_lines(), { "```lua", "x --", "xx --", "xxx --", "```" })
+    feed("gcu")
+    eq(get_lines(), { "```lua", "x --", "xx --", "xxx --", "```" })
     clear_mcursor()
 
     -- insert mode comment toggle
