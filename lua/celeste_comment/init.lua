@@ -533,9 +533,10 @@ H.comment_string_confs = {
   latex = { "%%s", { "\\iffalse%s\\fi", "\\begin{comment}%s\\end{comment}" } },
   tex = "latex",
   lisp = { { ";;%s" }, "#|%s|#" },
-  lua = { { "--%s", "--[[%s]]" }, "--[[%s]]" },
+  lua = { { "--%s", "---%s", "--[[%s]]" }, "--[[%s]]" },
+  luadoc = "lua",
   markdown = { nil, "<!--%s-->" },
-  nim = { "#", "#[%s]#" },
+  nim = { "#%s", "#[%s]#" },
   nix = { { "#%s" }, "/*%s*/" },
   objc = { { "//%s" }, "/*%s*/" },
   objcpp = { { "//%s" }, "/*%s*/" },
@@ -914,8 +915,8 @@ function H.default_cms_conf_resolver(ctx)
     walk(parser)
   end
 
-  if ctx.cfg.cms_confs == nil or type(ctx.cfg.cms_confs) ~= "table" then ctx.cfg.cms_confs = {} end
-  local conf_getter = function(lang) return ctx.cfg.cms_confs[lang] or H.comment_string_confs[lang] end
+  local cms_confs = type(ctx.cfg.cms_confs) == "table" and ctx.cfg.cms_confs or {}
+  local conf_getter = function(lang) return cms_confs[lang] or H.comment_string_confs[lang] end
 
   local lang = dptree and dptree:lang() or vim.bo[pos.buf].filetype
   if not lang then return end
@@ -2954,6 +2955,22 @@ end
 function M.setup(config)
   ---@diagnostic disable-next-line: cast-local-type
   config = vim.tbl_deep_extend("force", vim.deepcopy(H.config), config or {})
+
+  ---@param name  string
+  ---@param value any
+  ---@param enum  table<string, string>
+  local function validate_enum(name, value, enum)
+    local choices = vim.tbl_values(enum)
+    table.sort(choices)
+    vim.validate(
+      name,
+      value,
+      function(v) return vim.tbl_contains(choices, v) end,
+      true,
+      ("one of %s"):format(table.concat(choices, "|"))
+    )
+  end
+
   vim.validate("keep_cursor", config.keep_cursor, "boolean", true, "boolean")
   vim.validate("keep_selection", config.keep_selection, function(v)
     local _, err = H.normalize_flags(v, H.KEEP_SEL_MAP, "keep_selection")
@@ -2961,20 +2978,14 @@ function M.setup(config)
   end, true, "string|number")
   vim.validate("insert_space", config.insert_space, "boolean", true, "boolean")
   vim.validate("line_comment_no_indent", config.line_comment_no_indent, "boolean", true, "boolean")
-  vim.validate("ignore_empty_lines", config.ignore_empty_lines, function(v)
-    if type(v) ~= "string" then return false, ("expected 'never'|'mixed'|'always' but got type:%s"):format(type(v)) end
-    return vim.iter({ "never", "mixed", "always" }):any(function(z) return z == v end),
-      ("expected 'never'|'mixed'|'always' but got %s"):format(v)
-  end, true, "boolean")
-  vim.validate("fallback_to_block", config.fallback_to_block, function(v)
-    if type(v) ~= "string" then return false, "expected string" end
-    return vim.iter({ "never", "if_line_cms_wrapped" }):any(function(z) return z == v end),
-      ("expected 'never'|'if_line_cms_wrapped' but got %s"):format(v)
-  end, true, "string")
+  validate_enum("ignore_empty_lines", config.ignore_empty_lines, M.IGN_EMT)
+  validate_enum("fallback_to_block", config.fallback_to_block, M.FBK2BLOCK)
   vim.validate("case_insensitive", config.case_insensitive, "boolean", true, "boolean")
   vim.validate("detect_indent", config.detect_indent, "boolean", true, "boolean")
   vim.validate("block_relaxed_detect", config.block_relaxed_detect, "boolean", true, "boolean")
   vim.validate("block_textobj_nlines", config.block_textobj_nlines, "number", true, "number")
+  vim.validate("use_set_text", config.use_set_text, "boolean", true, "boolean")
+  vim.validate("textobj_treesitter_detect", config.textobj_treesitter_detect, "boolean", true, "boolean")
   vim.validate("mappings", config.mappings, "table", true, "table")
   vim.validate("cms_confs", config.cms_confs, { "table", "boolean" }, true, "table")
   vim.validate("log_level", config.log_level, "number", true, "vim.log.levels")
