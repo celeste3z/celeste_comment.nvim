@@ -10,12 +10,7 @@ local H = {}
 ---@alias Celeste.Comment.Range4 [integer, integer, integer, integer] 0-indexed
 
 ---@enum Celeste.Comment.CommentType
-M.CMT = {
-  --- Line comment type
-  kLine = 1,
-  --- Block comment type
-  kBlock = 2,
-}
+M.CMT = { kLine = 1, kBlock = 2 }
 
 ---@enum Celeste.Comment.Opts.IgnoreEmptyLines
 ---
@@ -112,8 +107,8 @@ M.ACTION = {
 ---@field wrapped     boolean -- comment string was wrapped
 ---@field tlcs        string  -- vim.trim(lcs)
 ---@field trcs        string  -- vim.trim(rcs)
----@field olcs        string  -- output: pad=true->tlcs+" ", else->lcs
----@field orcs        string  -- output: pad=true->" "+trcs, else->rcs
+---@field olcs        string  -- output: pad=true -> tlcs + " ", else -> lcs
+---@field orcs        string  -- output: pad=true -> " " + trcs, else -> rcs
 ---@field pairs       Celeste.Comment.CommentStringInfo.Pairs[]
 
 ---@class Celeste.Comment.LineCommentInfo.Line
@@ -129,7 +124,7 @@ M.ACTION = {
 ---@field min_visible_col? integer aligned target visible column (for padding calculation)
 ---@field commented?       boolean commented or not
 ---@field all_blank?       boolean blank line
----@field will_blank?      boolean not blank, but will be blank after remove lcs and rcs, current only available with ignore_empty_lines = kMixed
+---@field will_blank?      boolean not blank, but will be blank after remove lcs and rcs
 
 ---@class Celeste.Comment.LineCommentInfo
 ---@field lines         Celeste.Comment.LineCommentInfo.Line[]
@@ -320,6 +315,28 @@ local LOG_LEVEL2NAME = {
 }
 -- stylua: ignore end
 
+---@param buf integer
+---@param start integer 0-indexed
+---@param end_ integer 0-indexed end_exclusive
+---@param strict_indexing? boolean
+---@return string[]
+---@overload fun(buf:integer, line:integer, strict_indexing?:boolean):string
+function H.buf_lines(buf, start, end_, strict_indexing)
+  local end_type = type(end_)
+  if end_type == "boolean" then
+    strict_indexing = end_
+  elseif type(strict_indexing) ~= "boolean" then
+    strict_indexing = false
+  end
+  --- @diagnostic disable-next-line: return-type-mismatch
+  if end_type ~= "number" then return vim.api.nvim_buf_get_lines(buf, start, start + 1, strict_indexing)[1] or "" end
+  return vim.api.nvim_buf_get_lines(buf, start, end_, strict_indexing)
+end
+
+---@param buf? integer default 0
+---@return integer lines count, 0 for unloaded buffer
+function H.buf_lines_count(buf) return vim.api.nvim_buf_line_count(buf or 0) end
+
 ---@param pos vim.Pos
 ---@return integer
 function H.pos_to_offset(pos) return vim.api.nvim_buf_get_offset(pos.buf, pos.row) + pos.col end
@@ -340,7 +357,7 @@ end
 ---@param pos vim.Pos
 ---@return vim.Pos
 function H.pos_to_start_column(pos)
-  local line = vim.fn.getline(pos.row + 1) --[[@as string]]
+  local line = H.buf_lines(pos.buf, pos.row, false)
   local start_col = line:match("^%s*()") --[[@as integer]]
   if start_col then return H.make_pos(pos.buf, pos.row, start_col - 1) end
   return H.pos_clone(pos)
@@ -1319,8 +1336,8 @@ H.GUESS_INDENTATION_MAX_LINES = 1000
 ---@overload fun(buf: integer, default_tab_size: integer, default_insert_spaces: boolean): Celeste.Comment.GuessIndent.Res
 function H.guess_indentation(lines, default_tab_size, default_insert_spaces)
   if type(lines) == "number" then
-    local n = math.min(vim.api.nvim_buf_line_count(lines --[[@as integer]]), H.GUESS_INDENTATION_MAX_LINES)
-    lines = vim.api.nvim_buf_get_lines(lines --[[@as integer]], 0, n, false)
+    local n = math.min(H.buf_lines_count(lines --[[@as integer]]), H.GUESS_INDENTATION_MAX_LINES)
+    lines = H.buf_lines(lines --[[@as integer]], 0, n, false)
   end
   local lcnt = math.min(#lines, H.GUESS_INDENTATION_MAX_LINES)
 
@@ -2047,7 +2064,7 @@ function H.commit_edits(buf, range, lines, edits, use_set_text)
   H.sort_edits(edits)
 
   if use_set_text or edits.any_multi then
-    local max = vim.api.nvim_buf_line_count(buf)
+    local max = H.buf_lines_count(buf)
     for i = #edits, 1, -1 do
       local e = edits[i]
       if e.range[2] == -1 then
@@ -2088,7 +2105,7 @@ function H.get_selection_range(buf, visual)
         ec = ec - 1
       elseif er > 0 then
         er = er - 1
-        local line = vim.api.nvim_buf_get_lines(buf, er, er + 1, false)[1] or ""
+        local line = H.buf_lines(buf, er)
         ec = #line > 0 and #line - 1 or 0
       end
     end
@@ -2345,36 +2362,48 @@ end
 ---@param inner? boolean
 ---@return Celeste.Comment.Range4?
 function H.compute_linecomment_range(cfg, cursor, csi, inner)
-  local row = cursor.row + 1
-  local line = vim.fn.getline(row) --[[@as string]]
+  ---@param line integer 0-indexed
+  ---@return integer 0-indexed
+  local function prevnonblank(line) return vim.fn.prevnonblank(line + 1) - 1 end
+
+  ---@param line integer 0-indexed
+  ---@return integer 0-indexed
+  local function nextnonblank(line) return vim.fn.nextnonblank(line + 1) - 1 end
+
+  local buf, row, col = cursor.buf, cursor.row, cursor.col
+  local line = H.buf_lines(buf, row, false)
 
   if inner then
-    local res = H.match_line_comment(line, cursor.row, csi, { with_inner = true })
+    local res = H.match_line_comment(line, row, csi, { with_inner = true })
     if res.matched and res.inner then return { res.inner[1], res.inner[2], res.inner[1], res.inner[3] } end
     return
   end
 
-  local nlines = vim.api.nvim_buf_line_count(cursor.buf)
+  local nlines = H.buf_lines_count(buf)
 
+  ---@param lnum integer 0-indexed
+  ---@return boolean
   local function is_comment(lnum)
-    local l = vim.fn.getline(lnum) --[[@as string]]
+    local l = H.buf_lines(buf, lnum, false)
     if l:match("^%s*$") then return false end
-    return H.match_line_comment(l, lnum - 1, csi, { check_only = true }).matched
+    return H.match_line_comment(l, lnum, csi, { check_only = true }).matched
   end
 
   if line:match("^%s*$") then
     if cfg.ignore_empty_lines ~= M.IGN_EMT.kAlways then return end
-    local prev = vim.fn.prevnonblank(row)
-    local next = vim.fn.nextnonblank(row)
-    if prev < 1 or next > nlines then return end
+    local prev = prevnonblank(row)
+    local next = nextnonblank(row)
+    if prev < 0 or next >= nlines then return end
     if not is_comment(prev) or not is_comment(next) then return end
   elseif not is_comment(row) then
     return
   end
 
+  ---@param lnum integer 0-indexed
+  ---@return boolean
   local function check(lnum)
-    if lnum < 1 or lnum > nlines then return false end
-    local l = vim.fn.getline(lnum) --[[@as string]]
+    if lnum < 0 or lnum >= nlines then return false end
+    local l = H.buf_lines(buf, lnum, false)
     if cfg.ignore_empty_lines == M.IGN_EMT.kAlways and l:match("^%s*$") then return true end
     return is_comment(lnum)
   end
@@ -2388,11 +2417,11 @@ function H.compute_linecomment_range(cfg, cursor, csi, inner)
   end
 
   if cfg.ignore_empty_lines == M.IGN_EMT.kAlways then
-    lnum_from = vim.fn.nextnonblank(lnum_from)
-    lnum_to = vim.fn.prevnonblank(lnum_to)
+    lnum_from = nextnonblank(lnum_from)
+    lnum_to = prevnonblank(lnum_to)
   end
 
-  return { lnum_from - 1, cursor.col, lnum_to - 1, cursor.col }
+  return { lnum_from, col, lnum_to, col }
 end
 
 ---@param cursor vim.Pos
@@ -2400,7 +2429,7 @@ end
 ---@param inner? boolean
 ---@return Celeste.Comment.Range4?
 function H.compute_eol_linecomment_range(cursor, all_csi, inner)
-  local line = vim.api.nvim_buf_get_lines(cursor.buf, cursor.row, cursor.row + 1, false)[1] or ""
+  local line = H.buf_lines(cursor.buf, cursor.row)
   local res = H.match_eol_line_comment(line, cursor.row, all_csi)
   if not res.matched then return end
 
@@ -2603,7 +2632,7 @@ end
 function H.textobject_block_match_ts(buf, csi, ts_range, inner)
   if not ts_range then return end
 
-  local lines = vim.api.nvim_buf_get_lines(buf, ts_range[1], ts_range[3] + 1, false)
+  local lines = H.buf_lines(buf, ts_range[1], ts_range[3] + 1, false)
   local first, last = lines[1], lines[#lines]
   if not first or not last then return end
 
@@ -2635,11 +2664,11 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range, inner)
 
   if ts_range and #ts_range == 4 then return H.textobject_block_match_ts(cursor.buf, csi, ts_range, inner) end
 
-  local nlines = vim.api.nvim_buf_line_count(cursor.buf)
+  local nlines = H.buf_lines_count(cursor.buf)
   local from_limit = math.max(1, cursor.row + 1 - cfg.block_textobj_nlines)
   local to_limit = math.min(nlines, cursor.row + 1 + cfg.block_textobj_nlines)
 
-  local lines = vim.api.nvim_buf_get_lines(cursor.buf, from_limit - 1, to_limit, false)
+  local lines = H.buf_lines(cursor.buf, from_limit - 1, to_limit, false)
 
   local pairs = H.textobject_block_match_pairs(lines, from_limit, csi, cursor)
   if #pairs == 0 then return end
@@ -2757,7 +2786,7 @@ function H.uncomment_auto()
 
   if ctype == M.CMT.kLine then range = { range[1], 0, range[3], 0 } end
 
-  local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
+  local lines = H.buf_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
   H.make_actionx(cfg, ctype, M.ACTION.kToggle, lines, csi, range, motion, cursor, { state_track = state_track })
@@ -2851,7 +2880,7 @@ function H.make_action_range(cursor, range, ctype, action, motion, opts)
 
   local cfg = H.buf_config(opts.cfg)
 
-  local lines = vim.api.nvim_buf_get_lines(cursor.buf, range[1], range[3] + 1, false)
+  local lines = H.buf_lines(cursor.buf, range[1], range[3] + 1, false)
   if #lines == 0 then return end
 
   local cms_ref_pos = H.pos_to_start_column(cursor)
