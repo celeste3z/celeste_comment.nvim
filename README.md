@@ -46,6 +46,7 @@
 - **Invert/Force add/Force remove comment** -- per-line comment action control
 - **Insert mode line comment toggle** -- with cursor sticky support
 - **Insert comment above / below / at end of line**
+- **Paste and comment** -- with count, dot-repeat and multicursor support
 - **Case insensitive comment detection** -- e.g. `@REM` vs `@rem` vs `@rEm`
 - **Multi-variant comment string detection** — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
 
@@ -69,6 +70,7 @@
 | **Invert per line**      | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
 | **Force add comment**    | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
 | **Force remove comment** | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
+| **Paste and comment**    | Yes                                                                                                                         | No                                                                    | No                                                            | No                                                                  | No                                                        |
 
 ## Requirements
 
@@ -210,6 +212,14 @@ lua require("celeste_comment").setup()
     line_force_add       = "",
     -- Force remove line comment (n, x), example `gCU`
     line_force_remove    = "",
+
+    -- Paste before/after and force add line/block comment (n)
+    -- Line paste is always linewise, and block paste follows the register type
+    -- e.g. `gcP` / `gcp` / `gbP` / `gbp`
+    line_paste_before    = "",
+    line_paste_after     = "",
+    block_paste_before   = "",
+    block_paste_after    = "",
   },
 
   hooks = {
@@ -335,6 +345,10 @@ See `:help celeste_comment-configuration` for details.
 
 - **Visual block mode (`<C-v>`)** — Comments are applied per-line,
   not per-column. For column-wise commenting, use multicursor.
+
+- **Paste with a blockwise register** — `block_paste_before` / `block_paste_after`
+  treat a `<C-v>` (blockwise) register as linewise and paste it line by line;
+  rectangle-wise paste is not supported.
 
 ## Acknowledgments
 

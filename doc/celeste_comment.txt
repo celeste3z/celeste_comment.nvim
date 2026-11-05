@@ -1,5 +1,5 @@
 *celeste_comment.txt*                 MIT License Copyright (c) 2026 celeste3z
-                            For NVIM v0.12.0    Last change: 2026 September 27
+                             For NVIM v0.12.0    Last change: 2026 November 10
 
 ==============================================================================
 Table of Contents                          *celeste_comment-table-of-contents*
@@ -18,8 +18,8 @@ Table of Contents                          *celeste_comment-table-of-contents*
 INTRODUCTION                                    *celeste_comment-introduction*
 
 celeste_comment.nvim — a batteries-included commenting plugin for Neovim with
-line/block comment toggle, textobjects, force add/remove, real cursor tracking,
-Tree-sitter context-aware comment resolution, and more.
+line/block comment toggle, paste and comment, textobjects, force add/remove,
+real cursor tracking, Tree-sitter context-aware comment resolution, and more.
 
 The plugin uses a `TextEdits` edit-model where every operation is defined as
 range+text pairs, making it more hackable and composable than the direct buffer
@@ -45,6 +45,7 @@ FEATURES                                            *celeste_comment-features*
 - Invert/Force add/Force remove comment – per-line comment action control
 - Insert mode line comment toggle – with cursor sticky support
 - Insert comment above / below / at end of line
+- Paste and comment – paste a register and comment it, with count, dot-repeat and multicursor support
 - Case insensitive comment detection – e.g. `@REM` vs `@rem` vs `@rEm`
 - Multi-variant comment string detection — recognizes all comment prefix variants when uncommenting (e.g. Rust `//`, `///`, `//!`)
 
@@ -53,7 +54,7 @@ COMPARISON                                        *celeste_comment-comparison*
 
   -------------------------------------------------------------------------------------------------
   Feature         celeste_comment.nvim   Neovim      Comment.nvim   mini.comment   vim-commentary
-                                         built-in
+                                         built-in                                  
   --------------- ---------------------- ----------- -------------- -------------- ----------------
   Edit model      TextEdits              set_lines   set_lines      set_lines      setline()
 
@@ -62,31 +63,34 @@ COMPARISON                                        *celeste_comment-comparison*
   Keep selection  yes                    no          no             no             no
 
   Multicursor     More complete          limited     limited        limited        limited
-  support
+  support                                                                          
 
   Line comment    yes                    yes         yes            yes            yes
 
   Block comment   yes                    no          yes            no             no
+
+  Paste and       yes — regtype aware    no          no             no             no
+  comment                                                                          
 
   Dot-repeat      yes                    yes         yes            yes            yes
 
   Count           yes                    yes         yes            yes            yes
 
   Force add       yes                    no          no             no             no
-  comment
+  comment                                                                          
 
   Force remove    yes                    no          no             no             no
-  comment
+  comment                                                                          
 
   Indent          VSCode-style           Simple      Standard       Simple         Minimal
-  algorithm
+  algorithm                                                                        
 
   Invert per line yes                    no          no             no             no
 
   Line textobject yes                    yes         no             yes            yes
 
   Block           yes                    no          no             no             no
-  textobject
+  textobject                                                                       
 
   Textobject auto yes                    no          no             no             no
 
@@ -140,7 +144,7 @@ DEFAULT CONFIG ~
       ignore_empty_lines     = "always", -- How to handle empty lines
       fallback_to_block      = "if_line_cms_wrapped", -- Fallback line→block comment
       log_level              = vim.log.levels.OFF, -- Log level (nvim-0.13+)
-
+    
       mappings = {
         line_toggle          = "gc",
         line_toggle_cur      = "gcc",
@@ -159,8 +163,12 @@ DEFAULT CONFIG ~
         line_invert          = "",
         line_force_add       = "",
         line_force_remove    = "",
+        line_paste_before    = "",
+        line_paste_after     = "",
+        block_paste_before   = "",
+        block_paste_after    = "",
       },
-
+    
       hooks = {
         pre_commit_edits     = nil,
         cms_conf_resolver    = nil,
@@ -434,7 +442,61 @@ Set a mapping to `""` to disable it. Mappings cannot be overridden per buffer
   line_force_add          n,x    —         Force add line comment
 
   line_force_remove       n,x    —         Force remove line comment
+
+  line_paste_before       n      —         Paste before + line comment
+
+  line_paste_after        n      —         Paste after + line comment
+
+  block_paste_before      n      —         Paste before + block comment
+
+  block_paste_after       n      —         Paste after + block comment
   --------------------------------------------------------------------------
+
+PASTE AND COMMENT ~
+
+Four opt-in mappings paste a register and then force-add a comment to the
+pasted text. They support `count` (e.g. `2gcp`), dot-repeat, and native
+multicursor (nvim-0.13+). After the operation, the `[` and `]` marks cover the
+whole commented region.
+
+>lua
+    require("celeste_comment").setup({
+      mappings = {
+        line_paste_before = "gcP",
+        line_paste_after = "gcp",
+        block_paste_before = "gbP",
+        block_paste_after = "gbp",
+      },
+    })
+<
+
+Register resolution mirrors `:put`: an explicit register (`"agcp`) wins,
+otherwise the clipboard register selected by `'clipboard'` (when a clipboard
+provider is available), otherwise the unnamed register.
+
+  -------------------------------------------------------------------------
+  Mapping                     Comment   Register handling
+                              type      
+  --------------------------- --------- -----------------------------------
+  line_paste_before /         line      Always pasted linewise, even for a
+  line_paste_after                      charwise register
+
+  block_paste_before /        block     v → charwise; V and blockwise
+  block_paste_after                     (<C-v>) → linewise
+  -------------------------------------------------------------------------
+Linewise pastes are reindented like Vim’s `]p`.
+
+For example, with `commentstring = "// %s"` and register `"a` containing
+`hello`, `gcp` on `foo` gives:
+
+>text
+    foo
+    // hello
+<
+
+With `block_paste_after`, a charwise register wraps only the pasted text, while
+a linewise or blockwise register comments every pasted line.
+
 
 HOOKS ~
 
@@ -760,6 +822,9 @@ LIMITATIONS                                      *celeste_comment-limitations*
 - Visual block mode (`<C-v>`) — Comments are applied per-line, not per-column.
     For column-wise commenting, use a multicursor plugin like multicursor.nvim
 <https://github.com/jake-stewart/multicursor.nvim>.
+- Paste with a blockwise register — `block_paste_before` / `block_paste_after`
+    treat a `<C-v>` (blockwise) register as linewise and paste it line by line;
+    rectangle-wise paste is not supported.
 
 
 ACKNOWLEDGMENTS                              *celeste_comment-acknowledgments*
