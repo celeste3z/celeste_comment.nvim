@@ -191,6 +191,8 @@ local T = new_set({
               line_invert = "gcI",
               line_force_add = "gC",
               line_force_remove = "gU",
+              line_paste_below = "gcp",
+              line_paste_above = "gcP",
             },
             hooks = nil,
           })
@@ -205,17 +207,17 @@ local H = require("celeste_comment").H
 local M = require("celeste_comment")
 
 local ccp = function(pos, edits, lines, range, csi)
-  return H.compute_cursor_pos(pos, {
+  return H.compute_pos(pos, {
     edits = edits,
     lines = lines,
     range = range,
     csi = csi,
-  })
+  }, { strategy = "cursor" })
 end
 
 local ccs = function(state, edits, lines, range, csi, ctype, motion)
-  return H.compute_cursor_state({
-    state_track = state,
+  return H.compute_state({
+    __ = { state_track = state },
     cfg = { keep_cursor = true },
     edits = edits,
     lines = lines,
@@ -532,7 +534,7 @@ T["base"]["match_line_comment"] = function()
   eq(H.match_line_comment("//abc", 0, csi_nopad, { with_inner = true }).inner, { 0, 2, 4 })
 end
 
-T["base"]["compute_cursor_pos"] = function()
+T["base"]["compute_pos"] = function()
   local p = make_pos
   local pos = p(0, 0, 2)
 
@@ -768,7 +770,7 @@ T["base"]["compute_cursor_pos"] = function()
   )
 end
 
-T["base"]["compute_cursor_state"] = function()
+T["base"]["compute_state"] = function()
   local p = make_pos
   local lines_d = { "x", "x", "x", "x", "x" }
   local range_d = { 0 }
@@ -4652,6 +4654,19 @@ T["keep_selection"]["works with multibyte marker and selection=exclusive"] = fun
   eq(get_lines(), { "    tail" })
 end
 
+T["keep_selection"]["expand_block includes multibyte markers"] = function()
+  child.o.selection = "exclusive"
+  child.bo.filetype = "unknown"
+  child.b.celeste_comment_block_commentstring = "※%s※"
+  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
+  set_lines({ "a你b" })
+  selection(0, 1, 0, 4)
+  feed("gb")
+  eq(get_lines(), { "a※ 你 ※b" })
+  eq(get_cursor(), { 0, 12 })
+  eq(get_selection(), { { 0, 1, 0, 12 }, "v" })
+end
+
 T["keep_selection"]["expand_block includes block comment markers"] = function()
   child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
 
@@ -8232,6 +8247,193 @@ T["forced_motion"]["gU V forces linewise"] = function()
   feed("u")
 end
 
+-- paste comment tests ─────────────────────────────────────────────────────────
+
+T["paste"] = new_set({
+  hooks = {
+    pre_case = function()
+      child.bo.tabstop = 2
+      child.bo.shiftwidth = 0
+      child.bo.expandtab = true
+      child.bo.commentstring = "// %s"
+    end,
+  },
+})
+
+T["paste"]["line below and above"] = function()
+  child.fn.setreg("a", { "function f()", "  return 1", "end" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed('"agcp')
+  eq(get_lines(), { "  aaa", "  // function f()", "  //   return 1", "  // end", "bbb" })
+  eq(get_cursor(), { 3, 2 })
+
+  child.fn.setreg("a", { "function f()", "  return 1", "end" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(1, 2)
+  feed('"agcP')
+  eq(get_lines(), { "  aaa", "// function f()", "//   return 1", "// end", "bbb" })
+  eq(get_cursor(), { 3, 0 })
+end
+
+T["paste"]["default_reg"] = function()
+  child.lua_func(function()
+    local cmt = require("celeste_comment")
+    vim.keymap.set(
+      "n",
+      "gcq",
+      cmt.H.make_operator(cmt.CMT.kLine, { motion = "0", action = cmt.ACTION.kForceAdd, paste = { default_reg = "a" } }),
+      { expr = true }
+    )
+  end)
+  child.fn.setreg("a", { "X" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed("gcq")
+  eq(get_lines(), { "  aaa", "  // X", "bbb" })
+end
+
+T["paste"]["count"] = function()
+  child.fn.setreg("a", { "X" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed('2"agcp')
+  eq(get_lines(), { "  aaa", "  // X", "  // X", "bbb" })
+  eq(get_cursor(), { 2, 2 })
+
+  child.fn.setreg("a", { "X" }, "V")
+  set_lines({ "a", "b" })
+  set_cursor(1, 0)
+  feed('3"agcp')
+  eq(get_lines(), { "a", "b", "// X", "// X", "// X" })
+  eq(get_cursor(), { 4, 0 })
+end
+
+T["paste"]["dot repeat"] = function()
+  child.fn.setreg("a", { "X" }, "V")
+  set_lines({ "z" })
+  set_cursor(0, 0)
+  feed('"agcp')
+  eq(get_lines(), { "z", "// X" })
+  set_cursor(1, 0)
+  feed(".")
+  eq(get_lines(), { "z", "// X", "// X" })
+
+  child.fn.setreg("a", { "X" }, "V")
+  set_lines({ "z" })
+  set_cursor(0, 0)
+  feed('3"agcp')
+  eq(get_lines(), { "z", "// X", "// X", "// X" })
+  feed(".")
+  eq(#get_lines(), 7)
+  feed("5.")
+  eq(#get_lines(), 12)
+end
+
+T["paste"]["empty register is no-op"] = function()
+  child.fn.setreg("a", {}, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed('"agcp')
+  eq(get_lines(), { "  aaa", "bbb" })
+end
+
+T["paste"]["change marks"] = function()
+  child.fn.setreg("b", { "1111", "22222" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed('"b2gcp')
+  eq(get_lines(), { "  aaa", "  // 1111", "  // 22222", "  // 1111", "  // 22222", "bbb" })
+  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
+  eq(child.api.nvim_buf_get_mark(0, "]"), { 5, 9 })
+end
+
+T["paste"]["change marks with selection=exclusive"] = function()
+  child.o.selection = "exclusive"
+  child.fn.setreg("b", { "1111", "22222" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed('"b2gcp')
+  eq(get_lines(), { "  aaa", "  // 1111", "  // 22222", "  // 1111", "  // 22222", "bbb" })
+  -- Same as native `:iput`: `]` stays on the last inserted character.
+  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
+  eq(child.api.nvim_buf_get_mark(0, "]"), { 5, 9 })
+end
+
+T["paste"]["change marks with multibyte last line"] = function()
+  child.fn.setreg("a", { "你" }, "V")
+  set_lines({ "aaa", "bbb" })
+  set_cursor(0, 0)
+  feed('"agcp')
+  eq(get_lines(), { "aaa", "// 你", "bbb" })
+  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
+  eq(child.api.nvim_buf_get_mark(0, "]"), { 2, 5 })
+end
+
+T["paste"]["blank lines keep empty"] = function()
+  child.fn.setreg("a", { "  s1", "", "  s2" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(1, 0)
+  feed('"agcP')
+  eq(get_lines(), { "  aaa", "// s1", "// ", "// s2", "bbb" })
+end
+
+T["paste"]["relative indentation"] = function()
+  child.fn.setreg("a", { "    a", "      b", "   c" }, "V")
+  set_lines({ "  anchor", "bbb" })
+  set_cursor(0, 2)
+  feed('"agcp')
+  eq(get_lines(), { "  anchor", "//   a", "//     b", "//  c", "bbb" })
+end
+
+T["paste"]["tab indentation"] = function()
+  child.bo.tabstop = 4
+  child.bo.shiftwidth = 0
+  child.bo.expandtab = false
+  child.fn.setreg("a", { "\ts1", "\t\ts2" }, "V")
+  set_lines({ "\taaa", "bbb" })
+  set_cursor(0, 1)
+  feed('"agcp')
+  eq(get_lines(), { "\taaa", "\t// s1", "\t// \ts2", "bbb" })
+end
+
+T["paste"]["indent = false"] = function()
+  child.lua_func(function()
+    local cmt = require("celeste_comment")
+    vim.keymap.set(
+      "n",
+      "gcq",
+      cmt.H.make_operator(cmt.CMT.kLine, { motion = "0", action = cmt.ACTION.kForceAdd, paste = { indent = false } }),
+      { expr = true }
+    )
+  end)
+  child.fn.setreg("a", { "  X" }, "V")
+  set_lines({ "    aaa", "bbb" })
+  set_cursor(0, 4)
+  feed('"agcq')
+  eq(get_lines(), { "    aaa", "  // X", "bbb" })
+end
+
+T["paste"]["keep_cursor = false"] = function()
+  child.b.celeste_comment_config = { keep_cursor = false }
+  child.fn.setreg("a", { "X" }, "V")
+  set_lines({ "  aaa", "bbb" })
+  set_cursor(0, 2)
+  feed('"agcp')
+  eq(get_lines(), { "  aaa", "  // X", "bbb" })
+  eq(get_cursor(), { 1, 2 })
+end
+
+T["paste"]["undo"] = function()
+  child.fn.setreg("a", { "X", "Y" }, "V")
+  set_lines({ "a", "b" })
+  set_cursor(0, 0)
+  feed('"agcp')
+  eq(get_lines(), { "a", "// X", "// Y", "b" })
+  feed("u")
+  eq(get_lines(), { "a", "b" })
+end
+
 -- multiple cursor tests ──────────────────────────────────────────────────────
 
 if vim.fn.has("nvim-0.13") == 1 then
@@ -8685,6 +8887,47 @@ if vim.fn.has("nvim-0.13") == 1 then
       '  // pr@intf("ccc");',
       "```",
     })
+    clear_cursors()
+
+    -- paste and comment
+    child.fn.setreg("a", { "X", "Y" }, "V")
+    set_lines({ "aaaaa", "b", "c", "d", "e", "f", "g" })
+    set_cursor({ { 0, 3 }, { 3, 2 }, { 6, 4 } })
+    feed('"agcp')
+    eq(get_lines(), { "aaaaa", "<!-- X", "Y -->", "b", "c", "d", "<!-- X", "Y -->", "e", "f", "g", "<!-- X", "Y -->" })
+    eq(get_cursor(), { { 2, 0 }, { 7, 0 }, { 12, 0 } })
+    feed(".")
+    eq(get_lines(), {
+      "aaaaa",
+      "<!-- X",
+      "Y -->",
+      "<!-- X",
+      "Y -->",
+      "b",
+      "c",
+      "d",
+      "<!-- X",
+      "Y -->",
+      "<!-- X",
+      "Y -->",
+      "e",
+      "f",
+      "g",
+      "<!-- X",
+      "Y -->",
+      "<!-- X",
+      "Y -->",
+    })
+    clear_cursors()
+
+    -- paste uses cursor-local register
+    child.lua_func(function() vim.bo.filetype = "c" end)
+    set_lines({ "foo", "bar", "baz" })
+    set_cursor({ { 0, 0 }, { 1, 0 }, { 2, 0 } })
+    feed("yiw")
+    feed("gcp")
+    eq(get_lines(), { "foo", "// foo", "bar", "// bar", "baz", "// baz" })
+    clear_cursors()
   end
 
   T["multicursor"]["keep_selection works"] = function()

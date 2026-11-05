@@ -160,10 +160,9 @@ M.ACTION = {
 ---@field motion          Celeste.Comment.Motion
 ---@field csi             Celeste.Comment.CommentStringInfo
 ---@field lines           string[]
----@field state_track?    Celeste.Comment.StateTrack
----@field invoke_ctx?     Celeste.Comment.InvokeCtx
 ---@field comment_info?   Celeste.Comment.LineCommentInfo|Celeste.Comment.BlockCommentInfo
 ---@field o_use_set_text? boolean o: means output from user
+---@field __              table<string, any>
 
 ---@class Celeste.Comment.Hooks.PostCommitEdits.Ctx : Celeste.Comment.Hooks.PreCommitEdits.Ctx
 
@@ -201,6 +200,8 @@ M.ACTION = {
 ---@field line_invert?            string|string[] mode 'nx', invert comment per line, default '', e.g. 'gcI'
 ---@field line_force_add?         string|string[] mode 'nx', force add line comment, default '', e.g. 'gCC'
 ---@field line_force_remove?      string|string[] mode 'nx', force remove line comment, default '', e.g. 'gCU'
+---@field line_paste_above?       string|string[] mode 'n', paste above and force add line comment, default '', e.g. 'gcP'
+---@field line_paste_below?       string|string[] mode 'n', paste below and force add line comment, default '', e.g. 'gcp'
 
 ---@class Celeste.Comment.Opts
 ---@field keep_cursor                boolean
@@ -274,6 +275,8 @@ H.config = {
     line_invert             = "",
     line_force_add          = "",
     line_force_remove       = "",
+    line_paste_below        = "",
+    line_paste_above        = "",
 
     block_toggle            = "gb",
     block_toggle_cur        = "gbc",
@@ -2085,11 +2088,59 @@ function H.commit_edits(buf, range, lines, edits, use_set_text)
   end
 end
 
+---@param mode string
+---@return Celeste.Comment.Motion
+function H.mode_to_motion(mode)
+  mode = mode:sub(1, 1)
+  if mode == "\22" then
+    return "block"
+  elseif mode == "v" then
+    return "char"
+  else
+    return "line"
+  end
+end
+
+---@param buf integer
+---@param row integer 0-indexed
+---@param col integer 0-indexed
+---@return integer row
+---@return integer col
+function H.to_inclusive_pos(buf, row, col)
+  if vim.o.selection ~= "exclusive" then return row, col end
+  if col > 0 then return row, col - 1 end
+  if row > 0 then
+    local line = H.buf_lines(buf, row - 1, false)
+    return row - 1, math.max(#line - 1, 0)
+  end
+  return row, col
+end
+
+---@param range Celeste.Comment.Range4
+---@return boolean
+function H.range_reversed(range) return range[1] > range[3] or (range[1] == range[3] and range[2] > range[4]) end
+
+---@param range Celeste.Comment.Range4 inclusive
+---@param check_exclusive? boolean whether to honor 'selection=exclusive'
+---@return [integer, integer] 1-0 indexed, begin mark
+---@return [integer, integer] 1-0 indexed, end mark
+function H.range_to_mark(range, check_exclusive)
+  local sr, sc, er, ec = range[1], range[2], range[3], range[4]
+  if check_exclusive and vim.o.selection == "exclusive" then
+    if H.range_reversed(range) then
+      sc = sc + 1
+    else
+      ec = ec + 1
+    end
+  end
+  return { sr + 1, sc }, { er + 1, ec }
+end
+
 ---@param buf integer
 ---@param visual? boolean
 ---@return Celeste.Comment.Range4?
 ---@return Celeste.Comment.Motion?
-function H.get_selection_range(buf, visual)
+function H.range_from_mark(buf, visual)
   if visual then
     local sr, sc = unpack(vim.api.nvim_buf_get_mark(buf, "<"))
     local er, ec = unpack(vim.api.nvim_buf_get_mark(buf, ">"))
@@ -2101,29 +2152,12 @@ function H.get_selection_range(buf, visual)
     end
 
     if vim.o.selection == "exclusive" then
-      if ec > 0 then
-        ec = ec - 1
-      elseif er > 0 then
-        er = er - 1
-        local line = H.buf_lines(buf, er)
-        ec = #line > 0 and #line - 1 or 0
-      end
+      er, ec = H.to_inclusive_pos(buf, er, ec)
     end
 
     if er < sr or (er == sr and ec < sc) then return end
 
-    local mode = vim.fn.visualmode()
-    local motion ---@type Celeste.Comment.Motion
-    if mode == "v" then
-      motion = "char"
-    elseif mode == "V" then
-      motion = "line"
-    else
-      assert(mode == "\22", "unexpected visualmode")
-      motion = "block"
-    end
-
-    return { sr, sc, er, ec }, motion
+    return { sr, sc, er, ec }, H.mode_to_motion(vim.fn.visualmode())
   end
 
   local sr, sc = unpack(vim.api.nvim_buf_get_mark(buf, "["))
@@ -2131,6 +2165,45 @@ function H.get_selection_range(buf, visual)
   sr, er = sr - 1, er - 1
   if er < sr or (er == sr and ec < sc) then return end
   return { sr, sc, er, ec }
+end
+
+---@class Celeste.Comment.CommitRangeMarksOption
+---@field selection_mark? boolean default true, true for mark `<` and '>', otherwise `[` and ']'
+---@field mode? "V"|"v"|string, default 'v', only take effect when `selection_mark` is true
+---@field keep_visual? boolean default true, whether to restore visual selection, only take effect when `selection_mark` is true
+
+---@param range? Celeste.Comment.Range4 must be inclusive range, zero indexed
+---@param opts? Celeste.Comment.CommitRangeMarksOption
+function H.commit_range_marks(range, opts)
+  if not range then return end
+  opts = opts or {}
+  local mode = opts.mode or "v"
+  local sel_mark = opts.selection_mark ~= false
+  local keep_visual = (sel_mark and opts.keep_visual ~= false)
+  local mark_s = sel_mark and "<" or "["
+  local mark_e = sel_mark and ">" or "]"
+
+  vim._with({ noautocmd = true, keepmarks = true }, function()
+    local view = vim.fn.winsaveview()
+
+    if sel_mark then
+      local visual = H.current_visual()
+      if visual then
+        vim.api.nvim_cmd({ cmd = "normal", args = { visual ~= mode and (mode .. "\27") or "\27" }, bang = true }, {})
+      elseif vim.fn.visualmode() ~= mode then
+        vim.api.nvim_cmd({ cmd = "normal", args = { mode .. "\27" }, bang = true }, {})
+      end
+    end
+
+    -- Only `<`/`>` follow 'selection'; `[`/`]` keep native `:put` semantics.
+    local pos_s, pos_e = H.range_to_mark(range, sel_mark)
+    vim.api.nvim_buf_set_mark(0, mark_s, pos_s[1], pos_s[2], {})
+    vim.api.nvim_buf_set_mark(0, mark_e, pos_e[1], pos_e[2], {})
+
+    if keep_visual then vim.api.nvim_cmd({ cmd = "normal", args = { "gv" }, bang = true }, {}) end
+
+    vim.fn.winrestview({ leftcol = view.leftcol, topline = view.topline })
+  end)
 end
 
 ---@return Celeste.Comment.StateTrack
@@ -2164,77 +2237,102 @@ function H.state_track_to_string(v)
   return "nil"
 end
 
----@param state Celeste.Comment.StateTrack
----@param motion Celeste.Comment.Motion
----@param edits Celeste.Comment.TextEdits
----@param csi Celeste.Comment.CommentStringInfo
+---@param a vim.Pos?
+---@param b vim.Pos?
+---@param check_exclusive? boolean honor 'selection=exclusive'
 ---@return Celeste.Comment.Range4?
-function H.expand_block(state, motion, edits, csi)
-  if state.mode ~= "v" or motion ~= "char" then return end
-  if not state.cursor or not state.anchor then return end
+function H.range_from_pos(a, b, check_exclusive)
+  if not a or not b then return end
+  local range = { a.row, a.col, b.row, b.col } ---@type Celeste.Comment.Range4
+  if not check_exclusive or vim.o.selection ~= "exclusive" then return range end
+  if a == b then return range end
 
-  local lcs, rcs = edits[1], edits[2]
-  if not lcs or not rcs then return end
-  if lcs.text[1] ~= csi.olcs or rcs.text[1] ~= csi.orcs then return end
-
-  local shift = (lcs.range[1] == rcs.range[1]) and #lcs.text[1] or 0
-  local rcs_end = rcs.range[2] + shift + #rcs.text[1]
-  if vim.o.selection ~= "exclusive" then rcs_end = rcs_end - 1 end
-
-  if state.cursor < state.anchor then return { rcs.range[1], rcs_end, lcs.range[1], lcs.range[2] } end
-  return { lcs.range[1], lcs.range[2], rcs.range[1], rcs_end }
+  local i = H.range_reversed(range) and 1 or 3 ---@type integer
+  range[i], range[i + 1] = H.to_inclusive_pos(a.buf, assert(range[i]), assert(range[i + 1]))
+  return range
 end
 
----@param state Celeste.Comment.StateTrack
----@param ks integer
----@param ctype Celeste.Comment.CommentType
----@param motion Celeste.Comment.Motion
----@param edits Celeste.Comment.TextEdits
----@param csi Celeste.Comment.CommentStringInfo
----@return Celeste.Comment.Range4? range
----@return string? mode
-function H.keep_selection_expand(state, ks, ctype, motion, edits, csi)
-  -- not handle C-v mode, use multiple cursor is the right way
-  if state.mode ~= "v" and state.mode ~= "V" then return end
+---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
+---@return Celeste.Comment.Range4?
+function H.compute_edit_range(ctx)
+  local edits = ctx.edits
+  local buf = ctx.cursor and ctx.cursor.buf or 0
+  H.sort_edits(edits)
 
-  if not state.ncursor or not state.nanchor then return end
-
-  local mode = state.mode
-  local range = { state.nanchor.row, state.nanchor.col, state.ncursor.row, state.ncursor.col }
-
-  if ctype == M.CMT.kLine then
-    if bit.band(ks, M.KEEP_SEL_FLAG.kExpandLine) ~= 0 then return range, "V" end
-  elseif bit.band(ks, M.KEEP_SEL_FLAG.kExpandBlock) ~= 0 then
-    return H.expand_block(state, motion, edits, csi) or range, mode
+  -- linewise: first line start -> last line end
+  if ctx.ctype == M.CMT.kLine or ctx.motion == "line" then
+    local last = ctx.range[1] + #ctx.lines - 1
+    local p = H.compute_pos(H.make_pos(buf, last, #ctx.lines[#ctx.lines]), ctx, { right_affinity = true })
+    if not p then return end
+    return { ctx.range[1], 0, p.row, p.col - 1 }
   end
 
-  if bit.band(ks, M.KEEP_SEL_FLAG.kAdjust) ~= 0 then return range, mode end
+  -- charwise: first edit start -> last edit end
+  if #edits == 0 then return end
+  local first, last = edits[1], edits[#edits]
+  local ps = H.compute_pos(H.make_pos(buf, first.range[1], first.range[2]), ctx, { right_affinity = false })
+  local pe = H.compute_pos(H.make_pos(buf, last.range[1], last.range[2]), ctx, { right_affinity = true })
+  if not ps or not pe then return end
+  return { ps.row, ps.col, pe.row, pe.col - 1 }
 end
 
 ---@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
 function H.restore_state(ctx)
-  local cfg, state, invoke_ctx = ctx.cfg, ctx.state_track, ctx.invoke_ctx or {}
-  if not state then return end
-  if invoke_ctx.insmode then return end
+  local cfg = ctx.cfg
+  local internal = ctx.__
+  local edit_range = internal.edit_range
 
-  local keep_visual = (bit.band(cfg.keep_selection, M.KEEP_SEL_FLAG.kKeepVisual) ~= 0)
-  local range, mode = H.keep_selection_expand(state, cfg.keep_selection, ctx.ctype, ctx.motion, ctx.edits, ctx.csi)
-  if range then
-    H.select_range(range, { mode = mode, keep_visual = keep_visual })
+  if internal.update_changed_marks then H.commit_range_marks(edit_range, { selection_mark = false }) end
+
+  local state = internal.state_track
+  if not state then return end
+  if internal.insmode then return end
+
+  local ks = cfg.keep_selection
+  local keep_visual = (bit.band(ks, M.KEEP_SEL_FLAG.kKeepVisual) ~= 0)
+  local select_range = H.range_from_pos(state.nanchor, state.ncursor, true)
+  local target, mode
+
+  if select_range and (state.mode == "v" or state.mode == "V") then
+    if ctx.ctype == M.CMT.kBlock and bit.band(ks, M.KEEP_SEL_FLAG.kExpandBlock) ~= 0 then
+      if ctx.motion == "char" and edit_range then
+        target = edit_range
+        if H.range_reversed(select_range) then target = { target[3], target[4], target[1], target[2] } end
+      else
+        target = select_range
+      end
+      mode = state.mode
+    elseif ctx.ctype == M.CMT.kLine and bit.band(ks, M.KEEP_SEL_FLAG.kExpandLine) ~= 0 then
+      target, mode = select_range, "V"
+    elseif bit.band(ks, M.KEEP_SEL_FLAG.kAdjust) ~= 0 then
+      target, mode = select_range, state.mode
+    end
+  end
+
+  if target then
+    H.commit_range_marks(target, { mode = mode, keep_visual = keep_visual })
     if keep_visual then return end
   elseif keep_visual and state.mode then
-    vim.cmd.normal({ "gv", bang = true })
+    vim.api.nvim_cmd({ cmd = "normal", args = { "gv" }, bang = true }, {})
     return
   end
 
   if cfg.keep_cursor and state.ncursor then vim.api.nvim_win_set_cursor(0, H.pos_to_cursor(state.ncursor)) end
 end
 
+---@class Celeste.Comment.ComputePosOpts
+---@field strategy? "cursor"|"range" default "range"
+---@field right_affinity? boolean only for strategy = "range"
+
 ---@param pos? vim.Pos
 ---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
+---@param opts? Celeste.Comment.ComputePosOpts
 ---@return vim.Pos?
-function H.compute_cursor_pos(pos, ctx)
+function H.compute_pos(pos, ctx, opts)
   if not pos then return end
+  opts = opts or {}
+  local cursor = opts.strategy == "cursor"
+  local right = opts.right_affinity == true
   local edits, lines, range, csi, ctype, motion = ctx.edits, ctx.lines, ctx.range, ctx.csi, ctx.ctype, ctx.motion
   local orow, ocol = pos.row, pos.col
   local ncol, nrow = ocol, orow
@@ -2251,32 +2349,49 @@ function H.compute_cursor_pos(pos, ctx)
       end
 
       if e.range[1] == orow and e.range[2] ~= -1 then
-        if #e.text > 1 then
-          if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
-        elseif e.range[2] == e.range[4] then
-          if csi.orcs ~= "" and e.text[1] == csi.orcs and ocol >= e.range[2] then
-            if e.range[2] == eol_pos or ocol == e.range[2] then
-              -- no shift for RHS at EOL or at cursor (insmode)
-            else
+        if cursor then
+          if #e.text > 1 then
+            if ocol >= e.range[4] then ncol = ncol + #e.text[1] - (e.range[4] - e.range[2]) end
+          elseif e.range[2] == e.range[4] then
+            if csi.orcs ~= "" and e.text[1] == csi.orcs and ocol >= e.range[2] then
+              if e.range[2] == eol_pos or ocol == e.range[2] then
+                -- no shift for RHS at EOL or at cursor (insmode)
+              else
+                ncol = ncol + #e.text[1]
+              end
+            elseif ocol >= e.range[2] then
               ncol = ncol + #e.text[1]
             end
-          elseif ocol >= e.range[2] then
-            ncol = ncol + #e.text[1]
+          elseif ocol >= e.range[4] then
+            ncol = ncol + #e.text[1] - (e.range[4] - e.range[2])
+          elseif ocol > e.range[2] then
+            -- RHS marker (char-wise block): land at range[2]-1 (before the padding).
+            ncol = e.range[2]
+            if
+              ctype == M.CMT.kBlock
+              and motion == "char"
+              and e.range[1] <= range[3]
+              and range[3] <= e.range[3]
+              and e.range[2] <= range[4]
+              and range[4] < e.range[4]
+            then
+              ncol = math.max(0, e.range[2] - 1)
+            end
           end
-        elseif ocol >= e.range[4] then
-          ncol = ncol + #e.text[1] - (e.range[4] - e.range[2])
-        elseif ocol > e.range[2] then
-          -- RHS marker (char-wise block): land at range[2]-1 (before the padding).
-          ncol = e.range[2]
-          if
-            ctype == M.CMT.kBlock
-            and motion == "char"
-            and e.range[1] <= range[3]
-            and range[3] <= e.range[3]
-            and e.range[2] <= range[4]
-            and range[4] < e.range[4]
-          then
-            ncol = math.max(0, e.range[2] - 1)
+        else
+          local c1, c2 = e.range[2], e.range[4]
+          local add = e.text[1] and #e.text[1] or 0
+
+          if c1 == c2 then
+            if c1 < ocol or (right and c1 == ocol) then ncol = ncol + add end
+          elseif c1 < ocol and ocol < c2 then
+            ncol = right and (c1 + add) or c1
+          elseif ocol == c1 then
+            ncol = right and (c1 + add) or c1
+          elseif ocol == c2 then
+            ncol = c1 + add
+          elseif ocol > c2 then
+            ncol = ncol - (c2 - c1) + add
           end
         end
       end
@@ -2287,17 +2402,19 @@ function H.compute_cursor_pos(pos, ctx)
 end
 
 ---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
-function H.compute_cursor_state(ctx)
-  local state = ctx.state_track
+function H.compute_state(ctx)
+  ctx.__.edit_range = H.compute_edit_range(ctx)
+
+  local state = ctx.__.state_track
   if not state then return end
   if not ctx.cfg.keep_cursor and ctx.cfg.keep_selection == M.KEEP_SEL_FLAG.kNever then return end
-  state.ncursor = H.compute_cursor_pos(state.ncursor, ctx)
-  state.nanchor = H.compute_cursor_pos(state.nanchor, ctx)
+  state.ncursor = H.compute_pos(state.ncursor, ctx, { strategy = "cursor" })
+  state.nanchor = H.compute_pos(state.nanchor, ctx, { strategy = "cursor" })
 end
 
 ---@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
 function H.invoke_pre_commit_chainably(ctx)
-  local hooks = { ctx.cfg.hooks.pre_commit_edits or "", H.compute_cursor_state }
+  local hooks = { ctx.cfg.hooks.pre_commit_edits or "", H.compute_state }
   for _, hook in ipairs(hooks) do
     if vim.is_callable(hook) and hook(ctx) == true then break end
   end
@@ -2342,8 +2459,7 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
     motion = motion,
     edits = edits,
     comment_info = info,
-    state_track = opts.state_track,
-    invoke_ctx = opts,
+    __ = opts,
   }
 
   H.invoke_pre_commit_chainably(ctx)
@@ -2681,36 +2797,6 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range, inner)
   return H.block_inner_range(subrange, p.range, match_pairs, csi.ci)
 end
 
----@param range? Celeste.Comment.Range4
----@param opts? { mode?: 'V'|'v'|string, end_inclusive?: boolean, keep_visual?: boolean }
-function H.select_range(range, opts)
-  if not range then return end
-  opts = opts or {}
-  local mode = opts.mode or "v"
-  local keep_visual = opts.keep_visual ~= false
-
-  vim._with({ noautocmd = true, keepjumps = true }, function()
-    local visual = H.current_visual()
-    if visual then
-      vim.cmd.normal({ visual ~= mode and (mode .. "\27") or "\27", bang = true })
-    elseif vim.fn.visualmode() ~= mode then
-      vim.cmd.normal({ mode .. "\27", bang = true })
-    end
-
-    local view = vim.fn.winsaveview()
-
-    local endcol = range[4]
-    if opts.end_inclusive and vim.o.selection == "exclusive" then endcol = endcol + 1 end
-
-    vim.api.nvim_buf_set_mark(0, "<", range[1] + 1, range[2], {})
-    vim.api.nvim_buf_set_mark(0, ">", range[3] + 1, endcol, {})
-
-    if keep_visual then vim.cmd.normal({ "gv", bang = true }) end
-
-    vim.fn.winrestview({ leftcol = view.leftcol, topline = view.topline })
-  end)
-end
-
 ---@param cfg Celeste.Comment.Opts
 ---@param cursor vim.Pos
 ---@param inner? boolean
@@ -2768,7 +2854,7 @@ function H.textobject_auto(inner)
   local cursor = H.make_cursor(0)
   local range, ctype, _, linewise = H.compute_x_comment_range(cfg, cursor, inner, { match_eol = true })
   if not range or not ctype then return end
-  H.select_range(range, { mode = linewise and "V" or "v", end_inclusive = true })
+  H.commit_range_marks(range, { mode = linewise and "V" or "v" })
 end
 
 --- Auto-detect and remove comment
@@ -2807,9 +2893,8 @@ function H.textobject_linewise(inner)
   local csi = H.resolve(cms_ref_pos, M.CMT.kLine, cfg)
   if not csi then return end
 
-  H.select_range((H.compute_linecomment_range(cfg, cursor, csi, inner)), {
+  H.commit_range_marks((H.compute_linecomment_range(cfg, cursor, csi, inner)), {
     mode = inner and "v" or "V",
-    end_inclusive = true,
   })
 end
 
@@ -2824,7 +2909,7 @@ function H.textobject_blockwise(inner)
   local csi = H.resolve(cursor, M.CMT.kBlock, cfg)
   if not csi then return end
 
-  H.select_range((H.compute_blockcomment_range(cfg, cursor, csi, nil, inner)), { mode = "v", end_inclusive = true })
+  H.commit_range_marks((H.compute_blockcomment_range(cfg, cursor, csi, nil, inner)), { mode = "v" })
 end
 
 ---TODO: refactor, implement this by `make_actionx`?
@@ -2846,7 +2931,7 @@ function H.insert_comment(kind)
     local target = cursor.row + (kind == "above" and 0 or 1)
     vim.api.nvim_buf_set_lines(buf, target, target, false, { csi.olcs .. csi.orcs })
     vim.api.nvim_win_set_cursor(0, { target + 1, 0 })
-    vim.cmd.normal({ "==", bang = true })
+    vim.api.nvim_cmd({ cmd = "normal", args = { "==" }, bang = true }, {})
     local line = vim.api.nvim_get_current_line()
     local indent = #(line:match("^(%s*)"))
     vim.api.nvim_win_set_cursor(0, { target + 1, rcs_only and indent or indent + #csi.olcs - 1 })
@@ -2854,7 +2939,7 @@ function H.insert_comment(kind)
     local line = vim.api.nvim_get_current_line()
     if line:find("^%s*$") then
       vim.api.nvim_buf_set_text(buf, cursor.row, 0, cursor.row, 0, { csi.olcs .. csi.orcs })
-      vim.cmd.normal({ "==", bang = true })
+      vim.api.nvim_cmd({ cmd = "normal", args = { "==" }, bang = true }, {})
       line = vim.api.nvim_get_current_line()
       local indent = #(line:match("^(%s*)"))
       vim.api.nvim_win_set_cursor(0, { cursor.row + 1, rcs_only and indent or indent - 1 + #csi.olcs })
@@ -2906,11 +2991,11 @@ function H.visual_action(ctype, opts)
   local mode, cursor, anchor = state_track.mode, state_track.cursor, state_track.anchor
   assert(mode and cursor and anchor, "not in visual")
 
-  vim.cmd.normal({ "\27", bang = true })
+  vim.api.nvim_cmd({ cmd = "normal", args = { "\27" }, bang = true }, {})
 
   local cms_ref_pos = H.pos_clone(cursor < anchor and cursor or anchor)
 
-  local range, motion = H.get_selection_range(cursor.buf, true)
+  local range, motion = H.range_from_mark(cursor.buf, true)
   if not range or not motion then return end
   ---@cast motion Celeste.Comment.Motion
 
@@ -2951,6 +3036,53 @@ function H.insert_action(ctype, opts)
   end
 end
 
+---Resolve the register used when no explicit register was given, following
+---`:help :put`: with a clipboard provider, `'clipboard'` containing
+---"unnamedplus" → "+", else "unnamed" → "*", otherwise the unnamed register.
+---@return string
+function H.get_default_register()
+  local cb = vim.o.clipboard
+  if vim.fn["provider#clipboard#Executable"]() ~= "" then
+    if cb:find("unnamedplus", 1, true) then return "+" end
+    if cb:find("unnamed", 1, true) then return "*" end
+  end
+  return '"'
+end
+
+---@class Celeste.Comment.PasteOpts
+---@field above? boolean paste above the current line instead of below
+---@field indent? boolean reindent pasted lines like Vim's `]p`, defaults to true
+
+---@param pos   vim.Pos
+---@param reg   string
+---@param count integer
+---@param opts  Celeste.Comment.PasteOpts
+---@return Celeste.Comment.Range4?
+function H.paste(pos, reg, count, opts)
+  local contents = vim.fn.getreg(reg, 1, true)
+  if type(contents) ~= "table" or #contents == 0 then return end
+  count = math.max(1, count)
+
+  local block = {} ---@type string[]
+  for _ = 1, count do
+    vim.list_extend(block, contents)
+  end
+
+  local treg = "x"
+  local cmd = opts.indent ~= false and "iput" or "put"
+  ---@type vim.api.keyset.cmd
+  local args = { cmd = cmd, reg = treg, bang = opts.above == true, mods = { noautocmd = false } }
+
+  local save = vim.fn.getreginfo(treg)
+  vim.fn.setreg(treg, block, "V")
+  local ok, err = pcall(vim.api.nvim_cmd, args, {})
+  vim.fn.setreg(treg, save)
+  if not ok then error(err, 0) end
+
+  local range = H.range_from_mark(pos.buf, false)
+  return range
+end
+
 ---@param ctype Celeste.Comment.CommentType
 ---@param opts? Celeste.Comment.InvokeCtx
 ---@return fun():string
@@ -2967,11 +3099,25 @@ function H.make_operator(ctype, opts)
     if H.is_disabled({ check_modifiable = true }) then return end
 
     -- actually, at the region start position, it may not be the same as `state_track.cursor`
-    local cursor = H.make_cursor(0)
-    local range = H.get_selection_range(cursor.buf)
+    local pos = H.make_cursor(0)
+    local buf = pos.buf
+    local update_changed_marks = false -- mark '[' and ']'
+    local range = nil ---@type Celeste.Comment.Range4?
+
+    if opts.paste then
+      -- TODO: support block and char-wise?
+      local reg = vim.v.register
+      if reg == '"' then reg = opts.paste.default_reg or H.get_default_register() end
+      state_track, update_changed_marks = nil, true
+      range = H.paste(pos, reg, vim.v.count1, opts.paste)
+    else
+      range = H.range_from_mark(buf)
+    end
+
     if not range then return end
 
-    H.make_action_range(cursor, range, ctype, action, motion, { cfg = opts.cfg, state_track = state_track })
+    local ctx = { cfg = opts.cfg, state_track = state_track, update_changed_marks = update_changed_marks }
+    H.make_action_range(pos, range, ctype, action, motion, ctx)
   end
 
   return function()
@@ -3083,7 +3229,7 @@ function M.setup(config)
   local function make(ctype, action, opts)
     opts = opts or {}
     if opts.visual then return cmd(("visual_action( %d, { action = %d } )"):format(ctype, action)) end
-    return H.make_operator(ctype, { action = action, motion = opts.motion })
+    return H.make_operator(ctype, { action = action, motion = opts.motion, paste = opts.paste })
   end
 
   local C, A = M.CMT, M.ACTION
@@ -3101,6 +3247,8 @@ function M.setup(config)
   local op_force_add_v      = make(C.kLine,  A.kForceAdd,    { visual = true })
   local op_force_rmv        = make(C.kLine,  A.kForceRemove)
   local op_force_rmv_v      = make(C.kLine,  A.kForceRemove, { visual = true })
+  local op_line_p_below     = make(C.kLine,  A.kForceAdd,    { motion = "0", paste = {} })
+  local op_line_p_above     = make(C.kLine,  A.kForceAdd,    { motion = "0", paste = { above = true } })
 
   map("n", m.line_toggle,         op_line_toggle,                 { desc = "Line comment by motion",     expr = true })
   map("n", m.line_toggle_cur,     op_line_toggle_cur,             { desc = "Line comment current line",  expr = true })
@@ -3114,6 +3262,8 @@ function M.setup(config)
   map("x", m.line_force_add,      op_force_add_v,                 { desc = "Force add line comment" })
   map("n", m.line_force_remove,   op_force_rmv,                   { desc = "Force remove line comment",  expr = true })
   map("x", m.line_force_remove,   op_force_rmv_v,                 { desc = "Force remove line comment" })
+  map("n", m.line_paste_below,    op_line_p_below,                { desc = "Paste as line comment below",  expr = true })
+  map("n", m.line_paste_above,    op_line_p_above,                { desc = "Paste as line comment above",  expr = true })
   map("n", m.line_add_below,      cmd('insert_comment("below")'), { desc = "Add comment below" })
   map("n", m.line_add_above,      cmd('insert_comment("above")'), { desc = "Add comment above" })
   map("n", m.line_add_eol,        cmd('insert_comment("eol")'),   { desc = "Add comment at end of line" })
