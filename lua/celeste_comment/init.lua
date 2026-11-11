@@ -591,7 +591,7 @@ H.comment_string_confs = {
           (object . (comment)+)
           (statement_block . (comment)+)
         ] @jsx.inclusive
-        (#match? @jsx.inclusive "^\\{/\\*")
+        (#lua-match? @jsx.inclusive "^%{/%*")
       )
       [
         (jsx_opening_element)
