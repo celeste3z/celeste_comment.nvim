@@ -936,27 +936,35 @@ function H.default_cms_conf_resolver(ctx)
   ctx.o_cms_conf = H.overrides_cms_conf(conf, pos, dptree)
 end
 
+---@generic T
+---@param chain (fun(ctx:T)|nil)[]
+---@param ctx   T
+---@param stop? fun(ctx:T, ret:any):boolean
+---@return T
+function H.chainably(chain, ctx, stop)
+  stop = stop or function(_, ret) return ret == true end
+  for f in vim.iter(chain) do
+    if vim.is_callable(f) and stop(ctx, f(ctx)) then break end
+  end
+  return ctx
+end
+
 ---@param cursor vim.Pos
 ---@param cfg    Celeste.Comment.Opts
 ---@param range? Celeste.Comment.Range4
 function H.make_cms_conf_chainably(cursor, cfg, range)
-  local chains =
-    { cfg.hooks.cms_conf_resolver or "", H.default_cms_conf_resolver, H.nvim_builtin_like_cms_conf_resolver }
+  ---@type Celeste.Comment.Hooks.CmsConfResolver.Ctx
+  local ctx = H.chainably(
+    { cfg.hooks.cms_conf_resolver, H.default_cms_conf_resolver, H.nvim_builtin_like_cms_conf_resolver },
+    { cfg = cfg, cursor = cursor, range = range },
+    function(c) return type(c.o_cms_conf) == "table" end
+  )
 
-  for _, resolver in ipairs(chains) do
-    if vim.is_callable(resolver) then
-      ---@type Celeste.Comment.Hooks.CmsConfResolver.Ctx
-      local ctx = { cfg = cfg, cursor = cursor, range = range }
-      resolver(ctx)
-      if type(ctx.o_cms_conf) == "table" then
-        H.normalize_cms_conf(ctx.o_cms_conf)
-        if H.should_log(vim.log.levels.TRACE) then
-          H.log(vim.log.levels.TRACE, vim.bo[cursor.buf].filetype, ctx.o_cms_conf)
-        end
-        return ctx.o_cms_conf
-      end
-    end
-  end
+  local conf = ctx.o_cms_conf
+  if type(conf) ~= "table" then return end
+  H.normalize_cms_conf(conf)
+  if H.should_log(vim.log.levels.TRACE) then H.log(vim.log.levels.TRACE, vim.bo[cursor.buf].filetype, conf) end
+  return conf
 end
 
 ---@param pattern string
@@ -1429,18 +1437,10 @@ end
 ---@return Celeste.Comment.IndentInfo
 function H.compute_indent_chainably(cursor, cfg)
   local buf = cursor and cursor.buf or vim.api.nvim_get_current_buf()
-  local chains = { cfg.hooks.indent_resolver or "", H.detect_indent_resolver, H.default_indent_resolver }
-  for _, resolver in ipairs(chains) do
-    if vim.is_callable(resolver) then
-      ---@type Celeste.Comment.Hooks.IndentResolver.Ctx
-      local ctx = { cfg = cfg, buf = buf }
-      resolver(ctx)
-      if type(ctx.o_indent) == "table" then return ctx.o_indent end
-    end
-  end
-
-  -- unreachable, just for fix diagnostic
-  return { indent_style = "space", indent_size = 0 }
+  local chain = { cfg.hooks.indent_resolver, H.detect_indent_resolver, H.default_indent_resolver }
+  ---@type Celeste.Comment.Hooks.IndentResolver.Ctx
+  local ctx = H.chainably(chain, { cfg = cfg, buf = buf }, function(c) return type(c.o_indent) == "table" end)
+  return ctx.o_indent or { indent_style = "space", indent_size = 0 }
 end
 
 ---@param line            string
@@ -2426,22 +2426,6 @@ function H.compute_state(ctx)
   state.nanchor = H.compute_pos(state.nanchor, ctx, { strategy = "cursor" })
 end
 
----@param ctx Celeste.Comment.Hooks.PreCommitEdits.Ctx
-function H.invoke_pre_commit_chainably(ctx)
-  local hooks = { ctx.cfg.hooks.pre_commit_edits or "", H.compute_state }
-  for _, hook in ipairs(hooks) do
-    if vim.is_callable(hook) and hook(ctx) == true then break end
-  end
-end
-
----@param ctx Celeste.Comment.Hooks.PostCommitEdits.Ctx
-function H.invoke_post_commit_chainably(ctx)
-  local hooks = { ctx.cfg.hooks.post_commit_edits or "", H.restore_state }
-  for _, hook in ipairs(hooks) do
-    if vim.is_callable(hook) and hook(ctx) == true then break end
-  end
-end
-
 ---@param cfg    Celeste.Comment.Opts
 ---@param ctype  Celeste.Comment.CommentType
 ---@param action Celeste.Comment.Action
@@ -2476,14 +2460,14 @@ function H.make_actionx(cfg, ctype, action, lines, csi, range, motion, cursor, o
     __ = opts,
   }
 
-  H.invoke_pre_commit_chainably(ctx)
+  H.chainably({ ctx.cfg.hooks.pre_commit_edits, H.compute_state }, ctx)
 
   -- Use `nvim_buf_set_text` when multicursor is active: it correctly handles
   -- multiple edits on the same line from multiple cursors.
   local use_set_text = ctx.o_use_set_text or cfg.use_set_text or H.mcursor_active()
   H.commit_edits(cursor.buf, ctx.range, ctx.lines, ctx.edits, use_set_text)
 
-  H.invoke_post_commit_chainably(ctx --[[@as Celeste.Comment.Hooks.PostCommitEdits.Ctx]])
+  H.chainably({ ctx.cfg.hooks.post_commit_edits, H.restore_state }, ctx)
 end
 
 ---@param cfg Celeste.Comment.Opts
