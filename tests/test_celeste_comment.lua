@@ -3418,6 +3418,56 @@ T["textobject"]["block_match_pairs overlapping markers"] = function()
   eq(r[1].range, { 0, 0, 1, 5 })
 end
 
+T["textobject"]["block_match_pairs ordering"] = function()
+  local mp = H.textobject_block_match_pairs
+  local pos = H.make_pos
+  local c = function(pairs) return H.make_csi(pairs) end
+
+  -- The old comparator was not a strict weak ordering. `bc` and `c` are
+  -- prefix-overlapping markers, so n1 (`bc`..`C`) and n2 (`c`..`B`) overlap
+  -- and n2 wins, while n3 (`[`..`]`, same span as n1) must come first.
+  -- Only n3, n2, n1 satisfies every rule, but the old table.sort returned
+  -- n2, n1, n3: it never compared n3 with n2.
+  local r = mp({ "[bc]C....B" }, 1, c({ { "[", "]" }, { "c", "B" }, { "bc", "C" } }), pos(0, 0, 2))
+  eq(#r, 3)
+  eq(r[1].range, { 0, 0, 0, 3 }) -- [ .. ]
+  eq(r[2].range, { 0, 2, 0, 9 }) -- c .. B
+  eq(r[3].range, { 0, 1, 0, 4 }) -- bc .. C, overlaps the `c` marker
+
+  -- Cyclic rules: `bXc` overlaps both `X` and `c`, while `X`..`A` and
+  -- `c`..`C` do not overlap. No order can satisfy all edges; the cycle is
+  -- emitted as one component, larger span first.
+  r = mp({ "bXcA...B....C" }, 1, c({ { "X", "A" }, { "bXc", "B" }, { "c", "C" } }), pos(0, 0, 3))
+  eq(#r, 3)
+  eq(r[1].range, { 0, 2, 0, 12 })
+  eq(r[2].range, { 0, 0, 0, 7 })
+  eq(r[3].range, { 0, 1, 0, 3 })
+
+  -- Transitive predecessors: A < B, B < C, A ~ C. Counting only direct
+  -- predecessors would return A, C, B; a real topological order returns A, B, C.
+  r = mp({ "     <-c2.1.3" }, 1, c({ { "<-", "1" }, { "-", "2" }, { "c", "3" } }), pos(0, 0, 7))
+  eq(#r, 3)
+  eq(r[1].range, { 0, 5, 0, 10 })
+  eq(r[2].range, { 0, 6, 0, 8 })
+  eq(r[3].range, { 0, 7, 0, 12 })
+
+  -- Equal spans, no marker overlap: no edge either way, so scan order wins.
+  r = mp({ "a..bA..B" }, 1, c({ { "a", "A" }, { "b", "B" } }), pos(0, 0, 4))
+  eq(#r, 2)
+  eq(r[1].range, { 0, 3, 0, 7 })
+  eq(r[2].range, { 0, 0, 0, 4 })
+
+  -- Same left and right marker (`## ... ##`).
+  r = mp({ "## a ##" }, 1, c({ { "##", "##" } }), pos(0, 0, 3))
+  eq(#r, 1)
+  eq(r[1].range, { 0, 0, 0, 6 })
+
+  -- Duplicate pairs collapse to a single result.
+  r = mp({ "aA" }, 1, c({ { "a", "A" }, { "a", "A" } }), pos(0, 0, 0))
+  eq(#r, 1)
+  eq(r[1].range, { 0, 0, 0, 1 })
+end
+
 T["textobject"]["block_inner_range"] = function()
   local bir = H.block_inner_range
   local pad = H.make_csi({ { "/*", "*/" } }, { pad = true })
