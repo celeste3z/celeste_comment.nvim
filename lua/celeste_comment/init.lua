@@ -2565,101 +2565,234 @@ end
 ---@field rcs_len integer
 ---@field idx     integer -- index into csi.pairs
 
+---@param matches Celeste.Comment.BlockMatchPair.Res[]
+---@return Celeste.Comment.BlockMatchPair.Res[]
+local function sort_block_match_pairs(matches)
+  local n = #matches
+  if n < 2 then return matches end
+
+  ---@param a Celeste.Comment.BlockMatchPair.Res
+  ---@param b Celeste.Comment.BlockMatchPair.Res
+  ---@return integer
+  local function span_compare(a, b)
+    local arg, brg = a.range, b.range
+    local ar, ac = arg[3] - arg[1], arg[4] - arg[2]
+    local br, bc = brg[3] - brg[1], brg[4] - brg[2]
+    if ar ~= br then return ar > br and -1 or 1 end
+    if ac ~= bc then return ac > bc and -1 or 1 end
+    return 0
+  end
+
+  ---@param a Celeste.Comment.BlockMatchPair.Res
+  ---@param b Celeste.Comment.BlockMatchPair.Res
+  ---@return integer
+  local function compare(a, b)
+    local arg, brg = a.range, b.range
+    if arg[1] == brg[1] then
+      local as, al = arg[2], a.lcs_len
+      local bs, bl = brg[2], b.lcs_len
+      -- Prefix overlapping, not real nesting, prefer the larger one
+      if (as <= bs and bs < as + al) or (bs <= as and as < bs + bl) then return span_compare(a, b) end
+    end
+    return -span_compare(a, b) -- Prefer smaller one if real nesting
+  end
+
+  local adj = {} ---@type table<integer, integer[]>
+  local radj = {} ---@type table<integer, integer[]>
+  for i = 1, n do
+    adj[i], radj[i] = {}, {}
+  end
+
+  ---@param from integer
+  ---@param to   integer
+  local function add_edge(from, to)
+    adj[from][#adj[from] + 1] = to
+    radj[to][#radj[to] + 1] = from
+  end
+
+  for i = 1, n - 1 do
+    for j = i + 1, n do
+      local v = compare((assert(matches[i])), (assert(matches[j])))
+      if v < 0 then
+        add_edge(i, j)
+      elseif v > 0 then
+        add_edge(j, i)
+      end
+    end
+  end
+
+  -- Cycles cannot be satisfied; collapse them before ordering (Kosaraju).
+  ---@return table<integer, integer>   components
+  ---@return table<integer, integer[]> members
+  local function strongly_connected_components()
+    -- Pass 1: finishing order on the original graph.
+    local visited = {} ---@type table<integer, boolean>
+    local finish = {} ---@type integer[]
+
+    ---@param v integer
+    local function visit(v)
+      visited[v] = true
+      for _, w in ipairs(adj[v]) do
+        if not visited[w] then visit(w) end
+      end
+      finish[#finish + 1] = v
+    end
+
+    for v = 1, n do
+      if not visited[v] then visit(v) end
+    end
+
+    -- Pass 2: collect components on the transposed graph, latest finish first.
+    local components = {} ---@type table<integer, integer>
+    local members = {} ---@type table<integer, integer[]>
+
+    ---@param v  integer
+    ---@param id integer
+    local function collect(v, id)
+      components[v] = id
+      members[id][#members[id] + 1] = v
+      for _, w in ipairs(radj[v]) do
+        if not components[w] then collect(w, id) end
+      end
+    end
+
+    for i = #finish, 1, -1 do
+      local v = finish[i]
+      if not components[v] then
+        members[#members + 1] = {}
+        collect(v, #members)
+      end
+    end
+
+    return components, members
+  end
+
+  local comp, members = strongly_connected_components()
+  local ncomp = #members
+
+  -- Condensation graph.
+  local cadj = {} ---@type table<integer, table<integer, boolean>>
+  local indeg = {} ---@type table<integer, integer>
+  local first = {} ---@type table<integer, integer>
+  for c = 1, ncomp do
+    cadj[c], indeg[c], first[c] = {}, 0, n + 1
+  end
+  for v = 1, n do
+    local cv = comp[v]
+    if v < first[cv] then first[cv] = v end
+    for _, w in ipairs(adj[v]) do
+      local cw = comp[w]
+      if cv ~= cw and not cadj[cv][cw] then
+        cadj[cv][cw] = true
+        indeg[cw] = indeg[cw] + 1
+      end
+    end
+  end
+
+  -- Kahn on the condensation; among ready components prefer the earliest scan
+  -- index, so incomparable matches keep their scan order.
+  local sorted = {} ---@type Celeste.Comment.BlockMatchPair.Res[]
+  local done = {} ---@type table<integer, boolean>
+  for _ = 1, ncomp do
+    local pick ---@type integer?
+    for c = 1, ncomp do
+      if not done[c] and indeg[c] == 0 and (not pick or first[c] < first[pick]) then pick = c end
+    end
+    assert(pick)
+    done[pick] = true
+    -- Inside a cycle no order satisfies every edge, and `compare` is cyclic
+    -- here; fall back to a real total order: larger span first, then scan index.
+    table.sort(members[pick], function(a, b)
+      local cmp = span_compare(assert(matches[a]), assert(matches[b]))
+      if cmp ~= 0 then return cmp < 0 end
+      return a < b
+    end)
+    for _, v in ipairs(members[pick]) do
+      sorted[#sorted + 1] = matches[v]
+    end
+    for cw in pairs(cadj[pick]) do
+      indeg[cw] = indeg[cw] - 1
+    end
+  end
+  return sorted
+end
+
 ---@param lbegin integer
 ---@param csi    Celeste.Comment.CommentStringInfo
 ---@param cursor vim.Pos
 ---@return Celeste.Comment.BlockMatchPair.Res[]
 function H.textobject_block_match_pairs(lines, lbegin, csi, cursor)
-  local nlines = #lines
   local cursor_row, cursor_col = cursor.row + 1, cursor.col
-  local all_pairs = {}
-  local seen = {}
+  local results, seen = {}, {}
 
-  local function inner(ol, ocs, cl, cce)
-    if not (ol <= cursor_row and cursor_row <= cl) then return false end
-    if ol == cl then return ocs <= cursor_col and cursor_col <= cce end
-    if ol == cursor_row then return ocs <= cursor_col end
-    if cl == cursor_row then return cursor_col <= cce end
+  ---@param srow integer
+  ---@param scol integer
+  ---@param erow integer
+  ---@param ecol integer
+  ---@return boolean
+  local function contains(srow, scol, erow, ecol)
+    if cursor_row < srow or erow < cursor_row then return false end
+    if srow == erow then return scol <= cursor_col and cursor_col <= ecol end
+    if cursor_row == srow then return scol <= cursor_col end
+    if cursor_row == erow then return cursor_col <= ecol end
     return true
   end
 
-  for pidx, v in ipairs(csi.pairs) do
-    local tlcs, trcs = v.traw[1], v.traw[2]
-    if tlcs ~= "" and trcs ~= "" then
-      local lcs_esc, rcs_esc = v.tesc[1], v.tesc[2]
-      local lcs_len, rcs_len = #tlcs, #trcs
-      local lrcs_eq = lcs_esc == rcs_esc
-      local stack = {}
-      local plist = {}
+  for pidx, pair in ipairs(csi.pairs) do
+    local lraw, rraw = pair.traw[1], pair.traw[2]
+    if lraw ~= "" and rraw ~= "" then
+      local lpat, rpat = pair.tesc[1], pair.tesc[2]
+      local llen, rlen = #lraw, #rraw
+      local same_marker = lpat == rpat
+      local open = {}
 
-      for i = 1, nlines do
-        local line = lines[i]
-        local ln = lbegin - 1 + i
-        local pos = 1
+      ---@param row    integer
+      ---@param rstart integer  1-based column of the closing marker
+      local function close(row, rstart)
+        local start = table.remove(open)
+        if not start then return end
+        local ecol = rstart + rlen - 2
+        if not contains(start[1], start[2], row, ecol) then return end
+        local key = table.concat({ start[1], start[2], row, ecol }, ":")
+        if seen[key] then return end
+        seen[key] = true
+        results[#results + 1] =
+          { range = { start[1] - 1, start[2], row - 1, ecol }, lcs_len = llen, rcs_len = rlen, idx = pidx }
+      end
 
+      for i = 1, #lines do
+        local row = lbegin + i - 1
+        -- Past the cursor row with nothing open: no later pair can contain it.
+        if row > cursor_row and #open == 0 then break end
+
+        local line, pos = lines[i], 1
         while pos <= #line do
-          local opos = line:find(lcs_esc, pos)
-          local cpos = lrcs_eq and opos or line:find(rcs_esc, pos)
+          local lpos = line:find(lpat, pos)
+          local rpos = same_marker and lpos or line:find(rpat, pos)
+          if not lpos and not rpos then break end
 
-          if not opos and not cpos then break end
-
-          if lrcs_eq and opos and #stack == 0 then
-            table.insert(stack, { ln, opos - 1, opos + lcs_len - 2 })
-            pos = opos + lcs_len
+          local is_open
+          if same_marker then
+            is_open = #open == 0
           else
-            if lrcs_eq and opos then cpos = opos end
+            is_open = lpos ~= nil and (rpos == nil or lpos < rpos)
+          end
+          local mpos = is_open and lpos or rpos
+          assert(mpos)
 
-            if opos and (not cpos or opos < cpos) then
-              table.insert(stack, { ln, opos - 1, opos + lcs_len - 2 })
-              pos = opos + lcs_len
-            elseif cpos and #stack > 0 then
-              local ol, ocs = unpack(table.remove(stack))
-              local cl, cce = ln, cpos + rcs_len - 2
-
-              assert(ol <= cl)
-              if inner(ol, ocs, cl, cce) then
-                local key = table.concat({ ol, ocs, cl, cce }, ":")
-                if not seen[key] then
-                  seen[key] = true
-                  plist[#plist + 1] =
-                    { range = { ol - 1, ocs, cl - 1, cce }, lcs_len = lcs_len, rcs_len = rcs_len, idx = pidx }
-                end
-              end
-              pos = cpos + rcs_len
-            else
-              pos = cpos + rcs_len
-            end
+          if is_open then
+            open[#open + 1] = { row, mpos - 1 }
+            pos = mpos + llen
+          else
+            close(row, mpos)
+            pos = mpos + rlen
           end
         end
       end
-
-      vim.list_extend(all_pairs, plist)
     end
   end
 
-  table.sort(all_pairs, function(a, b)
-    local ar, br = a.range, b.range
-    -- Detect marker overlap: e.g. `{/*` (len 3) and `/*` (len 2) share bytes.
-    -- This is not real nesting — prefer the larger region.
-    if ar[1] == br[1] then
-      local a_start, a_len = ar[2], a.lcs_len
-      local b_start, b_len = br[2], b.lcs_len
-      if (a_start <= b_start and b_start < a_start + a_len) or (b_start <= a_start and a_start < b_start + b_len) then
-        local ra, ca = ar[3] - ar[1], ar[4] - ar[2]
-        local rb, cb = br[3] - br[1], br[4] - br[2]
-        if ra ~= rb then return ra > rb end
-        return ca > cb
-      end
-    end
-
-    -- Real nesting (or non-overlapping pairs): smaller region first.
-    local ra, ca = ar[3] - ar[1], ar[4] - ar[2]
-    local rb, cb = br[3] - br[1], br[4] - br[2]
-    if ra ~= rb then return ra < rb end
-    return ca < cb
-  end)
-
-  return all_pairs
+  return sort_block_match_pairs(results)
 end
 
 ---@param cursor vim.Pos

@@ -9,4 +9,5 @@ vim.o.termguicolors = true
 vim.o.columns = 80
 vim.o.lines = 24
 vim.o.winborder = "rounded"
+vim.o.timeoutlen = 1
 vim.cmd("colorscheme habamax")

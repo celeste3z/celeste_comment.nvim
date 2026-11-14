@@ -3418,6 +3418,35 @@ T["textobject"]["block_match_pairs overlapping markers"] = function()
   eq(r[1].range, { 0, 0, 1, 5 })
 end
 
+T["textobject"]["block_match_pairs ordering"] = function()
+  local mp = H.textobject_block_match_pairs
+  local pos = H.make_pos
+  local c = function(pairs) return H.make_csi(pairs) end
+  local validate = function(all, exp)
+    for i, r in ipairs(exp) do
+      eq(r, all[i].range)
+    end
+  end
+
+  local r = mp({ "[bc]C....B" }, 1, c({ { "[", "]" }, { "c", "B" }, { "bc", "C" } }), pos(0, 0, 2))
+  validate(r, { { 0, 0, 0, 3 }, { 0, 2, 0, 9 }, { 0, 1, 0, 4 } })
+
+  r = mp({ "bXcA...B....C" }, 1, c({ { "X", "A" }, { "bXc", "B" }, { "c", "C" } }), pos(0, 0, 3))
+  validate(r, { { 0, 2, 0, 12 }, { 0, 0, 0, 7 }, { 0, 1, 0, 3 } })
+
+  r = mp({ "     <-c2.1.3" }, 1, c({ { "<-", "1" }, { "-", "2" }, { "c", "3" } }), pos(0, 0, 7))
+  validate(r, { { 0, 5, 0, 10 }, { 0, 6, 0, 8 }, { 0, 7, 0, 12 } })
+
+  r = mp({ "a..bA..B" }, 1, c({ { "a", "A" }, { "b", "B" } }), pos(0, 0, 4))
+  validate(r, { { 0, 3, 0, 7 }, { 0, 0, 0, 4 } })
+
+  r = mp({ "## a ##" }, 1, c({ { "##", "##" } }), pos(0, 0, 3))
+  validate(r, { { 0, 0, 0, 6 } })
+
+  r = mp({ "aA" }, 1, c({ { "a", "A" }, { "a", "A" } }), pos(0, 0, 0))
+  validate(r, { { 0, 0, 0, 1 } })
+end
+
 T["textobject"]["block_inner_range"] = function()
   local bir = H.block_inner_range
   local pad = H.make_csi({ { "/*", "*/" } }, { pad = true })
