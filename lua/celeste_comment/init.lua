@@ -2872,14 +2872,13 @@ function H.block_inner_range(lines, range, pair, ci)
   return { range[1], cscol, range[3], cecol }
 end
 
----@param buf       integer
+---@param lines     string[]  buffer lines starting at `ts_range[1]`
 ---@param csi       Celeste.Comment.CommentStringInfo
 ---@param ts_range? Celeste.Comment.Range4
 ---@return Celeste.Comment.Range4?
-function H.textobject_block_match_ts(buf, csi, ts_range, inner)
+function H.textobject_block_match_ts(lines, csi, ts_range, inner)
   if not ts_range then return end
 
-  local lines = H.buf_lines(buf, ts_range[1], ts_range[3] + 1, false)
   local first, last = lines[1], lines[#lines]
   if not first or not last then return end
 
@@ -2909,7 +2908,10 @@ function H.compute_blockcomment_range(cfg, cursor, csi, ts_range, inner)
     ts_range = range
   end
 
-  if ts_range and #ts_range == 4 then return H.textobject_block_match_ts(cursor.buf, csi, ts_range, inner) end
+  if ts_range and #ts_range == 4 then
+    local lines = H.buf_lines(cursor.buf, ts_range[1], ts_range[3] + 1, false)
+    return H.textobject_block_match_ts(lines, csi, ts_range, inner)
+  end
 
   local nlines = H.buf_lines_count(cursor.buf)
   local from_limit = math.max(1, cursor.row + 1 - cfg.block_textobj_nlines)

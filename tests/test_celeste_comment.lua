@@ -1,4 +1,4 @@
----@diagnostic disable: inject-field, param-type-mismatch, need-check-nil, cast-local-type, missing-fields, assign-type-mismatch, undefined-field, unnecessary-assert, global-in-non-module, missing-return, unresolved-require
+---@diagnostic disable: inject-field, param-type-mismatch, need-check-nil, cast-local-type, missing-fields, assign-type-mismatch, undefined-field, unnecessary-assert, global-in-non-module, missing-return, unresolved-require, duplicate-require
 local MiniTest = require("mini.test")
 local expect = MiniTest.expect
 local eq = expect.equality
@@ -71,13 +71,6 @@ local function get_cursor()
   return cursors
 end
 
-local function set_config(opts)
-  child.lua_func(
-    function(o) vim.b.celeste_comment_config = vim.tbl_deep_extend("force", vim.b.celeste_comment_config or {}, o or {}) end,
-    opts
-  )
-end
-
 local function selection(frow, fcol, trow, tcol, mode)
   set_cursor(frow, fcol)
   feed(mode and mode or "v")
@@ -115,6 +108,157 @@ local function get_selection()
   return selections
 end
 
+---Assert buffer lines, optionally only a slice starting at `opts.from` (1-based).
+---@param expected string[]
+---@param opts? { from?: integer, reason?: string|fun() }
+---@return boolean
+local function eq_lines(expected, opts)
+  opts = opts or {}
+
+  local from = opts.from or expected.from
+  local actual, want = get_lines(), expected
+
+  if from then
+    want = {}
+    for i = 1, #expected do
+      want[i] = expected[i]
+    end
+    actual = get_lines(from - 1, from - 1 + #want - 1)
+  end
+
+  return expect.equality(actual, want, { fail_reason = opts.reason })
+end
+
+---@param expected any
+---@param opts? { reason?: string|fun() }
+---@return boolean
+local function eq_cursor(expected, opts)
+  return expect.equality(get_cursor(), expected, { fail_reason = opts and opts.reason })
+end
+
+---@param expected any
+---@param opts? { reason?: string|fun() }
+---@return boolean
+local function eq_selection(expected, opts)
+  return expect.equality(get_selection(), expected, { fail_reason = opts and opts.reason })
+end
+
+---Assert buffer marks. `names` and `expected` are parallel lists; expected is `{ row, col }`.
+---@param names string[]
+---@param expected [integer, integer][]
+---@param reason? string|fun()
+local function eq_marks(names, expected, reason)
+  assert(#names == #expected, "eq_marks: names and expected must have the same length")
+  for i, name in ipairs(names) do
+    expect.equality(child.api.nvim_buf_get_mark(0, name), expected[i], { fail_reason = reason })
+  end
+end
+
+---@param ctx { bo?: table, o?: table, b?: table, g?: table, reg?: table, config?: table|fun(c: table): table? }
+local function set_context(ctx)
+  if ctx.bo or ctx.o or ctx.reg or (ctx.config and type(ctx.config) ~= "function") then
+    child.lua_func(function(c)
+      if c.bo then
+        if c.bo.filetype ~= nil then vim.bo.filetype = c.bo.filetype end
+        for k, v in pairs(c.bo) do
+          if k ~= "filetype" then vim.bo[k] = v end
+        end
+      end
+      if c.o then
+        for k, v in pairs(c.o) do
+          vim.o[k] = v
+        end
+      end
+      if c.reg then
+        for name, spec in pairs(c.reg) do
+          vim.fn.setreg(name, spec.lines, spec.type)
+        end
+      end
+      if c.config then
+        vim.b.celeste_comment_config = vim.tbl_deep_extend("force", vim.b.celeste_comment_config or {}, c.config)
+      end
+    end, { bo = ctx.bo, o = ctx.o, reg = ctx.reg, config = type(ctx.config) == "table" and ctx.config or nil })
+  end
+
+  if type(ctx.config) == "function" then
+    child.lua_func(function(src)
+      local apply = assert(loadstring(src))
+      local cfg = vim.b.celeste_comment_config or {}
+      local patch = apply(cfg)
+      vim.b.celeste_comment_config = type(patch) == "table" and vim.tbl_deep_extend("force", cfg, patch) or cfg
+    end, string.dump(ctx.config))
+  end
+
+  if ctx.b then
+    for k, v in pairs(ctx.b) do
+      child.b[k] = v
+    end
+  end
+  if ctx.g then
+    for k, v in pairs(ctx.g) do
+      child.g[k] = v
+    end
+  end
+end
+
+---Run a sequence of key presses, checking the buffer after each step.
+---
+---Each step is `{ [pos,] keys, [expect_lines], [expect_cursor], [expect_selection] }`.
+---A step may also carry `lines = { ... }` to reset the buffer content first.
+---`pos` is `{ row, col }`, `{ from_row, from_col, to_row, to_col, mode? }`, or a list of
+---`{ row, col }` for multiple cursors. `expect_lines` is one lines array (optionally with
+---`from`) or a list of such slices.
+---@param lines string[]|nil  initial buffer, `nil` keeps the current lines
+---@param steps table[]
+---@param opts? { o?: table, bo?: table, b?: table, g?: table, reg?: table, config?: table|fun(c: table): table? }
+local function validate_steps(lines, steps, opts)
+  if opts then set_context(opts) end
+
+  if lines then set_lines(lines) end
+
+  for i, step in ipairs(steps) do
+    if step.lines then set_lines(step.lines) end
+
+    local pos, kind
+    if type(step[1]) == "table" then
+      if type(step[1][1]) == "number" then
+        pos, kind = step[1], step[1][3] and "visual" or "cursor"
+      elseif type(step[1][1]) == "table" and type(step[1][1][1]) == "number" then
+        pos, kind = step[1], "multi"
+      end
+    end
+    local base = pos and 2 or 1 -- index of `keys` in this step
+
+    local keys, expected, expected_cursor, expected_selection =
+      step[base], step[base + 1], step[base + 2], step[base + 3]
+
+    if kind == "multi" then
+      clear_cursors()
+      set_cursor(pos)
+    elseif kind == "visual" then
+      selection(pos[1], pos[2], pos[3], pos[4], pos[5])
+    elseif kind == "cursor" then
+      set_cursor(pos[1], pos[2])
+    end
+
+    feed(keys)
+
+    local keys_str = type(keys) == "table" and table.concat(keys, " ") or keys
+    local reason = ("step %d: %q"):format(i, keys_str)
+    if expected then
+      if type(expected[1]) == "table" then
+        for _, slice in ipairs(expected) do
+          eq_lines(slice, { reason = reason })
+        end
+      else
+        eq_lines(expected, { reason = reason })
+      end
+    end
+    if expected_cursor then eq_cursor(expected_cursor, { reason = reason }) end
+    if expected_selection then eq_selection(expected_selection, { reason = reason }) end
+  end
+end
+
 local make_pos = function(buf, row, col) return vim.pos(row, col, { buf = buf }) end
 if vim.fn.has("nvim-0.12.2") == 1 then make_pos = function(buf, row, col) return vim.pos(buf, row, col) end end
 
@@ -150,10 +294,7 @@ local T = new_set({
   hooks = {
     pre_case = function()
       child.setup()
-      child.bo.tabstop = 4
-      child.bo.shiftwidth = 0
-      child.bo.expandtab = true
-      child.bo.commentstring = "# %s"
+      set_context({ bo = { tabstop = 4, shiftwidth = 0, expandtab = true, commentstring = "# %s" } })
       child.lua_func(
         function()
           require("celeste_comment").setup({
@@ -208,7 +349,7 @@ local T = new_set({
 local H = require("celeste_comment").H
 local M = require("celeste_comment")
 
-local ccp = function(pos, edits, lines, range, csi)
+local function c_pos(pos, edits, lines, range, csi)
   return H.compute_pos(pos, {
     edits = edits,
     lines = lines,
@@ -217,7 +358,7 @@ local ccp = function(pos, edits, lines, range, csi)
   }, { strategy = "cursor" })
 end
 
-local ccs = function(state, edits, lines, range, csi, ctype, motion)
+local function c_state(state, edits, lines, range, csi, ctype, motion)
   return H.compute_state({
     __ = { state_track = state },
     cfg = { keep_cursor = true },
@@ -230,13 +371,22 @@ local ccs = function(state, edits, lines, range, csi, ctype, motion)
   })
 end
 
-local apply = function(line, edits)
+local function apply_edits(line, edits)
   local lines = { line }
   H.apply_edits(lines, edits or {})
   return lines[1]
 end
 
-local make_line_info = function(opts)
+local function validate_edits(edits, expected)
+  assert(edits, "expected edits")
+  eq(#edits, #expected)
+  for i, e in ipairs(expected) do
+    if e.range then eq(edits[i].range, e.range) end
+    if e.text then eq(edits[i].text, e.text) end
+  end
+end
+
+local function make_line_info(opts)
   opts = opts or {}
   return {
     offset = opts.offset or 0,
@@ -254,1015 +404,932 @@ end
 T["base"] = new_set()
 
 T["base"]["unwrap_comment_strings"] = function()
-  local u = H.unwrap_comment_strings
-  eq(u({ "//%s" }), { { "//", "" } })
-  eq(u({ "/*%s*/" }), { { "/*", "*/" } })
-  eq(u({ "// %s" }), { { "// ", "" } })
-  eq(u({ "<!-- %s -->" }), { { "<!-- ", " -->" } })
-  eq(u({ "# %s" }), { { "# ", "" } })
-  eq(u({ "hello" }), { { "", "" } })
-  eq(u({ "{-%s-}" }), { { "{-", "-}" } })
-  eq(u({ "=begin%s=end" }), { { "=begin", "=end" } })
-  eq(u({ "//%s", "///%s", "//!%s" }), { { "//", "" }, { "///", "" }, { "//!", "" } })
+  local function validate(a, exp) eq(H.unwrap_comment_strings(a), exp) end
+  validate({ "//%s" }, { { "//", "" } })
+  validate({ "/*%s*/" }, { { "/*", "*/" } })
+  validate({ "// %s" }, { { "// ", "" } })
+  validate({ "<!-- %s -->" }, { { "<!-- ", " -->" } })
+  validate({ "# %s" }, { { "# ", "" } })
+  validate({ "hello" }, { { "", "" } })
+  validate({ "{-%s-}" }, { { "{-", "-}" } })
+  validate({ "=begin%s=end" }, { { "=begin", "=end" } })
+  validate({ "//%s", "///%s", "//!%s" }, { { "//", "" }, { "///", "" }, { "//!", "" } })
 end
 
 T["base"]["next_visible_column"] = function()
-  local n = H.next_visible_column
-  eq(n(0, string.byte(" "), 4), 1)
-  eq(n(1, string.byte(" "), 4), 2)
-  eq(n(0, string.byte("\t"), 4), 4)
-  eq(n(3, string.byte("\t"), 4), 4)
-  eq(n(4, string.byte("\t"), 4), 8)
+  local function validate(col, byte, tab, exp) eq(H.next_visible_column(col, byte, tab), exp) end
+  validate(0, string.byte(" "), 4, 1)
+  validate(1, string.byte(" "), 4, 2)
+  validate(0, string.byte("\t"), 4, 4)
+  validate(3, string.byte("\t"), 4, 4)
+  validate(4, string.byte("\t"), 4, 8)
 end
 
 T["base"]["to_inclusive_pos"] = function()
-  local f = function(row, col)
-    return child.lua_func(
-      function(pos) return { require("celeste_comment").H.to_inclusive_pos(0, pos[1], pos[2]) } end,
-      { row, col }
+  local function validate(row, col, exp)
+    eq(
+      child.lua_func(
+        function(pos) return { require("celeste_comment").H.to_inclusive_pos(0, pos[1], pos[2]) } end,
+        { row, col }
+      ),
+      exp
     )
   end
 
-  child.o.selection = "exclusive"
+  set_context({ o = { selection = "exclusive" } })
   set_lines({ "a你b", "cd", "" })
-  eq(f(0, 4), { 0, 3 }) -- boundary end
-  eq(f(0, 5), { 0, 4 }) -- eol
-  eq(f(0, 99), { 0, 4 }) -- beyond
-  eq(f(0, 2), { 0, 3 }) -- mid
-  eq(f(0, 1), { 0, 0 }) -- before_cjk
-  eq(f(0, 0), { 0, 0 }) -- origin
-  eq(f(1, 0), { 0, 4 }) -- prev line
-  eq(f(2, 0), { 1, 1 }) -- prev line ascii
-  eq(f(2, 3), { 2, 0 }) -- empty line
+  validate(0, 4, { 0, 3 }) -- boundary end
+  validate(0, 5, { 0, 4 }) -- eol
+  validate(0, 99, { 0, 4 }) -- beyond
+  validate(0, 2, { 0, 3 }) -- mid
+  validate(0, 1, { 0, 0 }) -- before_cjk
+  validate(0, 0, { 0, 0 }) -- origin
+  validate(1, 0, { 0, 4 }) -- prev line
+  validate(2, 0, { 1, 1 }) -- prev line ascii
+  validate(2, 3, { 2, 0 }) -- empty line
 end
 
 T["base"]["find_insert_offset"] = function()
-  local f = H.find_insert_offset
-  eq(f("  code", 2, 0, 4), 0)
-  eq(f("  code", 2, 1, 4), 1)
-  eq(f("  code", 2, 2, 4), 2)
-  eq(f("\tcode", 1, 0, 4), 0)
-  eq(f("\tcode", 1, 1, 4), 0)
-  eq(f("\tcode", 1, 4, 4), 1)
-  eq(f("    code", 4, 2, 4), 2)
-  eq(f(" \t code", 3, 3, 4), 1)
+  local function validate(line, limit, col, size, exp) eq(H.find_insert_offset(line, limit, col, size), exp) end
+  validate("  code", 2, 0, 4, 0)
+  validate("  code", 2, 1, 4, 1)
+  validate("  code", 2, 2, 4, 2)
+  validate("\tcode", 1, 0, 4, 0)
+  validate("\tcode", 1, 1, 4, 0)
+  validate("\tcode", 1, 4, 4, 1)
+  validate("    code", 4, 2, 4, 2)
+  validate(" \t code", 3, 3, 4, 1)
 end
 
 T["base"]["make_pattern_case_insensitive"] = function()
-  local f = H.make_pattern_case_insensitive
-  eq(f("rem"), "[rR][eE][mM]")
-  eq(f("REM"), "[rR][eE][mM]")
-  eq(f("/%*"), "/%*")
-  eq(f(""), "")
-  eq(("REM hello"):find("^%s*" .. f(vim.pesc("rem"))), 1)
-  eq(("rem hello"):find("^%s*" .. f(vim.pesc("rem"))), 1)
-  eq(("  ReM hello"):find("^%s*" .. f(vim.pesc("rem"))), 1)
-  eq(("nope"):find("^%s*" .. f(vim.pesc("rem"))), nil)
-  local i, c = ("  REM hello"):match("^(%s*)" .. f(vim.pesc("rem")) .. "(.*)")
-  eq(i, "  ")
-  eq(c, " hello")
+  local function pattern(s) return H.make_pattern_case_insensitive(vim.pesc(s)) end
+  local function validate(a, exp) eq(H.make_pattern_case_insensitive(a), exp) end
+  local function validate_find(line, exp) eq(line:find("^%s*" .. pattern("rem")), exp) end
+  local function validate_match(line, exp) eq({ line:match("^(%s*)" .. pattern("rem") .. "(.*)") }, exp) end
+
+  validate("rem", "[rR][eE][mM]")
+  validate("REM", "[rR][eE][mM]")
+  validate("/%*", "/%*")
+  validate("", "")
+
+  validate_find("REM hello", 1)
+  validate_find("rem hello", 1)
+  validate_find("  ReM hello", 1)
+  validate_find("nope", nil)
+
+  validate_match("  REM hello", { "  ", " hello" })
 end
 
 T["base"]["skip_whitespace"] = function()
-  local f = H.skip_whitespace
+  local function validate(line, pos, max, dir, exp) eq(H.skip_whitespace(line, pos, max, dir), exp) end
   -- forward
-  eq(f("  abc", 3, 5, 1), 3)
-  eq(f("  abc", 1, 2, 1), 3)
-  eq(f("  abc", 1, 1, 1), 2)
-  eq(f("\t\tabc", 1, 2, 1), 3)
-  eq(f("abc", 1, 5, 1), 1)
-  eq(f("", 1, 5, 1), 1)
+  validate("  abc", 3, 5, 1, 3)
+  validate("  abc", 1, 2, 1, 3)
+  validate("  abc", 1, 1, 1, 2)
+  validate("\t\tabc", 1, 2, 1, 3)
+  validate("abc", 1, 5, 1, 1)
+  validate("", 1, 5, 1, 1)
   -- backward
-  eq(f("abc  ", 5, 3, -1), 3)
-  eq(f("abc  ", 5, 2, -1), 3)
-  eq(f("abc\t\t", 5, 2, -1), 3)
-  eq(f("abc", 3, 5, -1), 3)
+  validate("abc  ", 5, 3, -1, 3)
+  validate("abc  ", 5, 2, -1, 3)
+  validate("abc\t\t", 5, 2, -1, 3)
+  validate("abc", 3, 5, -1, 3)
   -- mix
-  eq(f(" \t x", 1, 3, 1), 4)
-  eq(f("x \t ", 4, 3, -1), 1)
+  validate(" \t x", 1, 3, 1, 4)
+  validate("x \t ", 4, 3, -1, 1)
 end
 
 T["base"]["shrink_region"] = function()
-  local s = H.shrink_region
+  local function validate(lines, range, exp) eq(H.shrink_region(lines, range), exp) end
   -- single line, no padding
-  eq(s({ "abc" }, { 0, 0, 0, 2 }), { 0, 0, 0, 2 })
+  validate({ "abc" }, { 0, 0, 0, 2 }, { 0, 0, 0, 2 })
   -- single line, leading spaces
-  eq(s({ "  abc" }, { 0, 0, 0, 4 }), { 0, 2, 0, 4 })
+  validate({ "  abc" }, { 0, 0, 0, 4 }, { 0, 2, 0, 4 })
   -- single line, leading+trailing spaces
-  eq(s({ "  abc  " }, { 0, 0, 0, 6 }), { 0, 2, 0, 4 })
+  validate({ "  abc  " }, { 0, 0, 0, 6 }, { 0, 2, 0, 4 })
   -- all whitespace
-  eq(s({ "   ", "  " }, { 0, 0, 1, 1 }), nil)
+  validate({ "   ", "  " }, { 0, 0, 1, 1 }, nil)
   -- multi-line, first line blank, last line blank
-  eq(s({ "", "  a", "b  ", "" }, { 0, 0, 3, 1 }), { 1, 2, 2, 0 })
+  validate({ "", "  a", "b  ", "" }, { 0, 0, 3, 1 }, { 1, 2, 2, 0 })
   -- only on first line
-  eq(s({ "  x", "", "" }, { 0, 0, 2, 0 }), { 0, 2, 0, 2 })
+  validate({ "  x", "", "" }, { 0, 0, 2, 0 }, { 0, 2, 0, 2 })
   -- only on last line
-  eq(s({ "", "", "y  " }, { 0, 0, 2, 3 }), { 2, 0, 2, 0 })
+  validate({ "", "", "y  " }, { 0, 0, 2, 3 }, { 2, 0, 2, 0 })
   -- selection has leading+trailing whitespace
-  eq(s({ "  /* 1 */  " }, { 0, 0, 0, 10 }), { 0, 2, 0, 8 })
+  validate({ "  /* 1 */  " }, { 0, 0, 0, 10 }, { 0, 2, 0, 8 })
   -- selection already within content
-  eq(s({ "  /* 1 */  " }, { 0, 2, 0, 8 }), { 0, 2, 0, 8 })
+  validate({ "  /* 1 */  " }, { 0, 2, 0, 8 }, { 0, 2, 0, 8 })
   -- selecting just subset of content
-  eq(s({ "  /* 1 */  " }, { 0, 3, 0, 7 }), { 0, 3, 0, 7 })
+  validate({ "  /* 1 */  " }, { 0, 3, 0, 7 }, { 0, 3, 0, 7 })
   -- multi-line both lines with padding
-  eq(s({ "  a  ", "  b  " }, { 0, 0, 1, 5 }), { 0, 2, 1, 2 })
+  validate({ "  a  ", "  b  " }, { 0, 0, 1, 5 }, { 0, 2, 1, 2 })
   -- multi-line, selection mid-content on each line
-  eq(s({ "  a  ", "  b  " }, { 0, 2, 1, 3 }), { 0, 2, 1, 2 })
+  validate({ "  a  ", "  b  " }, { 0, 2, 1, 3 }, { 0, 2, 1, 2 })
   -- only first line selected
-  eq(s({ "  a  " }, { 0, 0, 0, 4 }), { 0, 2, 0, 2 })
+  validate({ "  a  " }, { 0, 0, 0, 4 }, { 0, 2, 0, 2 })
   -- blank first line, content on subsequent lines
-  eq(s({ "", "a" }, { 0, 0, 1, 0 }), { 1, 0, 1, 0 })
+  validate({ "", "a" }, { 0, 0, 1, 0 }, { 1, 0, 1, 0 })
   -- content with blank line between
-  eq(s({ "a", "", "c" }, { 0, 0, 2, 0 }), { 0, 0, 2, 0 })
+  validate({ "a", "", "c" }, { 0, 0, 2, 0 }, { 0, 0, 2, 0 })
   -- single non-whitespace char
-  eq(s({ "x" }, { 0, 0, 0, 0 }), { 0, 0, 0, 0 })
+  validate({ "x" }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 })
   -- tab character in whitespace
-  eq(s({ "\tx" }, { 0, 0, 0, 1 }), { 0, 1, 0, 1 })
+  validate({ "\tx" }, { 0, 0, 0, 1 }, { 0, 1, 0, 1 })
   -- multiple blank lines before content
-  eq(s({ "", "", "  a  " }, { 0, 0, 2, 4 }), { 2, 2, 2, 2 })
+  validate({ "", "", "  a  " }, { 0, 0, 2, 4 }, { 2, 2, 2, 2 })
   -- selection ends at whitespace after last content
-  eq(s({ "a  ", "b" }, { 0, 0, 1, 0 }), { 0, 0, 1, 0 })
+  validate({ "a  ", "b" }, { 0, 0, 1, 0 }, { 0, 0, 1, 0 })
   -- empty lines array
-  eq(s({}, { 0, 0, 0, 0 }), nil)
+  validate({}, { 0, 0, 0, 0 }, nil)
   -- rows reversed
-  eq(s({ "a" }, { 1, 0, 0, 0 }), nil)
+  validate({ "a" }, { 1, 0, 0, 0 }, nil)
   -- single line, scol > ecol
-  eq(s({ "a" }, { 0, 2, 0, 0 }), nil)
+  validate({ "a" }, { 0, 2, 0, 0 }, nil)
   -- multi-line, rows ok but single-line col reversed
-  eq(s({ "a" }, { 0, 2, 0, 2 }), nil)
+  validate({ "a" }, { 0, 2, 0, 2 }, nil)
 end
 
 T["base"]["match_byte"] = function()
-  local mb = H.match_byte
+  local function validate(sa, i, sb, j, dir, exp, ci) eq(H.match_byte(sa, i, sb, j, dir, ci or false), exp) end
   -- forward exact match
-  eq(mb("abc", 0, "abc", 0, 1, false), 3)
-  eq(mb("abc", 0, "ab", 0, 1, false), 2)
-  eq(mb("abc", 1, "bc", 0, 1, false), 2)
+  validate("abc", 0, "abc", 0, 1, 3)
+  validate("abc", 0, "ab", 0, 1, 2)
+  validate("abc", 1, "bc", 0, 1, 2)
   -- forward partial match (fails partway)
-  eq(mb("abc", 0, "abd", 0, 1, false), 2) -- "ab" matches, then "c" != "d"
-  eq(mb("abc", 0, "x", 0, 1, false), 0)
+  validate("abc", 0, "abd", 0, 1, 2) -- "ab" matches, then "c" != "d"
+  validate("abc", 0, "x", 0, 1, 0)
   -- forward past end of sa
-  eq(mb("ab", 0, "abc", 0, 1, false), 2) -- "ab" matches, can't read more
-  eq(mb("ab", 2, "a", 0, 1, false), 0)
+  validate("ab", 0, "abc", 0, 1, 2) -- "ab" matches, can't read more
+  validate("ab", 2, "a", 0, 1, 0)
   -- forward offset in sb
-  eq(mb("abc", 0, "xabc", 1, 1, false), 3) -- sb from pos 1 = "abc"
-  eq(mb("abc", 1, "xbc", 1, 1, false), 2)
+  validate("abc", 0, "xabc", 1, 1, 3) -- sb from pos 1 = "abc"
+  validate("abc", 1, "xbc", 1, 1, 2)
   -- forward ci
-  eq(mb("ABC", 0, "abc", 0, 1, true), 3)
-  eq(mb("aBc", 1, "bC", 0, 1, true), 2)
-  eq(mb("abc", 0, "abD", 0, 1, true), 2) -- "ab" matches, "c" != "D"
+  validate("ABC", 0, "abc", 0, 1, 3, true)
+  validate("aBc", 1, "bC", 0, 1, 2, true)
+  validate("abc", 0, "abD", 0, 1, 2, true) -- "ab" matches, "c" != "D"
   -- backward exact match
-  eq(mb("abc", 2, "cb", 0, -1, false), 2)
-  eq(mb("abc", 2, "cba", 0, -1, false), 3)
-  eq(mb("a #", 2, "# ", 0, -1, false), 2)
+  validate("abc", 2, "cb", 0, -1, 2)
+  validate("abc", 2, "cba", 0, -1, 3)
+  validate("a #", 2, "# ", 0, -1, 2)
   -- backward partial match (fails partway)
-  eq(mb("a #", 2, "# ", 0, -1, false), 2) -- pos 2,1 in "a #" = "# "
-  eq(mb("a #", 2, "# x", 0, -1, false), 2) -- "# " matches, sb longer than matched
-  eq(mb("a b", 2, " #", 0, -1, false), 0) -- "b" != " "
+  validate("a #", 2, "# ", 0, -1, 2) -- pos 2,1 in "a #" = "# "
+  validate("a #", 2, "# x", 0, -1, 2) -- "# " matches, sb longer than matched
+  validate("a b", 2, " #", 0, -1, 0) -- "b" != " "
   -- backward past start of sa
-  eq(mb("ab", 0, "a", 0, -1, false), 1)
-  eq(mb("ab", 0, "x", 0, -1, false), 0)
+  validate("ab", 0, "a", 0, -1, 1)
+  validate("ab", 0, "x", 0, -1, 0)
   -- backward ci
-  eq(mb("ABC", 2, "cb", 0, -1, true), 2)
-  eq(mb("aBc", 2, "cB", 0, -1, true), 2)
+  validate("ABC", 2, "cb", 0, -1, 2, true)
+  validate("aBc", 2, "cB", 0, -1, 2, true)
   -- forward empty sb
-  eq(mb("abc", 1, "", 0, 1, false), 0)
+  validate("abc", 1, "", 0, 1, 0)
   -- backward empty sb
-  eq(mb("abc", 1, "", 0, -1, false), 0)
+  validate("abc", 1, "", 0, -1, 0)
   -- mixed chars forward
-  eq(mb("a1b2c", 1, "1b2", 0, 1, false), 3)
-  eq(mb("/* comment */", 0, "/* ", 0, 1, false), 3)
+  validate("a1b2c", 1, "1b2", 0, 1, 3)
+  validate("/* comment */", 0, "/* ", 0, 1, 3)
   -- tab vs space (exact match, no whitespace skipping)
-  eq(mb("#\ttext", 0, "#\t", 0, 1, false), 2)
-  eq(mb("#\ttext", 1, " ", 0, 1, false), 0) -- tab != space
-  eq(mb("# text", 1, " ", 0, 1, false), 1)
-  eq(mb("# text", 1, "\t", 0, 1, false), 0) -- space != tab
+  validate("#\ttext", 0, "#\t", 0, 1, 2)
+  validate("#\ttext", 1, " ", 0, 1, 0) -- tab != space
+  validate("# text", 1, " ", 0, 1, 1)
+  validate("# text", 1, "\t", 0, 1, 0) -- space != tab
   -- unicode (byte comparison)
-  eq(mb("f", 0, "f", 0, 1, false), 1)
-  eq(mb("ü", 0, "ü", 0, 1, false), 2)
+  validate("f", 0, "f", 0, 1, 1)
+  validate("ü", 0, "ü", 0, 1, 2)
 end
 
 T["base"]["match_line_comment"] = function()
-  local csi = H.make_csi({ { "//", "" }, { "///", "" }, { "//!", "" } })
+  local function validate(line, off, expected, opts)
+    opts = opts or {}
+    local cms = opts.cms or { { "//", "" }, { "///", "" }, { "//!", "" } }
+    local csi = H.make_csi(cms, opts.pad ~= nil and { pad = opts.pad } or nil)
+    local r = H.match_line_comment(line, off, csi, {
+      check_only = opts.check_only,
+      check_will_blank = opts.check_will_blank,
+      with_inner = opts.with_inner,
+    })
+    eq(
+      { r.matched, r.lcs_pos, r.rcs_pos, r.will_blank, r.inner },
+      { expected.matched, expected.lcs_pos, expected.rcs_pos, expected.will_blank, expected.inner }
+    )
+  end
+
   -- check_only mode
-  eq(H.match_line_comment("/// doc", 0, csi, { check_only = true }).matched, true)
-  eq(H.match_line_comment("//! note", 0, csi, { check_only = true }).matched, true)
-  eq(H.match_line_comment("// comment", 0, csi, { check_only = true }).matched, true)
-  eq(H.match_line_comment("not a comment", 0, csi, { check_only = true }).matched, false)
+  validate("/// doc", 0, { matched = true }, { check_only = true })
+  validate("//! note", 0, { matched = true }, { check_only = true })
+  validate("// comment", 0, { matched = true }, { check_only = true })
+  validate("not a comment", 0, { matched = false }, { check_only = true })
 
   -- full mode: lcs_pos
-  local r = H.match_line_comment("  /// doc", 1, csi)
-  eq(r.matched, true)
-  eq(r.lcs_pos[1], 1)
-  eq(r.lcs_pos[2], 2)
-  eq(r.rcs_pos, nil)
-
-  r = H.match_line_comment("  //! note", 1, csi)
-  eq(r.matched, true)
-
-  r = H.match_line_comment("  // comment", 1, csi)
-  eq(r.matched, true)
+  validate("  /// doc", 1, { matched = true, lcs_pos = { 1, 2, 4 } })
+  validate("  //! note", 1, { matched = true, lcs_pos = { 1, 2, 4 } })
+  validate("  // comment", 1, { matched = true, lcs_pos = { 1, 2, 3 } })
 
   -- no match
-  eq(H.match_line_comment("  foo", 0, csi).matched, false)
-  eq(H.match_line_comment("  foo", 0, csi, { check_only = true }).matched, false)
+  validate("  foo", 0, { matched = false })
+  validate("  foo", 0, { matched = false }, { check_only = true })
 
   -- single token (backward compat)
-  local csi2 = H.make_csi({ { "//", "" } })
-  eq(H.match_line_comment("// foo", 0, csi2, { check_only = true }).matched, true)
-  eq(H.match_line_comment("/// foo", 0, csi2, { check_only = true }).matched, true)
-  eq(H.match_line_comment("foo", 0, csi2, { check_only = true }).matched, false)
+  validate("// foo", 0, { matched = true }, { cms = { { "//", "" } }, check_only = true })
+  validate("/// foo", 0, { matched = true }, { cms = { { "//", "" } }, check_only = true })
+  validate("foo", 0, { matched = false }, { cms = { { "//", "" } }, check_only = true })
 
   -- rcs-only comment string (%s # style)
-  local csi3 = H.make_csi({ { "", " #" } })
-  eq(H.match_line_comment("line #", 0, csi3, { check_only = true }).matched, true)
-  eq(H.match_line_comment("line # ", 0, csi3, { check_only = true }).matched, true)
-  eq(H.match_line_comment("line", 0, csi3, { check_only = true }).matched, false)
+  validate("line #", 0, { matched = true }, { cms = { { "", " #" } }, check_only = true })
+  validate("line # ", 0, { matched = true }, { cms = { { "", " #" } }, check_only = true })
+  validate("line", 0, { matched = false }, { cms = { { "", " #" } }, check_only = true })
 
   -- rcs-only full mode
-  local r3 = H.match_line_comment("  a # b #", 1, csi3)
-  eq(r3.matched, true)
-  eq(r3.rcs_pos, { 1, 7, 8 })
-  eq(r3.lcs_pos, nil)
+  validate("  a # b #", 1, { matched = true, rcs_pos = { 1, 7, 8 } }, { cms = { { "", " #" } } })
 
   -- rcs-only: line with multiple ##, only last one matched
-  r3 = H.match_line_comment("line ##", 1, csi3)
-  eq(r3.matched, true)
-  eq(r3.rcs_pos, { 1, 6, 6 })
+  validate("line ##", 1, { matched = true, rcs_pos = { 1, 6, 6 } }, { cms = { { "", " #" } } })
 
   -- lcs+rcs with pad
-  local csi4 = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local r4 = H.match_line_comment("  /* hello */", 1, csi4)
-  eq(r4.matched, true)
-  eq(r4.lcs_pos[2], 2)
-  eq(r4.rcs_pos, { 1, 10, 12 })
+  validate(
+    "  /* hello */",
+    1,
+    { matched = true, lcs_pos = { 1, 2, 4 }, rcs_pos = { 1, 10, 12 } },
+    { cms = { { "/*", "*/" } }, pad = true }
+  )
 
   -- lcs+rcs without pad
-  local csi5 = H.make_csi({ { "/*", "*/" } }, { pad = false })
-  local r5 = H.match_line_comment("  /*hello*/", 1, csi5)
-  eq(r5.matched, true)
-  eq(r5.lcs_pos[2], 2)
-  eq(r5.rcs_pos[2], 9)
+  validate(
+    "  /*hello*/",
+    1,
+    { matched = true, lcs_pos = { 1, 2, 3 }, rcs_pos = { 1, 9, 10 } },
+    { cms = { { "/*", "*/" } }, pad = false }
+  )
 
   -- multi-word content after lcs with rcs
-  local csi6 = H.make_csi({ { "// ", "" } })
-  local r6 = H.match_line_comment("  // hello world", 1, csi6)
-  eq(r6.matched, true)
-  eq(r6.lcs_pos[2], 2)
-  eq(r6.rcs_pos, nil)
+  validate("  // hello world", 1, { matched = true, lcs_pos = { 1, 2, 4 } }, { cms = { { "// ", "" } } })
 
   -- tab indentation
-  r6 = H.match_line_comment("\t// indented", 1, csi6)
-  eq(r6.matched, true)
-  eq(r6.lcs_pos[2], 1)
-
-  r6 = H.match_line_comment("// foo", 1, csi6)
-  eq(r6.matched, true)
+  validate("\t// indented", 1, { matched = true, lcs_pos = { 1, 1, 3 } }, { cms = { { "// ", "" } } })
+  validate("// foo", 1, { matched = true, lcs_pos = { 1, 0, 2 } }, { cms = { { "// ", "" } } })
 
   -- lcs+rcs: content with nested lcs pattern
-  local csi7 = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local r7 = H.match_line_comment("  /* a /* b */", 1, csi7)
-  eq(r7.matched, true)
-  eq(r7.lcs_pos, { 1, 2, 4 })
-  eq(r7.rcs_pos, { 1, 11, 13 })
+  validate(
+    "  /* a /* b */",
+    1,
+    { matched = true, lcs_pos = { 1, 2, 4 }, rcs_pos = { 1, 11, 13 } },
+    { cms = { { "/*", "*/" } }, pad = true }
+  )
 
   -- will_blank with check_will_blank
-  local r8 = H.match_line_comment("  //", 1, csi, { check_will_blank = true })
-  eq(r8.matched, true)
-  eq(r8.will_blank, true)
-  r8 = H.match_line_comment("  /// doc", 1, csi, { check_will_blank = true })
-  eq(r8.matched, true)
-  eq(r8.will_blank, false)
+  validate("  //", 1, { matched = true, lcs_pos = { 1, 2, 3 }, will_blank = true }, { check_will_blank = true })
+  validate("  /// doc", 1, { matched = true, lcs_pos = { 1, 2, 4 }, will_blank = false }, { check_will_blank = true })
 
   -- with_inner
-  local csi_inner = H.make_csi({ { "//", "" } }, { pad = true })
-  local i1 = H.match_line_comment("// xxx", 0, csi_inner, { with_inner = true })
-  eq(i1.inner, { 0, 3, 5 })
-  eq(H.match_line_comment("//  abc", 0, csi_inner, { with_inner = true }).inner, { 0, 3, 6 })
+  local inner_opts = { cms = { { "//", "" } }, pad = true, with_inner = true }
+  validate("// xxx", 0, { matched = true, lcs_pos = { 0, 0, 2 }, inner = { 0, 3, 5 } }, inner_opts)
+  validate("//  abc", 0, { matched = true, lcs_pos = { 0, 0, 2 }, inner = { 0, 3, 6 } }, inner_opts)
   -- trailing whitespace preserved
-  eq(H.match_line_comment("// xxx   ", 0, csi_inner, { with_inner = true }).inner, { 0, 3, 8 })
+  validate("// xxx   ", 0, { matched = true, lcs_pos = { 0, 0, 2 }, inner = { 0, 3, 8 } }, inner_opts)
   -- empty content → no inner
-  eq(H.match_line_comment("//", 0, csi_inner, { with_inner = true }).inner, nil)
+  validate("//", 0, { matched = true, lcs_pos = { 0, 0, 1 } }, inner_opts)
 
   -- with_inner: wrapped lcs+rcs
-  local csi_wrap = H.make_csi({ { "<!--", "-->" } }, { pad = true })
-  eq(H.match_line_comment("<!-- xxx -->", 0, csi_wrap, { with_inner = true }).inner, { 0, 5, 7 })
+  validate(
+    "<!-- xxx -->",
+    0,
+    { matched = true, lcs_pos = { 0, 0, 4 }, rcs_pos = { 0, 8, 11 }, inner = { 0, 5, 7 } },
+    { cms = { { "<!--", "-->" } }, pad = true, with_inner = true }
+  )
 
   -- with_inner: rcs-only
-  local csi_rcs = H.make_csi({ { "", " #" } }, { pad = true })
-  eq(H.match_line_comment("line #", 0, csi_rcs, { with_inner = true }).inner, { 0, 0, 3 })
+  validate(
+    "line #",
+    0,
+    { matched = true, rcs_pos = { 0, 4, 5 }, inner = { 0, 0, 3 } },
+    { cms = { { "", " #" } }, pad = true, with_inner = true }
+  )
 
   -- with_inner: insert_space=false respects raw lcs
-  local csi_nopad = H.make_csi({ { "// ", "" } }, { pad = false })
-  eq(H.match_line_comment("//abc", 0, csi_nopad, { with_inner = true }).inner, { 0, 2, 4 })
+  validate(
+    "//abc",
+    0,
+    { matched = true, lcs_pos = { 0, 0, 1 }, inner = { 0, 2, 4 } },
+    { cms = { { "// ", "" } }, pad = false, with_inner = true }
+  )
 end
 
 T["base"]["compute_pos"] = function()
-  local p = make_pos
-  local pos = p(0, 0, 2)
+  local xs = { "x", "x", "x", "x", "x" }
+  local function validate(pos, edits, expected, opts)
+    opts = opts or {}
+    local lines = opts.lines or { "hello" }
+    local range = opts.range or { 0, 0, 0, 3 }
+    local csi = opts.csi or { orcs = "" }
+    eq(c_pos(make_pos(0, pos[1], pos[2]), edits, lines, range, csi), make_pos(0, expected[1], expected[2]))
+  end
 
   -- insertion on same row, cursor after insert point
-  eq(ccp(pos, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }), p(0, 0, 4))
+  validate({ 0, 2 }, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { 0, 4 })
 
   -- insertion on same row, cursor at insert point
-  eq(
-    ccp(p(0, 0, 0), { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 2)
-  )
+  validate({ 0, 0 }, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { 0, 2 })
 
   -- insertion on same row, cursor before insert point
-  eq(
-    ccp(p(0, 0, 0), { { range = { 0, 3, 0, 3 }, text = { "//" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 0)
-  )
+  validate({ 0, 0 }, { { range = { 0, 3, 0, 3 }, text = { "//" } } }, { 0, 0 })
 
   -- insertion on different row, no col shift
-  eq(
-    ccp(p(0, 1, 2), { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 1, 2)
-  )
+  validate({ 1, 2 }, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { 1, 2 }, { lines = xs, range = { 0 } })
 
   -- deletion, cursor after deleted range
-  eq(
-    ccp(p(0, 0, 5), { { range = { 0, 0, 0, 3 }, text = { "" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 2)
-  )
+  validate({ 0, 5 }, { { range = { 0, 0, 0, 3 }, text = { "" } } }, { 0, 2 })
 
   -- deletion, cursor within deleted range → clamped to start
-  eq(
-    ccp(p(0, 0, 2), { { range = { 0, 0, 0, 3 }, text = { "" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 0)
-  )
+  validate({ 0, 2 }, { { range = { 0, 0, 0, 3 }, text = { "" } } }, { 0, 0 })
 
   -- deletion, cursor before deleted range
-  eq(
-    ccp(p(0, 0, 0), { { range = { 0, 3, 0, 5 }, text = { "" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 0)
-  )
+  validate({ 0, 0 }, { { range = { 0, 3, 0, 5 }, text = { "" } } }, { 0, 0 })
 
   -- multi-line replacement on same row, cursor after end
-  eq(
-    ccp(
-      p(0, 0, 6),
-      { { range = { 0, 3, 0, 5 }, text = { "longer", "b", "c" } } },
-      { "hello" },
-      { 0, 0, 0, 3 },
-      { orcs = "" }
-    ),
-    p(0, 2, 10)
-  )
+  validate({ 0, 6 }, { { range = { 0, 3, 0, 5 }, text = { "longer", "b", "c" } } }, { 2, 10 })
 
   -- multi-line replacement on same row, cursor inside replaced range
-  eq(
-    ccp(p(0, 0, 4), { { range = { 0, 3, 0, 5 }, text = { "/*", "*/" } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 1, 4)
-  )
+  validate({ 0, 4 }, { { range = { 0, 3, 0, 5 }, text = { "/*", "*/" } } }, { 1, 4 })
 
   -- multi-line replacement before cursor row
-  eq(
-    ccp(
-      p(0, 2, 2),
-      { { range = { 0, 0, 0, 0 }, text = { "a", "b" } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
-    p(0, 3, 2)
-  )
+  validate({ 2, 2 }, { { range = { 0, 0, 0, 0 }, text = { "a", "b" } } }, { 3, 2 }, { lines = xs, range = { 0 } })
 
   -- multi-line replacement after cursor row
-  eq(
-    ccp(
-      p(0, 0, 2),
-      { { range = { 3, 0, 3, 0 }, text = { "a", "b" } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
-    p(0, 0, 2)
-  )
+  validate({ 0, 2 }, { { range = { 3, 0, 3, 0 }, text = { "a", "b" } } }, { 0, 2 }, { lines = xs, range = { 0 } })
 
   -- multiple edits: insert + delete
-  eq(
-    ccp(p(0, 0, 5), {
-      { range = { 0, 3, 0, 3 }, text = { "//" } },
-      { range = { 0, 0, 0, 2 }, text = { "" } },
-    }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 5)
-  )
+  validate({ 0, 5 }, {
+    { range = { 0, 3, 0, 3 }, text = { "//" } },
+    { range = { 0, 0, 0, 2 }, text = { "" } },
+  }, { 0, 5 })
 
   -- multiple edits: two inserts
-  eq(
-    ccp(p(0, 0, 3), {
-      { range = { 0, 0, 0, 0 }, text = { "# " } },
-      { range = { 0, 5, 0, 5 }, text = { " //" } },
-    }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 5)
-  )
+  validate({ 0, 3 }, {
+    { range = { 0, 0, 0, 0 }, text = { "# " } },
+    { range = { 0, 5, 0, 5 }, text = { " //" } },
+  }, { 0, 5 })
 
   -- sentinel insert 1 line before cursor
-  eq(
-    ccp(
-      p(0, 1, 0),
-      { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
-    p(0, 2, 0)
-  )
+  validate({ 1, 0 }, { { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { 2, 0 }, { lines = xs, range = { 0 } })
 
   -- sentinel insert 1 line on cursor row
-  eq(
-    ccp(
-      p(0, 0, 0),
-      { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
-    p(0, 1, 0)
-  )
+  validate({ 0, 0 }, { { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { 1, 0 }, { lines = xs, range = { 0 } })
 
   -- sentinel insert after cursor row
-  eq(
-    ccp(
-      p(0, 0, 0),
-      { { range = { 2, -1, 2, -1 }, text = { "/*" } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
-    p(0, 0, 0)
-  )
+  validate({ 0, 0 }, { { range = { 2, -1, 2, -1 }, text = { "/*" } } }, { 0, 0 }, { lines = xs, range = { 0 } })
 
   -- sentinel delete before cursor
-  eq(
-    ccp(p(0, 2, 0), { { range = { 0, -1, 1, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 1, 0)
-  )
+  validate({ 2, 0 }, { { range = { 0, -1, 1, -1 }, text = {} } }, { 1, 0 }, { lines = xs, range = { 0 } })
 
   -- multiple edits: delete + insert (reversed order)
-  eq(
-    ccp(p(0, 0, 5), {
-      { range = { 0, 0, 0, 2 }, text = { "" } },
-      { range = { 0, 3, 0, 3 }, text = { "//" } },
-    }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" }),
-    p(0, 0, 5)
-  )
+  validate({ 0, 5 }, {
+    { range = { 0, 0, 0, 2 }, text = { "" } },
+    { range = { 0, 3, 0, 3 }, text = { "//" } },
+  }, { 0, 5 })
 
   -- multiple edits: two multi-line inserts stacking
-  eq(
-    ccp(p(0, 4, 0), {
-      { range = { 0, 0, 0, 0 }, text = { "a", "b" } },
-      { range = { 1, 0, 1, 0 }, text = { "c", "d" } },
-    }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 6, 0)
-  )
+  validate({ 4, 0 }, {
+    { range = { 0, 0, 0, 0 }, text = { "a", "b" } },
+    { range = { 1, 0, 1, 0 }, text = { "c", "d" } },
+  }, { 6, 0 }, { lines = xs, range = { 0 } })
 
   -- multiple edits: insert on same row + multi-line before row
-  eq(
-    ccp(p(0, 2, 2), {
-      { range = { 1, 0, 1, 0 }, text = { "x", "y" } },
-      { range = { 2, 0, 2, 0 }, text = { "# " } },
-    }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 3, 4)
-  )
+  validate({ 2, 2 }, {
+    { range = { 1, 0, 1, 0 }, text = { "x", "y" } },
+    { range = { 2, 0, 2, 0 }, text = { "# " } },
+  }, { 3, 4 }, { lines = xs, range = { 0 } })
 
   -- sentinel insert 2 lines before cursor
-  eq(
-    ccp(
-      p(0, 1, 0),
-      { { range = { 0, -1, 0, -1 }, text = { "a", "b" } } },
-      { "x", "x", "x", "x", "x" },
-      { 0 },
-      { orcs = "" }
-    ),
-    p(0, 3, 0)
-  )
+  validate({ 1, 0 }, { { range = { 0, -1, 0, -1 }, text = { "a", "b" } } }, { 3, 0 }, { lines = xs, range = { 0 } })
 
   -- sentinel delete 1 line on cursor row
-  eq(
-    ccp(p(0, 0, 0), { { range = { 0, -1, 1, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 0, 0)
-  )
+  validate({ 0, 0 }, { { range = { 0, -1, 1, -1 }, text = {} } }, { 0, 0 }, { lines = xs, range = { 0 } })
 
   -- sentinel delete 1 line after cursor
-  eq(
-    ccp(p(0, 0, 0), { { range = { 2, -1, 3, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 0, 0)
-  )
+  validate({ 0, 0 }, { { range = { 2, -1, 3, -1 }, text = {} } }, { 0, 0 }, { lines = xs, range = { 0 } })
 
   -- sentinel delete 2 lines before cursor
-  eq(
-    ccp(p(0, 3, 0), { { range = { 0, -1, 2, -1 }, text = {} } }, { "x", "x", "x", "x", "x" }, { 0 }, { orcs = "" }),
-    p(0, 1, 0)
-  )
+  validate({ 3, 0 }, { { range = { 0, -1, 2, -1 }, text = {} } }, { 1, 0 }, { lines = xs, range = { 0 } })
 
   -- EOL + RHS insert: skip shift
-  eq(
-    ccp(p(0, 0, 7), { { range = { 0, 7, 0, 7 }, text = { " */" } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
-    p(0, 0, 7)
+  validate(
+    { 0, 7 },
+    { { range = { 0, 7, 0, 7 }, text = { " */" } } },
+    { 0, 7 },
+    { lines = { "  hello" }, range = { 0, 0, 0, 7 }, csi = { orcs = " */" } }
   )
 
   -- EOL + LHS insert: normal shift
-  eq(
-    ccp(p(0, 0, 7), { { range = { 0, 7, 0, 7 }, text = { "/* " } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
-    p(0, 0, 10)
+  validate(
+    { 0, 7 },
+    { { range = { 0, 7, 0, 7 }, text = { "/* " } } },
+    { 0, 10 },
+    { lines = { "  hello" }, range = { 0, 0, 0, 7 }, csi = { orcs = " */" } }
   )
 
   -- EOL + RHS with orcs="" (LHS-only): normal shift
-  eq(
-    ccp(p(0, 0, 7), { { range = { 0, 7, 0, 7 }, text = { "// " } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = "" }),
-    p(0, 0, 10)
+  validate(
+    { 0, 7 },
+    { { range = { 0, 7, 0, 7 }, text = { "// " } } },
+    { 0, 10 },
+    { lines = { "  hello" }, range = { 0, 0, 0, 7 } }
   )
 
   -- non-EOL + RHS insert: no shift (cursor before insert point)
-  eq(
-    ccp(p(0, 0, 3), { { range = { 0, 7, 0, 7 }, text = { " */" } } }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
-    p(0, 0, 3)
+  validate(
+    { 0, 3 },
+    { { range = { 0, 7, 0, 7 }, text = { " */" } } },
+    { 0, 3 },
+    { lines = { "  hello" }, range = { 0, 0, 0, 7 }, csi = { orcs = " */" } }
   )
 
   -- EOL + LHS+RHS: LHS shifts, RHS skips
-  eq(
-    ccp(p(0, 0, 7), {
-      { range = { 0, 2, 0, 2 }, text = { "/* " } },
-      { range = { 0, 7, 0, 7 }, text = { " */" } },
-    }, { "  hello" }, { 0, 0, 0, 7 }, { orcs = " */" }),
-    p(0, 0, 10)
-  )
+  validate({ 0, 7 }, {
+    { range = { 0, 2, 0, 2 }, text = { "/* " } },
+    { range = { 0, 7, 0, 7 }, text = { " */" } },
+  }, { 0, 10 }, { lines = { "  hello" }, range = { 0, 0, 0, 7 }, csi = { orcs = " */" } })
 end
 
 T["base"]["compute_state"] = function()
-  local p = make_pos
-  local lines_d = { "x", "x", "x", "x", "x" }
-  local range_d = { 0 }
-  local csi_d = { orcs = "" }
-  local function cr(row, col) return { ncursor = p(0, row, col) } end
+  local xs = { "x", "x", "x", "x", "x" }
+  local function validate(st, edits, expected, opts)
+    local function P(rc) return rc and make_pos(0, rc[1], rc[2]) end
+    local cs = { ncursor = P(st.cursor), nanchor = P(st.anchor) }
+    opts = opts or {}
+    local lines = opts.lines or { "hello" }
+    local range = opts.range or { 0, 0, 0, 3 }
+    local csi = opts.csi or { orcs = "" }
+    c_state(cs, edits, lines, range, csi, opts.ctype, opts.motion)
+    eq({ cs.ncursor, cs.nanchor }, { P(expected.cursor), P(expected.anchor) })
+  end
 
   -- nil state
   local cs
-  ccs(nil, {}, lines_d, range_d, csi_d)
+  c_state(nil, {}, xs, { 0 }, { orcs = "" })
   eq(cs, nil)
 
   -- empty edits
-  cs = cr(0, 3)
-  ccs(cs, {}, lines_d, range_d, csi_d)
-  eq(cs, cr(0, 3))
+  validate({ cursor = { 0, 3 } }, {}, { cursor = { 0, 3 } }, { lines = xs, range = { 0 } })
 
   -- cursor only, no end_pos
-  cs = cr(0, 3)
-  ccs(cs, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
-  eq(cs.ncursor, p(0, 0, 5))
-  eq(cs.nanchor, nil)
+  validate({ cursor = { 0, 3 } }, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { cursor = { 0, 5 } })
 
   -- cursor + end_pos on same line
-  local s2 = { ncursor = p(0, 0, 2), nanchor = p(0, 0, 5) }
-  ccs(s2, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello" }, { 0, 0, 0, 3 }, { orcs = "" })
-  eq(s2.ncursor, p(0, 0, 4))
-  eq(s2.nanchor, p(0, 0, 7))
+  validate(
+    { cursor = { 0, 2 }, anchor = { 0, 5 } },
+    { { range = { 0, 0, 0, 0 }, text = { "# " } } },
+    { cursor = { 0, 4 }, anchor = { 0, 7 } }
+  )
 
   -- cursor + end_pos on different lines, both shifted
-  local s3 = { ncursor = p(0, 0, 2), nanchor = p(0, 1, 4) }
-  ccs(s3, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "hello", "world" }, { 0, 0, 1, 5 }, { orcs = "" })
-  eq(s3.ncursor, p(0, 0, 4))
-  eq(s3.nanchor, p(0, 1, 4))
+  validate(
+    { cursor = { 0, 2 }, anchor = { 1, 4 } },
+    { { range = { 0, 0, 0, 0 }, text = { "# " } } },
+    { cursor = { 0, 4 }, anchor = { 1, 4 } },
+    { lines = { "hello", "world" }, range = { 0, 0, 1, 5 } }
+  )
 
   -- cursor + end_pos with multiple edits
-  local s4 = { ncursor = p(0, 0, 3), nanchor = p(0, 0, 5) }
-  ccs(s4, {
+  validate({ cursor = { 0, 3 }, anchor = { 0, 5 } }, {
     { range = { 0, 0, 0, 0 }, text = { "# " } },
     { range = { 0, 5, 0, 5 }, text = { " //" } },
-  }, { "hello" }, { 0, 0, 0, 3 }, { orcs = " //" })
-  eq(s4.ncursor, p(0, 0, 5))
-  eq(s4.nanchor, p(0, 0, 7))
+  }, { cursor = { 0, 5 }, anchor = { 0, 7 } }, { csi = { orcs = " //" } })
 
   -- cursor + end_pos where end_pos is on a different row with line insert
-  local s5 = { ncursor = p(0, 1, 0), nanchor = p(0, 2, 0) }
-  ccs(s5, { { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { "a", "b", "c" }, { 0, 0, 2, 0 }, { orcs = "" })
-  eq(s5.ncursor, p(0, 2, 0))
-  eq(s5.nanchor, p(0, 3, 0))
+  validate(
+    { cursor = { 1, 0 }, anchor = { 2, 0 } },
+    { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
+    { cursor = { 2, 0 }, anchor = { 3, 0 } },
+    { lines = { "a", "b", "c" }, range = { 0, 0, 2, 0 } }
+  )
 
   -- block comment char-wise: RHS end_pos lands at content end
   -- `12--[[ 3456789\n123 ]]456789`, selection {0,2,1,5}, uncomment
-  local s6 = { ncursor = p(0, 0, 2), nanchor = p(0, 1, 5) }
-  ccs(s6, {
+  local block_edits = {
     { range = { 0, 2, 0, 7 }, text = { "" } },
     { range = { 1, 3, 1, 6 }, text = { "" } },
-  }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "char")
+  }
+  local block_lines = { "12--[[ 3456789", "123 ]]456789" }
   -- cursor on `--` → content start (col 2); end_pos on `]]` → last content char (col 2)
-  eq(s6.ncursor, p(0, 0, 2))
-  eq(s6.nanchor, p(0, 1, 2))
+  validate(
+    { cursor = { 0, 2 }, anchor = { 1, 5 } },
+    block_edits,
+    { cursor = { 0, 2 }, anchor = { 1, 2 } },
+    { lines = block_lines, range = { 0, 2, 1, 5 }, csi = { orcs = " ]]" }, ctype = M.CMT.kBlock, motion = "char" }
+  )
 
   -- same block uncomment but line-wise motion → RHS keeps default clamp
-  local s7 = { ncursor = p(0, 0, 2), nanchor = p(0, 1, 5) }
-  ccs(s7, {
-    { range = { 0, 2, 0, 7 }, text = { "" } },
-    { range = { 1, 3, 1, 6 }, text = { "" } },
-  }, { "12--[[ 3456789", "123 ]]456789" }, { 0, 2, 1, 5 }, { orcs = " ]]" }, M.CMT.kBlock, "line")
-  eq(s7.ncursor, p(0, 0, 2))
-  eq(s7.nanchor, p(0, 1, 3))
+  validate(
+    { cursor = { 0, 2 }, anchor = { 1, 5 } },
+    block_edits,
+    { cursor = { 0, 2 }, anchor = { 1, 3 } },
+    { lines = block_lines, range = { 0, 2, 1, 5 }, csi = { orcs = " ]]" }, ctype = M.CMT.kBlock, motion = "line" }
+  )
 end
 
 T["base"]["make_csi"] = function()
+  local function validate(cms, opts, exp)
+    local csi = H.make_csi(cms, opts)
+    assert(csi, "expected csi")
+    local got = {
+      n = #csi.pairs,
+      traw = vim.tbl_map(function(p) return p.traw[1] end, csi.pairs),
+      tesc = vim.tbl_map(function(p) return p.tesc[1] end, csi.pairs),
+      tout = vim.tbl_map(function(p) return p.tout[1] end, csi.pairs),
+      tlcs = csi.tlcs,
+      trcs = csi.trcs,
+      olcs = csi.olcs,
+      orcs = csi.orcs,
+      wrapped = csi.wrapped,
+    }
+    for k, v in pairs(exp) do
+      eq(got[k], v)
+    end
+  end
+
   -- single pair, no pad
-  local csi = H.make_csi({ { "//", "" } })
-  eq(#csi.pairs, 1)
-  eq(csi.pairs[1].traw[1], "//")
-  eq(csi.pairs[1].tesc[1], vim.pesc("//"))
-  eq(csi.pairs[1].tout[1], "//")
-  eq(csi.tlcs, "//")
-  eq(csi.olcs, "//")
+  validate({ { "//", "" } }, nil, {
+    n = 1,
+    traw = { "//" },
+    tesc = { vim.pesc("//") },
+    tout = { "//" },
+    tlcs = "//",
+    olcs = "//",
+  })
 
   -- with pad
-  csi = H.make_csi({ { "//", "" } }, { pad = true })
-  eq(csi.olcs, "// ")
+  validate({ { "//", "" } }, { pad = true }, { olcs = "// " })
 
   -- multi pair sorted by length descending
-  csi = H.make_csi({ { "//", "" }, { "///", "" }, { "//!", "" } })
-  eq(#csi.pairs, 3)
-  eq(csi.pairs[1].traw[1], "///")
-  eq(csi.pairs[2].traw[1], "//!")
-  eq(csi.pairs[3].traw[1], "//")
-  eq(csi.pairs[3].tesc[1], vim.pesc("//"))
+  validate({ { "//", "" }, { "///", "" }, { "//!", "" } }, nil, {
+    n = 3,
+    traw = { "///", "//!", "//" },
+    tesc = { vim.pesc("///"), vim.pesc("//!"), vim.pesc("//") },
+  })
 
   -- block pair with pad
-  csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  eq(csi.wrapped, true)
-  eq(csi.olcs, "/* ")
-  eq(csi.orcs, " */")
+  validate({ { "/*", "*/" } }, { pad = true }, { wrapped = true, olcs = "/* ", orcs = " */" })
 
   -- block pair without pad
-  csi = H.make_csi({ { "/*", "*/" } }, { pad = false })
-  eq(csi.olcs, "/*")
-  eq(csi.orcs, "*/")
-  eq(csi.wrapped, true)
+  validate({ { "/*", "*/" } }, { pad = false }, { olcs = "/*", orcs = "*/", wrapped = true })
 
   -- case insensitive
-  csi = H.make_csi({ { "@REM", "" } }, { ci = true })
-  eq(#csi.pairs, 1)
-  eq(csi.pairs[1].tesc[1], "@[rR][eE][mM]")
+  validate({ { "@REM", "" } }, { ci = true }, { n = 1, tesc = { "@[rR][eE][mM]" } })
 
   -- rcs only
-  csi = H.make_csi({ { "", " #" } })
-  eq(#csi.pairs, 1)
-  eq(csi.tlcs, "")
-  eq(csi.trcs, "#")
-  eq(csi.wrapped, false)
+  validate({ { "", " #" } }, nil, { n = 1, tlcs = "", trcs = "#", wrapped = false })
 
   -- raw strings preserved when no pad
-  csi = H.make_csi({ { "/* ", " */" } })
-  eq(csi.olcs, "/* ")
-  eq(csi.orcs, " */")
+  validate({ { "/* ", " */" } }, nil, { olcs = "/* ", orcs = " */" })
 
   -- empty pair filtered out
-  csi = H.make_csi({ { "//", "" }, { "", "" } })
-  eq(#csi.pairs, 1)
+  validate({ { "//", "" }, { "", "" } }, nil, { n = 1 })
 
   -- no valid pairs
   eq(H.make_csi({ { "", "" } }), nil)
 end
 
 T["base"]["split_comments_parts"] = function()
-  local f = H.split_comments_parts
-  eq(f(""), { "" })
-  eq(f("abc"), { "abc" })
-  eq(f("s1:/*,mb:*,ex:*/"), { "s1:/*", "mb:*", "ex:*/" })
-  eq(f([[s:a\,b,e:c\,d]]), { [[s:a\,b]], [[e:c\,d]] })
-  eq(f("s:/*,"), { "s:/*", "" })
-  eq(f(","), { "", "" })
-  eq(f([[n:#,s:<!--,e:-->]]), { "n:#", "s:<!--", "e:-->" })
-  eq(f([[a\\b]]), { [[a\\b]] })
-  eq(f([[a\\,b]]), { [[a\\]], "b" })
+  local function validate(a, exp) eq(H.split_comments_parts(a), exp) end
+  validate("", { "" })
+  validate("abc", { "abc" })
+  validate("s1:/*,mb:*,ex:*/", { "s1:/*", "mb:*", "ex:*/" })
+  validate([[s:a\,b,e:c\,d]], { [[s:a\,b]], [[e:c\,d]] })
+  validate("s:/*,", { "s:/*", "" })
+  validate(",", { "", "" })
+  validate([[n:#,s:<!--,e:-->]], { "n:#", "s:<!--", "e:-->" })
+  validate([[a\\b]], { [[a\\b]] })
+  validate([[a\\,b]], { [[a\\]], "b" })
 end
 
 T["base"]["make_indent_padding"] = function()
-  eq(H.make_indent_padding(0, 4, 4, "space"), "    ")
-  eq(H.make_indent_padding(0, 4, 4, "tab"), "\t")
-  eq(H.make_indent_padding(0, 8, 4, "tab"), "\t\t")
-  eq(H.make_indent_padding(3, 8, 4, "tab"), "\t\t")
-  eq(H.make_indent_padding(0, 2, 4, "tab"), "  ")
-  eq(H.make_indent_padding(0, 0, 4, "tab"), "")
-  eq(H.make_indent_padding(2, 6, 4, "space"), "    ")
-  eq(H.make_indent_padding(4, 8, 4, "tab"), "\t")
-  eq(H.make_indent_padding(1, 4, 4, "tab"), "\t")
+  local function validate(a, b, c, d, exp) eq(H.make_indent_padding(a, b, c, d), exp) end
+  validate(0, 4, 4, "space", "    ")
+  validate(0, 4, 4, "tab", "\t")
+  validate(0, 8, 4, "tab", "\t\t")
+  validate(3, 8, 4, "tab", "\t\t")
+  validate(0, 2, 4, "tab", "  ")
+  validate(0, 0, 4, "tab", "")
+  validate(2, 6, 4, "space", "    ")
+  validate(4, 8, 4, "tab", "\t")
+  validate(1, 4, 4, "tab", "\t")
 end
 
 T["base"]["extract_comments_option"] = function()
-  local p = function(str, flags) return { str = str, flags = flags } end
-  local f = H.do_extract_comments
+  local function validate(input, expected)
+    local exp = {}
+    for k, v in pairs(expected) do
+      exp[k] = { str = v[1], flags = v[2] }
+    end
+    eq(H.do_extract_comments(input), exp)
+  end
 
   -- global default
-  eq(
-    f([[s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-,fb:•]]),
-    { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex"), line = p("•", "fb") }
-  )
+  validate([[s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-,fb:•]], {
+    s = { "/*", "s1" },
+    m = { "*", "mb" },
+    e = { "*/", "ex" },
+    line = { "•", "fb" },
+  })
 
   -- c.vim:37 (same as arduino/jsonc/soy)
-  eq(
-    f([[sO:*\ -,mO:*\ \ ,exO:*/,s1:/*,mb:*,ex:*/,:///,://]]),
-    { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex"), line = p("//", "") }
-  )
+  validate([[sO:*\ -,mO:*\ \ ,exO:*/,s1:/*,mb:*,ex:*/,:///,://]], {
+    s = { "/*", "s1" },
+    m = { "*", "mb" },
+    e = { "*/", "ex" },
+    line = { "//", "" },
+  })
 
   -- nim.vim:11 (s flag not first: `fs1`)
-  eq(f([[exO:]#,fs1:#[,mb:*,ex:]#,:#]]), { s = p("#[", "fs1"), m = p("*", "mb"), e = p("]#", "ex"), line = p("#", "") })
+  validate([[exO:]#,fs1:#[,mb:*,ex:]#,:#]], {
+    s = { "#[", "fs1" },
+    m = { "*", "mb" },
+    e = { "]#", "ex" },
+    line = { "#", "" },
+  })
 
   -- sway.vim:13 (duplicate s sections, last wins)
-  eq(
-    f([[s0:/*!,ex:*/,s1:/*,mb:*,ex:*/,:///,://!,://]]),
-    { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex"), line = p("//", "") }
-  )
+  validate([[s0:/*!,ex:*/,s1:/*,mb:*,ex:*/,:///,://!,://]], {
+    s = { "/*", "s1" },
+    m = { "*", "mb" },
+    e = { "*/", "ex" },
+    line = { "//", "" },
+  })
 
   -- mediawiki.vim:28 (last s/e; `\:` and `\ ` unescaped)
-  eq(
-    f([[n:#,n:*,n:\:,s:{\|,m:\|,ex:\|},s:<!--,m:\ \ \ \ ,e:-->]]),
-    { line = p(":", "n"), s = p("<!--", "s"), m = p("    ", "m"), e = p("-->", "e") }
-  )
+  validate([[n:#,n:*,n:\:,s:{\|,m:\|,ex:\|},s:<!--,m:\ \ \ \ ,e:-->]], {
+    line = { ":", "n" },
+    s = { "<!--", "s" },
+    m = { "    ", "m" },
+    e = { "-->", "e" },
+  })
 
   -- xml.vim:21
-  eq(f([[s:<!--,e:-->]]), { s = p("<!--", "s"), e = p("-->", "e") })
+  validate([[s:<!--,e:-->]], { s = { "<!--", "s" }, e = { "-->", "e" } })
 
   -- sml.vim:20 (r flag)
-  eq(f([[sr:(*,mb:*,ex:*)]]), { s = p("(*", "sr"), m = p("*", "mb"), e = p("*)", "ex") })
+  validate([[sr:(*,mb:*,ex:*)]], { s = { "(*", "sr" }, m = { "*", "mb" }, e = { "*)", "ex" } })
 
   -- rust.vim:38 (duplicate s/m/e, last wins, `\ ` unescaped)
-  eq(
-    f([[s1:/*,mb:*,ex:*/,s0:/*,mb:\ ,ex:*/,:///,://!,://]]),
-    { s = p("/*", "s0"), m = p(" ", "mb"), e = p("*/", "ex"), line = p("//", "") }
-  )
+  validate([[s1:/*,mb:*,ex:*/,s0:/*,mb:\ ,ex:*/,:///,://!,://]], {
+    s = { "/*", "s0" },
+    m = { " ", "mb" },
+    e = { "*/", "ex" },
+    line = { "//", "" },
+  })
 
   -- ld.vim:17 (minimal C-style block)
-  eq(f([[s1:/*,mb:*,ex:*/]]), { s = p("/*", "s1"), m = p("*", "mb"), e = p("*/", "ex") })
+  validate([[s1:/*,mb:*,ex:*/]], { s = { "/*", "s1" }, m = { "*", "mb" }, e = { "*/", "ex" } })
 
   -- idris2.vim:28 (`\|` not unescaped)
-  eq(
-    f([[s1:{-,mb:-,ex:-},:\|\|\|,:--]]),
-    { s = p("{-", "s1"), m = p("-", "mb"), e = p("-}", "ex"), line = p("--", "") }
-  )
+  validate([[s1:{-,mb:-,ex:-},:\|\|\|,:--]], {
+    s = { "{-", "s1" },
+    m = { "-", "mb" },
+    e = { "-}", "ex" },
+    line = { "--", "" },
+  })
 
   -- tera.vim:19
-  eq(f([[s:{#,e:#}]]), { s = p("{#", "s"), e = p("#}", "e") })
+  validate([[s:{#,e:#}]], { s = { "{#", "s" }, e = { "#}", "e" } })
 
   -- wat.vim:13
-  eq(f([[s:(;,e:;),:;;]]), { s = p("(;", "s"), e = p(";)", "e"), line = p(";;", "") })
+  validate([[s:(;,e:;),:;;]], { s = { "(;", "s" }, e = { ";)", "e" }, line = { ";;", "" } })
 
   -- scheme.vim:19
-  eq(
-    f([[:;;;;,:;;;,:;;,:;,sr:#\|,mb:\|,ex:\|#]]),
-    { line = p(";", ""), s = p("#\\|", "sr"), m = p("\\|", "mb"), e = p("\\|#", "ex") }
-  )
+  validate([[:;;;;,:;;;,:;;,:;,sr:#\|,mb:\|,ex:\|#]], {
+    line = { ";", "" },
+    s = { "#\\|", "sr" },
+    m = { "\\|", "mb" },
+    e = { "\\|#", "ex" },
+  })
 
   -- modula3.vim:15 (count flag s0)
-  eq(f([[s0:(*,mb:\ ,ex:*)]]), { s = p("(*", "s0"), m = p(" ", "mb"), e = p("*)", "ex") })
+  validate([[s0:(*,mb:\ ,ex:*)]], { s = { "(*", "s0" }, m = { " ", "mb" }, e = { "*)", "ex" } })
 
   -- aap.vim:25 (`\ ` unescaped in s/m)
-  eq(f([[s:#\ -,m:#\ \ ,e:#,n:#,fb:-]]), { s = p("# -", "s"), m = p("#  ", "m"), e = p("#", "e"), line = p("-", "fb") })
+  validate([[s:#\ -,m:#\ \ ,e:#,n:#,fb:-]], {
+    s = { "# -", "s" },
+    m = { "#  ", "m" },
+    e = { "#", "e" },
+    line = { "-", "fb" },
+  })
 
   -- purescript.vim:11
-  eq(
-    f([[s1f:{-,mb:\ ,ex:-},:--\ \|,:--]]),
-    { s = p("{-", "s1f"), m = p(" ", "mb"), e = p("-}", "ex"), line = p("--", "") }
-  )
+  validate([[s1f:{-,mb:\ ,ex:-},:--\ \|,:--]], {
+    s = { "{-", "s1f" },
+    m = { " ", "mb" },
+    e = { "-}", "ex" },
+    line = { "--", "" },
+  })
 
   -- org.vim:20 (`\:` unescaped)
-  eq(f([[b:\:]]), { line = p(":", "b") })
+  validate([[b:\:]], { line = { ":", "b" } })
 
   -- hgcommit.vim:17 (`\:` unescaped)
-  eq(f([[:HG\:]]), { line = p("HG:", "") })
+  validate([[:HG\:]], { line = { "HG:", "" } })
 
   -- clojure.vim:31
-  eq(f([[n:;]]), { line = p(";", "n") })
+  validate([[n:;]], { line = { ";", "n" } })
 
   -- text.vim:17 (line only, last wins)
-  eq(f([[fb:-,fb:*,n:>]]), { line = p(">", "n") })
+  validate([[fb:-,fb:*,n:>]], { line = { ">", "n" } })
 
   -- spec.vim:19
-  eq(f([[b:#]]), { line = p("#", "b") })
+  validate([[b:#]], { line = { "#", "b" } })
 
   -- synthetic: s-only (no e)
-  eq(f([[s:/*]]), { s = p("/*", "s") })
+  validate([[s:/*]], { s = { "/*", "s" } })
 
   -- synthetic: escaped comma
-  eq(f([[s:a\,b,e:c\,d]]), { s = p("a,b", "s"), e = p("c,d", "e") })
+  validate([[s:a\,b,e:c\,d]], { s = { "a,b", "s" }, e = { "c,d", "e" } })
 
   -- synthetic: trailing comma
-  eq(f([[s:/*,]]), { s = p("/*", "s") })
+  validate([[s:/*,]], { s = { "/*", "s" } })
 
   -- empty
-  eq(f(""), {})
+  validate("", {})
 end
 
 T["base"]["block_comment_info"] = function()
-  local function f(lines, lcs, rcs, scol, ecol, motion, relaxed)
-    local cfg = relaxed and { block_relaxed_detect = true } or nil
+  local function validate(lines, scol, ecol, motion, expected, opts)
+    opts = opts or {}
+    local cms = opts.cms or { { opts.lcs or "/* ", opts.rcs or " */" } }
+    local csi = H.make_csi(cms, opts.pad ~= nil and { pad = opts.pad } or nil)
     local range = { 0, scol, #lines - 1, ecol }
-    return H.block_comment_info(lines, H.make_csi({ { lcs, rcs } }), motion, range, cfg)
+    local cfg = opts.relaxed and { block_relaxed_detect = true } or nil
+    local info = H.block_comment_info(lines, csi, motion, range, cfg)
+    eq(info and { info.lcs_pos, info.rcs_pos }, expected)
   end
 
   -- Line mode: complete block
-  local info = f({ "  /* hello */" }, "/* ", " */", 0, 11, "line")
-  eq(info.lcs_pos[2], 2)
-  eq(info.lcs_pos[3], 4)
-  eq(info.rcs_pos[2], 10)
-  eq(info.rcs_pos[3], 12)
+  validate({ "  /* hello */" }, 0, 11, "line", { { 0, 2, 4 }, { 0, 10, 12 } })
 
   -- Line mode: no block
-  eq(f({ "hello" }, "/* ", " */", 0, 4, "line"), nil)
+  validate({ "hello" }, 0, 4, "line", nil)
 
   -- Line mode: has lcs but no trailing rcs
-  eq(f({ "  /* hello" }, "/* ", " */", 0, 9, "line"), nil)
+  validate({ "  /* hello" }, 0, 9, "line", nil)
 
   -- Char mode: selected pair
-  info = f({ "he/* llo */ld" }, "/* ", " */", 2, 10, "char")
-  eq(info.lcs_pos[2], 2)
-  eq(info.lcs_pos[3], 4)
-  eq(info.rcs_pos[2], 8)
-  eq(info.rcs_pos[3], 10)
+  validate({ "he/* llo */ld" }, 2, 10, "char", { { 0, 2, 4 }, { 0, 8, 10 } })
 
   -- Char mode: no lcs
-  eq(f({ "hello" }, "/* ", " */", 2, 4, "char"), nil)
+  validate({ "hello" }, 2, 4, "char", nil)
 
   -- Char mode: lcs present but no rcs within bounds
-  eq(f({ "/* a */ b()" }, "/* ", " */", 0, 2, "char"), nil)
+  validate({ "/* a */ b()" }, 0, 2, "char", nil)
 
   -- Block mode (same as line)
-  info = f({ "  /* hello */" }, "/* ", " */", 0, 11, "block")
-  eq(info.lcs_pos[2], 2)
-  eq(info.lcs_pos[3], 4)
-  eq(info.rcs_pos[2], 10)
-  eq(info.rcs_pos[3], 12)
+  validate({ "  /* hello */" }, 0, 11, "block", { { 0, 2, 4 }, { 0, 10, 12 } })
 
   -- Relaxed: leading blank line (line motion)
-  info = f({ "", "  /* hello */" }, "/* ", " */", 0, 11, "line", true)
-  eq(info.lcs_pos[1], 1)
-  eq(info.lcs_pos[2], 2)
-  eq(info.rcs_pos[1], 1)
-  eq(info.rcs_pos[2], 10)
+  validate({ "", "  /* hello */" }, 0, 11, "line", { { 1, 2, 4 }, { 1, 10, 12 } }, { relaxed = true })
 
   -- Relaxed: trailing blank line (line motion)
-  info = f({ "  /* hello */", "" }, "/* ", " */", 0, 11, "line", true)
-  eq(info.lcs_pos[1], 0)
-  eq(info.lcs_pos[2], 2)
-  eq(info.rcs_pos[1], 0)
-  eq(info.rcs_pos[2], 10)
+  validate({ "  /* hello */", "" }, 0, 11, "line", { { 0, 2, 4 }, { 0, 10, 12 } }, { relaxed = true })
 
   -- Relaxed: both sides blank (line motion)
-  info = f({ "", "  /* hello */", "" }, "/* ", " */", 0, 11, "line", true)
-  eq(info.lcs_pos[1], 1)
-  eq(info.lcs_pos[2], 2)
-  eq(info.rcs_pos[1], 1)
-  eq(info.rcs_pos[2], 10)
+  validate({ "", "  /* hello */", "" }, 0, 11, "line", { { 1, 2, 4 }, { 1, 10, 12 } }, { relaxed = true })
 
   -- Relaxed: all blank lines (line motion)
-  eq(f({ "", "" }, "/* ", " */", 0, 0, "line", true), nil)
+  validate({ "", "" }, 0, 0, "line", nil, { relaxed = true })
 
   -- Relaxed: char mode, leading whitespace before lcs
-  info = f({ "  /* 1 */  " }, "/* ", " */", 0, 10, "char", true)
-  eq(info.lcs_pos[2], 2)
-  eq(info.lcs_pos[3], 4)
-  eq(info.rcs_pos[2], 6)
-  eq(info.rcs_pos[3], 8)
+  validate({ "  /* 1 */  " }, 0, 10, "char", { { 0, 2, 4 }, { 0, 6, 8 } }, { relaxed = true })
 
   -- Relaxed: char mode, all whitespace
-  eq(f({ "      " }, "/* ", " */", 0, 5, "char", true), nil)
+  validate({ "      " }, 0, 5, "char", nil, { relaxed = true })
 
   -- Relaxed: multi-line, blank first line (char mode)
-  info = f({ "", "/* 1 */" }, "/* ", " */", 0, 6, "char", true)
-  eq(info.lcs_pos[1], 1)
-  eq(info.lcs_pos[2], 0)
-  eq(info.lcs_pos[3], 2)
-  eq(info.rcs_pos[1], 1)
-  eq(info.rcs_pos[2], 4)
-  eq(info.rcs_pos[3], 6)
+  validate({ "", "/* 1 */" }, 0, 6, "char", { { 1, 0, 2 }, { 1, 4, 6 } }, { relaxed = true })
 
   -- Non-relaxed should still fail when leading blank
-  eq(f({ "", "  /* hello */" }, "/* ", " */", 0, 11, "line"), nil)
+  validate({ "", "  /* hello */" }, 0, 11, "line", nil)
 
   -- Relaxed: multi-line block comment, linewise ec=0 (line motion)
-  info = f({ "  --[[ xxx", "  yyy ]] " }, "--[[ ", " ]]", 0, 0, "line", true)
-  eq(info.lcs_pos, { 0, 2, 6 })
-  eq(info.rcs_pos, { 1, 5, 7 })
+  validate(
+    { "  --[[ xxx", "  yyy ]] " },
+    0,
+    0,
+    "line",
+    { { 0, 2, 6 }, { 1, 5, 7 } },
+    { lcs = "--[[ ", rcs = " ]]", relaxed = true }
+  )
 
   -- Relaxed: block motion, multi-line (same as line)
-  info = f({ "  --[[ xxx", "  yyy ]] " }, "--[[ ", " ]]", 0, 0, "block", true)
-  eq(info.lcs_pos, { 0, 2, 6 })
-  eq(info.rcs_pos, { 1, 5, 7 })
+  validate(
+    { "  --[[ xxx", "  yyy ]] " },
+    0,
+    0,
+    "block",
+    { { 0, 2, 6 }, { 1, 5, 7 } },
+    { lcs = "--[[ ", rcs = " ]]", relaxed = true }
+  )
 
   -- Relaxed: three-line block comment (line motion)
-  info = f({ "  --[[ xxx", "  yyy", "  zzz ]] " }, "--[[ ", " ]]", 0, 0, "line", true)
-  eq(info.lcs_pos, { 0, 2, 6 })
-  eq(info.rcs_pos, { 2, 5, 7 })
+  validate(
+    { "  --[[ xxx", "  yyy", "  zzz ]] " },
+    0,
+    0,
+    "line",
+    { { 0, 2, 6 }, { 2, 5, 7 } },
+    { lcs = "--[[ ", rcs = " ]]", relaxed = true }
+  )
+
+  local mb_cms = { { "{-", "-}" }, { "{#", "#}" } }
 
   -- Multi-pair: pair 1
-  local csi_mb = H.make_csi({ { "{-", "-}" }, { "{#", "#}" } }, { pad = true })
-  info = H.block_comment_info({ "{- hello -}" }, csi_mb, "line", { 0, 0, 0, 10 }, {})
-  assert(info)
-  eq(info.lcs_pos[2], 0)
-  eq(info.rcs_pos[2], 8)
-  eq(info.rcs_pos[3], 10)
+  validate({ "{- hello -}" }, 0, 10, "line", { { 0, 0, 2 }, { 0, 8, 10 } }, { cms = mb_cms, pad = true })
 
   -- Multi-pair: pair 2
-  info = H.block_comment_info({ "{# hello #}" }, csi_mb, "line", { 0, 0, 0, 10 }, {})
-  assert(info)
-  eq(info.lcs_pos[2], 0)
-  eq(info.rcs_pos[2], 8)
+  validate({ "{# hello #}" }, 0, 10, "line", { { 0, 0, 2 }, { 0, 8, 10 } }, { cms = mb_cms, pad = true })
 end
 
 T["base"]["match_block_comment"] = function()
-  local csi = H.make_csi({ { "{-", "-}" }, { "{#", "#}" } }, { pad = true })
+  local function validate(lines, range, motion, expected, opts)
+    opts = opts or {}
+    local csi = H.make_csi(opts.cms or { { "{-", "-}" }, { "{#", "#}" } }, { pad = true })
+    local info = H.match_block_comment(lines, range, range, csi, motion)
+    eq(info and { info.lcs_pos, info.rcs_pos }, expected)
+  end
 
   -- single line, line motion, pair 1
-  local info = H.match_block_comment({ "{- hello -}" }, { 0, 0, 0, 9 }, { 0, 0, 0, 9 }, csi, "line")
-  assert(info)
-  eq(info.lcs_pos[2], 0)
-  eq(info.rcs_pos[2], 8)
+  validate({ "{- hello -}" }, { 0, 0, 0, 9 }, "line", { { 0, 0, 2 }, { 0, 8, 10 } })
 
   -- single line, line motion, pair 2
-  info = H.match_block_comment({ "{# hello #}" }, { 0, 0, 0, 9 }, { 0, 0, 0, 9 }, csi, "line")
-  assert(info)
-  eq(info.lcs_pos[2], 0)
-  eq(info.rcs_pos[2], 8)
+  validate({ "{# hello #}" }, { 0, 0, 0, 9 }, "line", { { 0, 0, 2 }, { 0, 8, 10 } })
 
   -- multi line: LCS on line 1, RCS on line 2
-  info = H.match_block_comment({ "{- a", "b -}" }, { 0, 0, 1, 4 }, { 0, 0, 1, 4 }, csi, "line")
-  assert(info)
-  eq(info.lcs_pos[1], 0)
-  eq(info.rcs_pos[1], 1)
+  validate({ "{- a", "b -}" }, { 0, 0, 1, 4 }, "line", { { 0, 0, 2 }, { 1, 1, 3 } })
 
   -- multi line (n=3): LCS on line 1, RCS on line 3
-  info = H.match_block_comment({ "{- a", "b", "c -}" }, { 0, 0, 2, 4 }, { 0, 0, 2, 4 }, csi, "line")
-  assert(info)
-  eq(info.lcs_pos[1], 0)
-  eq(info.rcs_pos[1], 2)
+  validate({ "{- a", "b", "c -}" }, { 0, 0, 2, 4 }, "line", { { 0, 0, 2 }, { 2, 1, 3 } })
 
   -- with leading whitespace
-  info = H.match_block_comment({ "  {- hello -}" }, { 0, 0, 0, 11 }, { 0, 0, 0, 11 }, csi, "line")
-  assert(info)
-  eq(info.lcs_pos[2], 2)
-  eq(info.rcs_pos[2], 10)
+  validate({ "  {- hello -}" }, { 0, 0, 0, 11 }, "line", { { 0, 2, 4 }, { 0, 10, 12 } })
 
   -- char motion
-  local csi2 = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  info = H.match_block_comment({ "/* hello */" }, { 0, 0, 0, 10 }, { 0, 0, 0, 10 }, csi2, "char")
-  assert(info)
-  eq(info.lcs_pos[2], 0)
+  validate({ "/* hello */" }, { 0, 0, 0, 10 }, "char", { { 0, 0, 2 }, { 0, 8, 10 } }, { cms = { { "/*", "*/" } } })
 
   -- no match
-  eq(H.match_block_comment({ "hello" }, { 0, 0, 0, 4 }, { 0, 0, 0, 4 }, csi, "line"), nil)
+  validate({ "hello" }, { 0, 0, 0, 4 }, "line", nil)
 
   -- no match (only LCS, no RCS)
-  eq(H.match_block_comment({ "{- hello" }, { 0, 0, 0, 7 }, { 0, 0, 0, 7 }, csi, "line"), nil)
+  validate({ "{- hello" }, { 0, 0, 0, 7 }, "line", nil)
 
   -- different markers (same prefix, different content)
-  local csi3 = H.make_csi({ { "{-", "-}" }, { "{+", "+}" } }, { pad = true })
-  info = H.match_block_comment({ "{+ hello +}" }, { 0, 0, 0, 9 }, { 0, 0, 0, 9 }, csi3, "line")
-  assert(info)
-  eq(info.lcs_pos[2], 0)
+  validate(
+    { "{+ hello +}" },
+    { 0, 0, 0, 9 },
+    "line",
+    { { 0, 0, 2 }, { 0, 8, 10 } },
+    { cms = { { "{-", "-}" }, { "{+", "+}" } } }
+  )
 end
 
 T["base"]["resolve"] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
-  local function f(ft, cs, ctype, insert_space)
-    local cfg = { insert_space = insert_space ~= false, hooks = {} }
-    vim.bo[buf].filetype = ft
-    vim.bo[buf].commentstring = cs
-    local csi = H.resolve(make_pos(buf, 0, 0), ctype, cfg, { 1, 1, 1, 1 })
-    assert(csi)
-    return { csi.tlcs, csi.trcs }
+  local function validate(ft, cs, ctype, insert_space, exp)
+    set_context({ bo = { filetype = ft, commentstring = cs } })
+    local r = child.lua_func(function(ctype_, insert_space_)
+      local _H = require("celeste_comment").H
+      local cfg = { insert_space = insert_space_ ~= false, hooks = {} }
+      local csi = assert(_H.resolve(_H.make_pos(0, 0, 0), ctype_, cfg, { 1, 1, 1, 1 }))
+      return { csi.tlcs, csi.trcs }
+    end, ctype, insert_space)
+    eq(r, exp)
   end
-  eq(f("cpp", "// %s", 2), { "/*", "*/" })
-  eq(f("cpp", "// %s", 1), { "//", "" })
-  eq(f("lua", "-- %s", 2), { "--[[", "]]" })
-  eq(f("lua", "-- %s", 1), { "--", "" })
-  eq(f("html", "<!-- %s -->", 2), { "<!--", "-->" })
-  eq(f("cpp", "// %s", 2, false), { "/*", "*/" })
-  vim.api.nvim_buf_delete(buf, { force = true })
+
+  validate("cpp", "// %s", 2, true, { "/*", "*/" })
+  validate("cpp", "// %s", 1, true, { "//", "" })
+  validate("lua", "-- %s", 2, true, { "--[[", "]]" })
+  validate("lua", "-- %s", 1, true, { "--", "" })
+  validate("html", "<!-- %s -->", 2, true, { "<!--", "-->" })
+  validate("cpp", "// %s", 2, false, { "/*", "*/" })
 end
 
 T["base"]["normalize_flags"] = function()
-  local map = { a = 1, b = 2, c = 4 }
-  local f = function(v) return { H.normalize_flags(v, map, "test") } end
-
-  eq(f("a"), { 1 })
-  eq(f("b"), { 2 })
-  eq(f("c"), { 4 })
-  eq(f("a | b"), { 3 })
-  eq(f("a | b | c"), { 7 })
-  eq(f("a  |  b  |  c"), { 7 })
-  eq(f(" a | b | c "), { 7 })
-  eq(f(0), { 0 })
-  eq(f(1), { 1 })
-  eq(f(5), { 5 })
-  eq(f(7), { 7 })
-  eq(f(99), { 3 })
-  eq(f(-1), { 7 })
-  eq(f(""), { 0 })
-  eq(f("a | invalid"), { 0, "invalid part 'invalid' of 'test'" })
-  eq(f("invalid | a"), { 0, "invalid part 'invalid' of 'test'" })
-  eq(f("a | b | invalid"), { 0, "invalid part 'invalid' of 'test'" })
-  eq(f("x"), { 0, "invalid part 'x' of 'test'" })
-  eq(f({}), { 0, "expected string|number for 'test' but got table" })
-  eq(f(true), { 0, "expected string|number for 'test' but got boolean" })
+  local function validate(v, exp) eq({ H.normalize_flags(v, { a = 1, b = 2, c = 4 }, "test") }, exp) end
+  validate("a", { 1 })
+  validate("b", { 2 })
+  validate("c", { 4 })
+  validate("a | b", { 3 })
+  validate("a | b | c", { 7 })
+  validate("a  |  b  |  c", { 7 })
+  validate(" a | b | c ", { 7 })
+  validate(0, { 0 })
+  validate(1, { 1 })
+  validate(5, { 5 })
+  validate(7, { 7 })
+  validate(99, { 3 })
+  validate(-1, { 7 })
+  validate("", { 0 })
+  validate("a | invalid", { 0, "invalid part 'invalid' of 'test'" })
+  validate("invalid | a", { 0, "invalid part 'invalid' of 'test'" })
+  validate("a | b | invalid", { 0, "invalid part 'invalid' of 'test'" })
+  validate("x", { 0, "invalid part 'x' of 'test'" })
+  validate({}, { 0, "expected string|number for 'test' but got table" })
+  validate(true, { 0, "expected string|number for 'test' but got boolean" })
 end
 
 -- Edits tests ────────────────────────────────────────────────────────────────
@@ -1292,198 +1359,137 @@ T["edits"]["sort"] = function()
 end
 
 T["edits"]["sort and commit"] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "ab", "cd", "ef" })
-
   local edits = {
     { range = { 2, 1, 2, 1 }, text = { "X" } },
     { range = { 0, 0, 0, 0 }, text = { "Z" } },
     { range = { 1, 2, 1, 2 }, text = { "Y" } },
   }
-  edits.need_sort = true
-  edits.any_multi = true
 
-  H.commit_edits(buf, nil, nil, edits, false)
-
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  eq(lines[1], "Zab")
-  eq(lines[2], "cdY")
-  eq(lines[3], "eXf")
-
-  vim.api.nvim_buf_delete(buf, { force = true })
+  set_lines({ "ab", "cd", "ef" })
+  child.lua_func(function(e)
+    e.need_sort = true
+    e.any_multi = true
+    require("celeste_comment").H.commit_edits(0, nil, nil, e, false)
+  end, edits)
+  eq_lines({ "Zab", "cdY", "eXf" })
 end
 
 T["edits"]["commit_edits"] = function()
-  local buf = vim.api.nvim_create_buf(false, true)
+  local function commit(edits, opts)
+    opts = opts or {}
+    child.lua_func(function(e, need_sort, any_multi)
+      if need_sort then e.need_sort = true end
+      if any_multi then e.any_multi = true end
+      require("celeste_comment").H.commit_edits(0, nil, nil, e, false)
+    end, edits, opts.need_sort == true, opts.any_multi == true)
+  end
 
   -- 1. any_multi + set_text: multi-element text, expand 1 line to 3
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 0, 0, 0, 5 }, text = { "/*", "hello", "*/" } },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "hello", "*/" })
+  set_lines({ "hello" })
+  commit({ { range = { 0, 0, 0, 5 }, text = { "/*", "hello", "*/" } } }, { any_multi = true })
+  eq_lines({ "/*", "hello", "*/" })
 
   -- 2. any_multi + set_text: multi-line range replaced with fewer lines (delete 2 lines)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "a", "b", "c", "d" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 1, 0, 3, 1 }, text = { "x" } },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "a", "x" })
+  set_lines({ "a", "b", "c", "d" })
+  commit({ { range = { 1, 0, 3, 1 }, text = { "x" } } }, { any_multi = true })
+  eq_lines({ "a", "x" })
 
   -- 3. any_multi + set_text: append beyond buffer (max <= range[1])
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 2, 0, 2, 0 }, text = { "cc" } },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "aa", "bb", "cc" })
+  set_lines({ "aa", "bb" })
+  commit({ { range = { 2, 0, 2, 0 }, text = { "cc" } } }, { any_multi = true })
+  eq_lines({ "aa", "bb", "cc" })
 
   -- 4. sentinel: insert 1 line at start
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 0, -1, 0, -1 }, text = { "/*" } },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "aa", "bb" })
+  set_lines({ "aa", "bb" })
+  commit({ { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { any_multi = true })
+  eq_lines({ "/*", "aa", "bb" })
 
   -- 5. sentinel: insert 1 line in middle
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 1, -1, 1, -1 }, text = { "/*" } },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "aa", "/*", "bb" })
+  set_lines({ "aa", "bb" })
+  commit({ { range = { 1, -1, 1, -1 }, text = { "/*" } } }, { any_multi = true })
+  eq_lines({ "aa", "/*", "bb" })
 
   -- 6. sentinel: insert 2 lines at start
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 0, -1, 0, -1 }, text = { "/*", "*/" } },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "*/", "aa" })
+  set_lines({ "aa" })
+  commit({ { range = { 0, -1, 0, -1 }, text = { "/*", "*/" } } }, { any_multi = true })
+  eq_lines({ "/*", "*/", "aa" })
 
   -- 7. sentinel: delete 1 line
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb", "cc" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 1, -1, 2, -1 }, text = {} },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "aa", "cc" })
+  set_lines({ "aa", "bb", "cc" })
+  commit({ { range = { 1, -1, 2, -1 }, text = {} } }, { any_multi = true })
+  eq_lines({ "aa", "cc" })
 
   -- 8. sentinel: delete 2 lines
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb", "cc" })
-  H.commit_edits(buf, nil, nil, {
-    { range = { 0, -1, 2, -1 }, text = {} },
-    any_multi = true,
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "cc" })
+  set_lines({ "aa", "bb", "cc" })
+  commit({ { range = { 0, -1, 2, -1 }, text = {} } }, { any_multi = true })
+  eq_lines({ "cc" })
 
   -- 9. sentinel + need_sort: insert both /* and */ around content
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "aa", "bb" })
-  local edits = {
+  set_lines({ "aa", "bb" })
+  commit({
     { range = { 2, -1, 2, -1 }, text = { "*/" } },
     { range = { 0, -1, 0, -1 }, text = { "/*" } },
-  }
-  edits.need_sort = true
-  edits.any_multi = true
-  H.commit_edits(buf, nil, nil, edits, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "/*", "aa", "bb", "*/" })
+  }, { need_sort = true, any_multi = true })
+  eq_lines({ "/*", "aa", "bb", "*/" })
 
   -- 10. non-any_multi: apply_edits path
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello" })
-  H.commit_edits(buf, { 0, 0, 0, 5 }, { "hello" }, {
-    { range = { 0, 0, 0, 0 }, text = { "# " } },
-  }, false)
-  eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "# hello" })
-
-  vim.api.nvim_buf_delete(buf, { force = true })
+  set_lines({ "hello" })
+  child.lua_func(
+    function(e) require("celeste_comment").H.commit_edits(0, { 0, 0, 0, 5 }, { "hello" }, e, false) end,
+    { { range = { 0, 0, 0, 0 }, text = { "# " } } }
+  )
+  eq_lines({ "# hello" })
 end
 
 T["edits"]["make_comment_edits"] = function()
   local csi = H.make_csi({ { "# ", "" } })
   local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "hello", {})
   assert(edits)
-  eq(apply("hello", edits), "# hello")
-  eq(#edits, 1)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 0)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "# " })
+  eq(apply_edits("hello", edits), "# hello")
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
 end
 
 T["edits"]["make_comment_edits_with_indent"] = function()
   local csi = H.make_csi({ { "# ", "" } })
   local edits = H.make_comment_edits(make_line_info({ offset = 2, csi = csi }), "  hello", {})
   assert(edits)
-  eq(apply("  hello", edits), "  # hello")
-  eq(#edits, 1)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 2)
-  eq(edits[1].range[4], 2)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "# " })
+  eq(apply_edits("  hello", edits), "  # hello")
+  validate_edits(edits, { { range = { 0, 2, 0, 2 }, text = { "# " } } })
 end
 
 T["edits"]["make_uncomment_edits"] = function()
   local info = make_line_info({ lcs_pos = { 0, 0, 1 } })
   local edits = H.make_uncomment_edits(info, "# hello", {})
   assert(edits)
-  eq(apply("# hello", edits), "hello")
-  eq(#edits, 1)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 2)
-  eq(edits[1].text, { "" })
+  eq(apply_edits("# hello", edits), "hello")
+  validate_edits(edits, { { range = { 0, 0, 0, 2 }, text = { "" } } })
 end
 
 T["edits"]["make_comment_edits_with_rcs"] = function()
   local csi = H.make_csi({ { "<!-- ", " -->" } }, { pad = true })
   local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "hello", {})
   assert(edits)
-  eq(apply("hello", edits), "<!-- hello -->")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 0)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "<!-- " })
-  eq(edits[2].range[1], 0)
-  eq(edits[2].range[2], 5)
-  eq(edits[2].range[4], 5)
-  eq(#edits[2].text, 1)
-  eq(edits[2].text, { " -->" })
+  eq(apply_edits("hello", edits), "<!-- hello -->")
+  validate_edits(edits, {
+    { range = { 0, 0, 0, 0 }, text = { "<!-- " } },
+    { range = { 0, 5, 0, 5 }, text = { " -->" } },
+  })
 end
 
 T["edits"]["make_uncomment_edits_with_rcs"] = function()
   local info = make_line_info({ lcs_pos = { 0, 0, 4 }, rcs_pos = { 0, 10, 13 } })
   local edits = H.make_uncomment_edits(info, "<!-- hello -->", {})
   assert(edits)
-  eq(apply("<!-- hello -->", edits), "hello")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 5)
-  eq(edits[1].text, { "" })
-  eq(edits[2].range[1], 0)
-  eq(edits[2].range[2], 10)
-  eq(edits[2].range[4], 14)
-  eq(edits[2].text, { "" })
+  eq(apply_edits("<!-- hello -->", edits), "hello")
+  validate_edits(edits, { { range = { 0, 0, 0, 5 }, text = { "" } }, { range = { 0, 10, 0, 14 }, text = { "" } } })
 end
 
 T["edits"]["make_comment_edits_blank_line"] = function()
   local csi = H.make_csi({ { "# ", "" } })
   local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "", {})
   assert(edits)
-  eq(apply("", edits), "# ")
-  eq(#edits, 1)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 0)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "# " })
+  eq(apply_edits("", edits), "# ")
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
 end
 
 T["edits"]["make_comment_edits_noindent"] = function()
@@ -1491,13 +1497,8 @@ T["edits"]["make_comment_edits_noindent"] = function()
   local cfg = { line_comment_no_indent = true }
   local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "  code", cfg)
   assert(edits)
-  eq(apply("  code", edits), "//   code")
-  eq(#edits, 1)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 0)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "// " })
+  eq(apply_edits("  code", edits), "//   code")
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "// " } } })
 end
 
 T["edits"]["make_block_comment_edits_two_lines"] = function()
@@ -1508,17 +1509,7 @@ T["edits"]["make_block_comment_edits_two_lines"] = function()
   H.apply_edits(lines, edits)
   eq(lines[1], "/* hello")
   eq(lines[2], "world */")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 0)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range[1], 1)
-  eq(edits[2].range[2], 5)
-  eq(edits[2].range[4], 5)
-  eq(#edits[2].text, 1)
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 1, 5, 1, 5 }, text = { " */" } } })
 end
 
 T["edits"]["make_block_comment_edits_empty_lines"] = function()
@@ -1528,33 +1519,21 @@ T["edits"]["make_block_comment_edits_empty_lines"] = function()
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "/*    */")
-  eq(#edits, 2)
-  eq(edits[1].range, { 0, 0, 0, 0 })
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range, { 0, 2, 0, 2 })
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 2, 0, 2 }, text = { " */" } } })
 
   lines = { "  " }
   edits = H.make_block_comment_edits(lines, csi, { 0, 1, 0, 1 })
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "/*    */")
-  eq(#edits, 2)
-  eq(edits[1].range, { 0, 0, 0, 0 })
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range, { 0, 2, 0, 2 })
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 2, 0, 2 }, text = { " */" } } })
 
   lines = { "  " }
   edits = H.make_block_comment_edits(lines, csi, { 0, 2, 0, 2 })
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "/*    */")
-  eq(#edits, 2)
-  eq(edits[1].range, { 0, 0, 0, 0 })
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range, { 0, 2, 0, 2 })
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 2, 0, 2 }, text = { " */" } } })
 
   -- insmode
   lines = { "  " }
@@ -1562,22 +1541,14 @@ T["edits"]["make_block_comment_edits_empty_lines"] = function()
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "/*  */  ")
-  eq(#edits, 2)
-  eq(edits[1].range, { 0, 0, 0, 0 })
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range, { 0, 0, 0, 0 })
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 0, 0, 0 }, text = { " */" } } })
 
   lines = { "  ", "  " }
   edits = H.make_block_comment_edits(lines, csi, { 0, 0, 1, 0 })
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines, { "/*   ", "   */" })
-  eq(#edits, 2)
-  eq(edits[1].range, { 0, 0, 0, 0 })
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range, { 1, 2, 1, 2 })
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 1, 2, 1, 2 }, text = { " */" } } })
 end
 
 T["edits"]["make_block_comment_edits_single_line"] = function()
@@ -1587,17 +1558,7 @@ T["edits"]["make_block_comment_edits_single_line"] = function()
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "/* hello */")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 0)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range[1], 0)
-  eq(edits[2].range[2], 5)
-  eq(edits[2].range[4], 5)
-  eq(#edits[2].text, 1)
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 5, 0, 5 }, text = { " */" } } })
 end
 
 T["edits"]["make_block_uncomment_edits_multi_line"] = function()
@@ -1610,15 +1571,7 @@ T["edits"]["make_block_uncomment_edits_multi_line"] = function()
   H.apply_edits(lines, edits)
   eq(lines[1], "hello")
   eq(lines[2], "world")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 3)
-  eq(edits[1].text, { "" })
-  eq(edits[2].range[1], 1)
-  eq(edits[2].range[2], 5)
-  eq(edits[2].range[4], 8)
-  eq(edits[2].text, { "" })
+  validate_edits(edits, { { range = { 0, 0, 0, 3 }, text = { "" } }, { range = { 1, 5, 1, 8 }, text = { "" } } })
 end
 
 T["edits"]["make_block_uncomment_edits_single_line"] = function()
@@ -1630,15 +1583,7 @@ T["edits"]["make_block_uncomment_edits_single_line"] = function()
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "hello")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 0)
-  eq(edits[1].range[4], 3)
-  eq(edits[1].text, { "" })
-  eq(edits[2].range[1], 0)
-  eq(edits[2].range[2], 8)
-  eq(edits[2].range[4], 11)
-  eq(edits[2].text, { "" })
+  validate_edits(edits, { { range = { 0, 0, 0, 3 }, text = { "" } }, { range = { 0, 8, 0, 11 }, text = { "" } } })
 end
 
 T["edits"]["make_block_partial_edits"] = function()
@@ -1648,17 +1593,7 @@ T["edits"]["make_block_partial_edits"] = function()
   assert(edits)
   H.apply_edits(lines, edits)
   eq(lines[1], "hel/* lo wo */rld")
-  eq(#edits, 2)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 3)
-  eq(edits[1].range[4], 3)
-  eq(#edits[1].text, 1)
-  eq(edits[1].text, { "/* " })
-  eq(edits[2].range[1], 0)
-  eq(edits[2].range[2], 8)
-  eq(edits[2].range[4], 8)
-  eq(#edits[2].text, 1)
-  eq(edits[2].text, { " */" })
+  validate_edits(edits, { { range = { 0, 3, 0, 3 }, text = { "/* " } }, { range = { 0, 8, 0, 8 }, text = { " */" } } })
 end
 
 T["edits"]["compute_line_edits_actions"] = function()
@@ -2007,12 +1942,10 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
   })
 
   -- bufnr path
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "x", "  x", "  x", "  x" })
-  local r = H.guess_indentation(buf, 13370, true)
+  set_lines({ "x", "  x", "  x", "  x" })
+  local r = child.lua_func(function() return require("celeste_comment").H.guess_indentation(0, 13370, true) end)
   eq(r.insert_spaces, true)
   eq(r.tab_size, 2)
-  vim.api.nvim_buf_delete(buf, { force = true })
 end
 
 -- line_comment_no_indent tests ───────────────────────────────────────────────
@@ -2020,93 +1953,62 @@ end
 T["line_comment_no_indent"] = new_set()
 
 T["line_comment_no_indent"]["gcc on tab-indented line"] = function()
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = { line_comment_no_indent = true, insert_space = false }
-  set_lines({ "\ta" })
-  feed("gcc")
-  eq(get_lines(), { "#\ta" })
-
-  feed("gcc")
-  eq(get_lines(), { "\ta" })
+  validate_steps({ "\ta" }, {
+    { "gcc", { "#\ta" } },
+    { "gcc", { "\ta" } },
+  }, { bo = { commentstring = "#%s" }, config = { line_comment_no_indent = true, insert_space = false } })
 end
 
 T["line_comment_no_indent"]["gcc on whitespace-only line adds comment at col 0"] = function()
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = { line_comment_no_indent = true, insert_space = false }
-  set_lines({ "  " })
-  feed("gcc")
-  eq(get_lines(), { "#  " })
+  validate_steps({ "  " }, { { "gcc", { "#  " } } }, {
+    bo = { commentstring = "#%s" },
+    config = { line_comment_no_indent = true, insert_space = false },
+  })
 end
 
 T["line_comment_no_indent"]["gcc puts // at col 0"] = function()
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = {}
-  set_lines({ "  aa", "    bb" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "#   aa", "    bb" })
-  feed("gcc")
-  eq(get_lines(), { "  aa", "    bb" })
+  validate_steps({ "  aa", "    bb" }, {
+    { "gcc", { "#   aa", "    bb" } },
+    { "gcc", { "  aa", "    bb" } },
+  }, { bo = { commentstring = "#%s" }, b = { celeste_comment_config = {} } })
 end
 
 T["line_comment_no_indent"]["gc motion puts // at col 0"] = function()
-  child.bo.commentstring = "--%s"
-  child.b.celeste_comment_config = {}
-  set_lines({ "  aa", "  bb", "  cc" })
-  set_cursor(0, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "--   aa", "--   bb", "--   cc" })
-  feed("gc", "2j")
-  eq(get_lines(), { "  aa", "  bb", "  cc" })
+  validate_steps({ "  aa", "  bb", "  cc" }, {
+    { { "gc", "2j" }, { "--   aa", "--   bb", "--   cc" } },
+    { { "gc", "2j" }, { "  aa", "  bb", "  cc" } },
+  }, { bo = { commentstring = "--%s" }, b = { celeste_comment_config = {} } })
 end
 
 T["line_comment_no_indent"]["recognition: indented comment not uncommented"] = function()
-  child.bo.commentstring = "%%%s"
-  child.b.celeste_comment_config = { insert_space = false }
-  set_lines({ "  %% aa", "%%     bb" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "   aa", "%%     bb" })
-  set_cursor(1, 5)
-  feed("gcc")
-  eq(get_lines(), { "   aa", "     bb" })
+  validate_steps({ "  %% aa", "%%     bb" }, {
+    { "gcc", { "   aa", "%%     bb" } },
+    { { 1, 5 }, "gcc", { "   aa", "     bb" } },
+  }, { bo = { commentstring = "%%%s" }, config = { insert_space = false } })
 end
 
 T["line_comment_no_indent"]["gcj motion"] = function()
-  child.bo.commentstring = "##%s"
-  child.b.celeste_comment_config = {}
-  set_lines({ "##   aa", "##   bb" })
-  set_cursor(0, 0)
-  feed("gc", "j")
-  eq(get_lines(), { "  aa", "  bb" })
-  feed("gc", "j")
-  eq(get_lines(), { "##   aa", "##   bb" })
+  validate_steps({ "##   aa", "##   bb" }, {
+    { { "gc", "j" }, { "  aa", "  bb" } },
+    { { "gc", "j" }, { "##   aa", "##   bb" } },
+  }, { bo = { commentstring = "##%s" }, b = { celeste_comment_config = {} } })
 end
 
 T["line_comment_no_indent"]["gcgc textobject"] = function()
-  child.bo.commentstring = "<!--%s-->"
-  child.b.celeste_comment_config = { fallback_to_block = "never" }
-  set_lines({ "<!-- hello -->", "<!-- world -->" })
-  set_cursor(1, 3)
-  feed("gcgc")
-  eq(get_lines(), { "hello", "world" })
+  validate_steps({ "<!-- hello -->", "<!-- world -->" }, {
+    { { 1, 3 }, "gcgc", { "hello", "world" } },
+  }, { bo = { commentstring = "<!--%s-->" }, config = { fallback_to_block = "never" } })
 
-  child.b.celeste_comment_config = { insert_space = false, fallback_to_block = "if_line_cms_wrapped" }
-  set_lines({ "<!-- hello -->", "<!-- world -->" })
-  set_cursor(0, 4)
-  feed("gcgc")
-  eq(get_lines(), { " hello ", "<!-- world -->" })
+  validate_steps({ "<!-- hello -->", "<!-- world -->" }, {
+    { { 0, 4 }, "gcgc", { " hello ", "<!-- world -->" } },
+  }, { config = { insert_space = false, fallback_to_block = "if_line_cms_wrapped" } })
 end
 
 T["line_comment_no_indent"]["indent_algo:vscode + noindent: sol with normalize"] = function()
-  child.bo.commentstring = ";%s"
-  child.b.celeste_comment_config = { insert_space = false }
-  set_lines({ "  aa", "    bb" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { ";  aa", "    bb" })
-  feed("gcc")
-  eq(get_lines(), { "  aa", "    bb" })
+  validate_steps({ "  aa", "    bb" }, {
+    { "gcc", { ";  aa", "    bb" } },
+    { "gcc", { "  aa", "    bb" } },
+  }, { bo = { commentstring = ";%s" }, config = { insert_space = false } })
 end
 
 -- ignore empty lines tests ──────────────────────────────────────────────────
@@ -2114,163 +2016,102 @@ end
 T["ignore_empty_lines"] = new_set()
 
 T["ignore_empty_lines"]["textobject treats blank as uncommented boundary"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ "bb", "# aa", "", "# bb", "# cc", "end" })
-  set_cursor(2, 0)
-  feed("gcgc")
-  eq(get_lines(), { "bb", "# aa", "", "# bb", "# cc", "end" })
+  validate_steps({ "bb", "# aa", "", "# bb", "# cc", "end" }, {
+    { { 2, 0 }, "gcgc", { "bb", "# aa", "", "# bb", "# cc", "end" } },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 T["ignore_empty_lines"]["textobject cursor on comment skips blanks when false"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ "# a", "", "# b", "end" })
-  set_cursor(0, 0)
-  feed("dgc")
-  eq(get_lines(), { "", "# b", "end" })
+  validate_steps({ "# a", "", "# b", "end" }, {
+    { { 0, 0 }, "dgc", { "", "# b", "end" } },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 T["ignore_empty_lines"]["never: works with empty lines"] = function()
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ "", "  " })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "# ", "  " })
-  set_cursor(1, 0)
-  feed(".")
-  eq(get_lines(), { "# ", "  # " })
-  feed("gck")
-  eq(get_lines(), { "", "  " })
-  feed(".")
-  eq(get_lines(), { "# ", "#   " })
+  validate_steps({ "", "  " }, {
+    { "gcc", { "# ", "  " } },
+    { { 1, 0 }, ".", { "# ", "  # " } },
+    { "gck", { "", "  " } },
+    { ".", { "# ", "#   " } },
+  }, { bo = { tabstop = 2, expandtab = true }, config = { ignore_empty_lines = "never" } })
 end
 
 T["ignore_empty_lines"]["always: works with empty lines"] = function()
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_lines({ "", "  " })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "# ", "  " })
-  set_cursor(1, 0)
-  feed(".")
-  eq(get_lines(), { "# ", "#   " })
-  feed("gck")
-  eq(get_lines(), { "", "  " })
-  feed(".")
-  eq(get_lines(), { "# ", "#   " })
+  validate_steps({ "", "  " }, {
+    { "gcc", { "# ", "  " } },
+    { { 1, 0 }, ".", { "# ", "#   " } },
+    { "gck", { "", "  " } },
+    { ".", { "# ", "#   " } },
+  }, { bo = { tabstop = 2, expandtab = true }, config = { ignore_empty_lines = "always" } })
 end
 
 T["ignore_empty_lines"]["textobject includes blanks when ignore_empty_lines=always"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_lines({ "# aa", " ", "\t\t", "\t ", "# bb", "  \t", "#cc" })
-  set_cursor(2, 2)
-  feed("gcgc")
-  eq(get_lines(), { "aa", " ", "\t\t", "\t ", "bb", "  \t", "cc" })
+  validate_steps({ "# aa", " ", "\t\t", "\t ", "# bb", "  \t", "#cc" }, {
+    { { 2, 2 }, "gcgc", { "aa", " ", "\t\t", "\t ", "bb", "  \t", "cc" } },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 T["ignore_empty_lines"]["textobject trims blanks at edges"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_lines({ "", "# a", "", "# b", "", "# c", "" })
-  set_cursor(2, 0)
-  feed("dgc")
-  eq(get_lines(), { "", "" })
+  validate_steps({ "", "# a", "", "# b", "", "# c", "" }, {
+    { { 2, 0 }, "dgc", { "", "" } },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 T["ignore_empty_lines"]["mixed: works with empty lines"] = function()
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "  ", "    " })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "  # ", "    " })
-  set_cursor(1, 0)
-  feed(".")
-  eq(get_lines(), { "  # ", "    # " })
-  feed("gck")
-  eq(get_lines(), { "  ", "    " })
+  validate_steps({ "  ", "    " }, {
+    { "gcc", { "  # ", "    " } },
+    { { 1, 0 }, ".", { "  # ", "    # " } },
+    { "gck", { "  ", "    " } },
+  }, { bo = { tabstop = 2, expandtab = true }, config = { ignore_empty_lines = "mixed" } })
 
   -- (3 / 2) * 2 = 2
-  set_cursor(0, 0)
-  set_lines({ "   " })
-  feed("gcc")
-  eq(get_lines(), { "  #  " })
-  feed(".")
-  eq(get_lines(), { "   " })
+  validate_steps({ "   " }, {
+    { "gcc", { "  #  " } },
+    { ".", { "   " } },
+  })
 end
 
 T["ignore_empty_lines"]["mixed: blank line not participate in indent calc but can be commented"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "    aa", "", "    bb" })
-  set_cursor(0, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "    # aa", "    # ", "    # bb" })
-  feed("gc", "2j")
-  eq(get_lines(), { "    aa", "    ", "    bb" })
+  validate_steps({ "    aa", "", "    bb" }, {
+    { { "gc", "2j" }, { "    # aa", "    # ", "    # bb" } },
+    { { "gc", "2j" }, { "    aa", "    ", "    bb" } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 end
 
 T["ignore_empty_lines"]["mixed: blank line should not be trimmed after uncomment"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "    # aa", "    # ", "    # bb" })
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(), { "    # aa", "    ", "    # bb" })
+  validate_steps({ "    # aa", "    # ", "    # bb" }, {
+    { { 1, 0 }, "gcc", { "    # aa", "    ", "    # bb" } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 end
 
 T["ignore_empty_lines"]["mixed: extobject select works"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "    # aa", "    # ", "    # bb" })
-  set_cursor(1, 0)
-  feed("v", "ga", "d")
-  eq(get_lines(), { "" })
+  validate_steps({ "    # aa", "    # ", "    # bb" }, {
+    { { 1, 0 }, { "v", "ga", "d" }, { "" } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 end
 
 T["ignore_empty_lines"]["mixed: textobject not skip blanks"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "", "# a", "", "# b", "" })
-  set_cursor(1, 2)
-  feed("gcgc")
-  eq(get_lines(), { "", "a", "", "# b", "" })
-  eq(get_cursor(), { 1, 0 })
-  feed("u")
-  eq(get_lines(), { "", "# a", "", "# b", "" })
-  set_cursor(2, 0)
-  feed("gcgc")
-  eq(get_lines(), { "", "# a", "", "# b", "" })
-  eq(get_cursor(), { 2, 0 })
+  validate_steps({ "", "# a", "", "# b", "" }, {
+    { { 1, 2 }, "gcgc", { "", "a", "", "# b", "" }, { 1, 0 } },
+    { "u", { "", "# a", "", "# b", "" } },
+    { { 2, 0 }, "gcgc", { "", "# a", "", "# b", "" }, { 2, 0 } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  feed("vga", "d")
-  eq(get_lines(), { "", "" })
-
-  feed("u")
-  eq(get_lines(), { "", "# a", "", "# b", "" })
-  feed("gcgc")
-  eq(get_lines(), { "", "a", "", "b", "" })
+  validate_steps(nil, {
+    { { "vga", "d" }, { "", "" } },
+    { "u", { "", "# a", "", "# b", "" } },
+    { "gcgc", { "", "a", "", "b", "" } },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 T["ignore_empty_lines"]["mixed: gc2j respects indent from non-blank lines"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "    a", "", "    b" })
-  set_cursor(0, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "    # a", "    # ", "    # b" })
+  validate_steps({ "    a", "", "    b" }, {
+    { { "gc", "2j" }, { "    # a", "    # ", "    # b" } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 end
 
 T["ignore_empty_lines"]["works with set_text"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      ignore_empty_lines = "mixed",
-      hooks = {
-        pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
-      },
-    }
-  end)
-  child.tabstop = 2
-  set_lines({
+  validate_steps({
     "local M = {",
     "  config = {",
     "    a = 1,",
@@ -2283,24 +2124,36 @@ T["ignore_empty_lines"]["works with set_text"] = function()
     "    f = 6,",
     "  }",
     "}",
+  }, {
+    {
+      { 2, 6 },
+      "gci{",
+      {
+        "local M = {",
+        "  config = {",
+        "    # a = 1,",
+        "    # b = 2,",
+        "    # ",
+        "    # c = 3,",
+        "    # d = 4,",
+        "    # ",
+        "    # e = 5,",
+        "    # f = 6,",
+        "  }",
+        "}",
+      },
+      { 2, 8 },
+    },
+  }, {
+    config = function()
+      return {
+        ignore_empty_lines = "mixed",
+        hooks = {
+          pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
+        },
+      }
+    end,
   })
-  set_cursor(2, 6)
-  feed("gci{")
-  eq(get_lines(), {
-    "local M = {",
-    "  config = {",
-    "    # a = 1,",
-    "    # b = 2,",
-    "    # ",
-    "    # c = 3,",
-    "    # d = 4,",
-    "    # ",
-    "    # e = 5,",
-    "    # f = 6,",
-    "  }",
-    "}",
-  })
-  eq(get_cursor(), { 2, 8 })
 end
 
 -- insert_space tests ──────────────────────────────────────────────────────────────
@@ -2308,58 +2161,41 @@ end
 T["insert_space"] = new_set()
 
 T["insert_space"]["insert_space=false linewise"] = function()
-  child.b.celeste_comment_config = { insert_space = false }
-  child.bo.filetype = "python"
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "#hello" })
-  feed("gcc")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { "gcc", { "#hello" } },
+    { "gcc", { "hello" } },
+  }, { bo = { filetype = "python" }, config = { insert_space = false } })
 end
 
 T["insert_space"]["insert_space=false blockwise"] = function()
-  child.b.celeste_comment_config = { insert_space = false }
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gbc")
-  eq(get_lines(), { "/*hello*/" })
-  feed("gbc")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { "gbc", { "/*hello*/" } },
+    { "gbc", { "hello" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" }, config = { insert_space = false } })
 end
 
 T["insert_space"]["insert_space=false does not strip inner space"] = function()
-  child.b.celeste_comment_config = { insert_space = false }
-  child.bo.filetype = "python"
-  set_lines({ "#    hello" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "    hello" })
+  validate_steps({ "#    hello" }, { { "gcc", { "    hello" } } }, {
+    bo = { filetype = "python" },
+    config = { insert_space = false },
+  })
 end
 
 T["insert_space"]["wrapped commentstring (lcs+rcs)"] = function()
-  child.b.celeste_comment_config =
-    { cms_confs = false, insert_space = false, fallback_to_block = "if_line_cms_wrapped" }
-  child.bo.commentstring = "<!--%s-->"
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "<!--hello-->" })
-  feed("gcc")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { "gcc", { "<!--hello-->" } },
+    { "gcc", { "hello" } },
+  }, {
+    bo = { commentstring = "<!--%s-->" },
+    config = { cms_confs = false, insert_space = false, fallback_to_block = "if_line_cms_wrapped" },
+  })
 end
 
 T["insert_space"]["rcs-only commentstring"] = function()
-  child.b.celeste_comment_config = { cms_confs = false, insert_space = false }
-  child.bo.commentstring = "%s#"
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "hello#" })
-  feed("gcc")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { "gcc", { "hello#" } },
+    { "gcc", { "hello" } },
+  }, { bo = { commentstring = "%s#" }, config = { cms_confs = false, insert_space = false } })
 end
 
 -- extra keymap (gco, gcO, gcA) ───────────────────────────────────────────────
@@ -2367,139 +2203,89 @@ end
 T["extra"] = new_set()
 
 T["extra"]["gco inserts comment below"] = function()
-  set_lines({ "aa", "bb", "cc" })
-  set_cursor(1, 0)
-  feed("gco")
-  eq(get_lines(), { "aa", "bb", "# ", "cc" })
-  eq(get_cursor(), { 2, 2 })
-  feed("<Esc>")
-  set_cursor(3, 0)
-  feed("gco")
-  eq(get_lines(), { "aa", "bb", "# ", "cc", "# " })
-  eq(get_cursor(), { 4, 2 })
+  validate_steps({ "aa", "bb", "cc" }, {
+    { { 1, 0 }, "gco", { "aa", "bb", "# ", "cc" }, { 2, 2 } },
+    { "<Esc>" },
+    { { 3, 0 }, "gco", { "aa", "bb", "# ", "cc", "# " }, { 4, 2 } },
+  })
 end
 
 T["extra"]["gcO inserts comment above"] = function()
-  set_lines({ "aa", "bb", "cc" })
-  set_cursor(0, 0)
-  feed("gcO")
-  eq(get_lines(), { "# ", "aa", "bb", "cc" })
-  eq(get_cursor(), { 0, 2 })
-  feed("<Esc>")
+  validate_steps({ "aa", "bb", "cc" }, {
+    { "gcO", { "# ", "aa", "bb", "cc" }, { 0, 2 } },
+    { "<Esc>" },
+  })
 end
 
 T["extra"]["gcA adds comment at end of line"] = function()
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcA")
-  eq(get_lines(), { "hello # " })
-  eq(get_cursor(), { 0, 8 })
+  validate_steps({ "hello" }, { { "gcA", { "hello # " }, { 0, 8 } } })
 end
 
-T["extra"]["gcA on empty line"] = function()
-  set_lines({ "" })
-  set_cursor(0, 0)
-  feed("gcA")
-  eq(get_lines(), { "# " })
-  eq(get_cursor(), { 0, 2 })
-end
+T["extra"]["gcA on empty line"] = function() validate_steps({ "" }, { { "gcA", { "# " }, { 0, 2 } } }) end
 
 T["extra"]["gco inserts --[[ ]] below"] = function()
-  child.b.celeste_comment_config = { cms_confs = { wraptest = { "--[[%s]]" } } }
-  child.bo.filetype = "wraptest"
-  child.bo.commentstring = "# %s"
-  set_lines({ "aa", "bb", "cc" })
-  set_cursor(1, 0)
-  feed("gco")
-  eq(get_lines(), { "aa", "bb", "--[[  ]]", "cc" })
-  eq(get_cursor(), { 2, 5 })
-  feed("1")
-  eq(get_lines(), { "aa", "bb", "--[[ 1 ]]", "cc" })
+  validate_steps({ "aa", "bb", "cc" }, {
+    { { 1, 0 }, "gco", { "aa", "bb", "--[[  ]]", "cc" }, { 2, 5 } },
+    { "1", { "aa", "bb", "--[[ 1 ]]", "cc" } },
+  }, {
+    bo = { filetype = "wraptest", commentstring = "# %s" },
+    config = { cms_confs = { wraptest = { "--[[%s]]" } } },
+  })
 end
 
 T["extra"]["gcO inserts --[[ ]] above"] = function()
-  child.b.celeste_comment_config = { cms_confs = { wraptest = { "--[[%s]]" } } }
-  child.bo.filetype = "wraptest"
-  child.bo.commentstring = "# %s"
-  set_lines({ "aa", "bb", "cc" })
-  set_cursor(1, 0)
-  feed("gcO")
-  eq(get_lines(), { "aa", "--[[  ]]", "bb", "cc" })
-  eq(get_cursor(), { 1, 5 })
-  feed("1")
-  eq(get_lines(), { "aa", "--[[ 1 ]]", "bb", "cc" })
-  eq(get_cursor(), { 1, 6 })
+  validate_steps({ "aa", "bb", "cc" }, {
+    { { 1, 0 }, "gcO", { "aa", "--[[  ]]", "bb", "cc" }, { 1, 5 } },
+    { "1", { "aa", "--[[ 1 ]]", "bb", "cc" }, { 1, 6 } },
+  }, {
+    bo = { filetype = "wraptest", commentstring = "# %s" },
+    config = { cms_confs = { wraptest = { "--[[%s]]" } } },
+  })
 end
 
 T["extra"]["gcA appends --[[ ]] at eol"] = function()
-  child.b.celeste_comment_config = { cms_confs = { wraptest = { "--[[%s]]" } } }
-  child.bo.filetype = "wraptest"
-  child.bo.commentstring = "# %s"
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcA")
-  eq(get_lines(), { "hello --[[  ]]" })
-  eq(get_cursor(), { 0, 11 })
-  feed("1")
-  eq(get_lines(), { "hello --[[ 1 ]]" })
-  eq(get_cursor(), { 0, 12 })
+  validate_steps({ "hello" }, {
+    { "gcA", { "hello --[[  ]]" }, { 0, 11 } },
+    { "1", { "hello --[[ 1 ]]" }, { 0, 12 } },
+  }, {
+    bo = { filetype = "wraptest", commentstring = "# %s" },
+    config = { cms_confs = { wraptest = { "--[[%s]]" } } },
+  })
 end
 
 T["extra"]["gcA on empty line with wrapped comment"] = function()
-  child.b.celeste_comment_config = { cms_confs = { wraptest = { "--[[%s]]" } } }
-  child.bo.filetype = "wraptest"
-  child.bo.commentstring = "# %s"
-  set_lines({ "" })
-  set_cursor(0, 0)
-  feed("gcA")
-  eq(get_lines(), { "--[[  ]]" })
-  eq(get_cursor(), { 0, 5 })
-  feed("1")
-  eq(get_lines(), { "--[[ 1 ]]" })
-  eq(get_cursor(), { 0, 6 })
-  feed("<Esc>")
+  validate_steps({ "" }, {
+    { "gcA", { "--[[  ]]" }, { 0, 5 } },
+    { "1", { "--[[ 1 ]]" }, { 0, 6 } },
+    { "<Esc>" },
+  }, {
+    bo = { filetype = "wraptest", commentstring = "# %s" },
+    config = { cms_confs = { wraptest = { "--[[%s]]" } } },
+  })
 end
 
 T["extra"]["rcs-only gco inserts marker below"] = function()
-  child.b.celeste_comment_config = { cms_confs = false }
-  child.bo.commentstring = "%s#"
-  set_lines({ "aa", "bb" })
-  set_cursor(0, 0)
-  feed("gco")
-  eq(get_lines(), { "aa", "#", "bb" })
-  eq(get_cursor(), { 1, 0 })
-  feed("x")
-  eq(get_lines(), { "aa", "x#", "bb" })
-  eq(get_cursor(), { 1, 1 })
-  feed("<Esc>")
+  validate_steps({ "aa", "bb" }, {
+    { "gco", { "aa", "#", "bb" }, { 1, 0 } },
+    { "x", { "aa", "x#", "bb" }, { 1, 1 } },
+    { "<Esc>" },
+  }, { bo = { commentstring = "%s#" }, config = { cms_confs = false } })
 end
 
 T["extra"]["rcs-only gcO inserts marker above"] = function()
-  child.b.celeste_comment_config = { cms_confs = false }
-  child.bo.commentstring = "%s#"
-  set_lines({ "aa", "bb" })
-  set_cursor(1, 0)
-  feed("gcO")
-  eq(get_lines(), { "aa", "#", "bb" })
-  eq(get_cursor(), { 1, 0 })
-  feed("x")
-  eq(get_lines(), { "aa", "x#", "bb" })
-  eq(get_cursor(), { 1, 1 })
-  feed("<Esc>")
+  validate_steps({ "aa", "bb" }, {
+    { { 1, 0 }, "gcO", { "aa", "#", "bb" }, { 1, 0 } },
+    { "x", { "aa", "x#", "bb" }, { 1, 1 } },
+    { "<Esc>" },
+  }, { bo = { commentstring = "%s#" }, config = { cms_confs = false } })
 end
 
 T["extra"]["rcs-only gcA appends marker at eol"] = function()
-  child.b.celeste_comment_config = { cms_confs = false }
-  child.bo.commentstring = "%s#"
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcA")
-  eq(get_lines(), { "hello  #" })
-  eq(get_cursor(), { 0, 6 })
-  feed("x")
-  eq(get_lines(), { "hello x #" })
-  eq(get_cursor(), { 0, 7 })
-  feed("<Esc>")
+  validate_steps({ "hello" }, {
+    { "gcA", { "hello  #" }, { 0, 6 } },
+    { "x", { "hello x #" }, { 0, 7 } },
+    { "<Esc>" },
+  }, { bo = { commentstring = "%s#" }, config = { cms_confs = false } })
 end
 
 -- linewise tests ─────────────────────────────────────────────────────────────
@@ -2507,47 +2293,39 @@ end
 T["linewise"] = new_set()
 
 T["linewise"]["gcc toggles current line"] = function()
-  set_lines({ "aa", " bb", "  cc" })
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(), { "aa", "#  bb", "  cc" })
-  feed("gcc")
-  eq(get_lines(), { "aa", " bb", "  cc" })
+  validate_steps({ "aa", " bb", "  cc" }, {
+    { { 1, 0 }, "gcc", { "aa", "#  bb", "  cc" } },
+    { "gcc", { "aa", " bb", "  cc" } },
+  })
 end
 
 T["linewise"]["gc + motion works"] = function()
-  set_lines({ "aa", "bb", "cc", "dd" })
-  set_cursor(0, 0)
-  feed("gc", "j")
-  eq(get_lines(), { "# aa", "# bb", "cc", "dd" })
-  feed("gc", "j")
-  eq(get_lines(), { "aa", "bb", "cc", "dd" })
+  validate_steps({ "aa", "bb", "cc", "dd" }, {
+    { { "gc", "j" }, { "# aa", "# bb", "cc", "dd" } },
+    { { "gc", "j" }, { "aa", "bb", "cc", "dd" } },
+  })
 end
 
 T["linewise"]["gcc with count"] = function()
-  set_lines({ "a", "b", "c", "d" })
-  set_cursor(1, 0)
-  feed("2gcc")
-  eq(get_lines(), { "a", "# b", "# c", "d" })
+  validate_steps({ "a", "b", "c", "d" }, {
+    { { 1, 0 }, "2gcc", { "a", "# b", "# c", "d" } },
+  })
 end
 
 T["linewise"]["visual mode gc"] = function()
-  set_lines({ "aa", "bb", "cc" })
-  set_cursor(0, 0)
-  feed("V", "j", "gc")
-  eq(get_lines(), { "# aa", "# bb", "cc" })
+  validate_steps({ "aa", "bb", "cc" }, {
+    { { 0, 0, 1, 0, "V" }, "gc", { "# aa", "# bb", "cc" } },
+  })
 end
 
 T["linewise"]["works with folded lines"] = function()
-  child.bo.filetype = "lua"
+  set_context({ bo = { filetype = "lua" } })
   child.wo.foldmethod = "manual"
-  set_lines({ "  a", "  b", "  c", "  d", "  e", "  f" })
-  set_cursor(0, 0)
-  feed("zf3j")
-  feed("2gcc")
-  eq(get_lines(), { "--   a", "--   b", "--   c", "--   d", "--   e", "  f" })
-  feed("gcgc")
-  eq(get_lines(), { "  a", "  b", "  c", "  d", "  e", "  f" })
+  validate_steps({ "  a", "  b", "  c", "  d", "  e", "  f" }, {
+    { "zf3j" },
+    { "2gcc", { "--   a", "--   b", "--   c", "--   d", "--   e", "  f" } },
+    { "gcgc", { "  a", "  b", "  c", "  d", "  e", "  f" } },
+  })
 end
 
 -- Case-insensitive tests ─────────────────────────────────────────────────────
@@ -2555,60 +2333,40 @@ end
 T["case_insensitive"] = new_set()
 
 T["case_insensitive"]["case_insensitive gcc on @REM variants"] = function()
-  child.bo.filetype = "bat"
-  child.b.celeste_comment_config = { case_insensitive = true }
-
   -- @REM (uppercase): comment then uncomment
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "@REM hello" })
-  feed("gcc")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { "gcc", { "@REM hello" } },
+    { "gcc", { "hello" } },
+  }, { bo = { filetype = "bat" }, config = { case_insensitive = true } })
 
   -- @rem (lowercase): comment produces @REM from config token
-  set_lines({ "world" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "@REM world" })
-  feed("gcc")
-  eq(get_lines(), { "world" })
+  validate_steps({ "world" }, {
+    { "gcc", { "@REM world" } },
+    { "gcc", { "world" } },
+  })
 
   -- @Rem (mixed case): uncomment, then comment uses config token @REM
-  set_lines({ "@Rem foo" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "foo" })
-  feed("gcc")
-  eq(get_lines(), { "@REM foo" })
+  validate_steps({ "@Rem foo" }, {
+    { "gcc", { "foo" } },
+    { "gcc", { "@REM foo" } },
+  })
 
   -- without case_insensitive
-  child.b.celeste_comment_config = { case_insensitive = false }
-  set_lines({ "@rEm 123" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "@REM @rEm 123" })
+  validate_steps({ "@rEm 123" }, { { "gcc", { "@REM @rEm 123" } } }, { config = { case_insensitive = false } })
 end
 
 T["case_insensitive"]["case_insensitive textobject dgc on @REM/@rem"] = function()
-  child.bo.filetype = "bat"
-  child.b.celeste_comment_config = { case_insensitive = true }
-  set_lines({ "code", "@REM hello", "@rem world", "end" })
-  set_cursor(1, 0)
-  feed("dgc")
-  eq(get_lines(), { "code", "end" })
+  validate_steps({ "code", "@REM hello", "@rem world", "end" }, {
+    { { 1, 0 }, "dgc", { "code", "end" } },
+  }, { bo = { filetype = "bat" }, config = { case_insensitive = true } })
 end
 
 T["case_insensitive"]["case_insensitive gc on mixed case @REM lines"] = function()
-  child.bo.filetype = "bat"
-  child.b.celeste_comment_config = { case_insensitive = true }
-  set_lines({ "@REM a", "@rem b", "@Rem c" })
-  set_cursor(0, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "a", "b", "c" })
-  feed("gc", "2j")
-  -- Comment back: all get uppercase @REM from config token
-  eq(get_lines(), { "@REM a", "@REM b", "@REM c" })
+  validate_steps({ "@REM a", "@rem b", "@Rem c" }, {
+    { { "gc", "2j" }, { "a", "b", "c" } },
+    -- Comment back: all get uppercase @REM from config token
+    { { "gc", "2j" }, { "@REM a", "@REM b", "@REM c" } },
+  }, { bo = { filetype = "bat" }, config = { case_insensitive = true } })
 end
 
 -- blockwise tests ────────────────────────────────────────────────────────────
@@ -2616,567 +2374,322 @@ end
 T["blockwise"] = new_set()
 
 T["blockwise"]["gbc on single line"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello world" })
-  set_cursor(0, 0)
-  feed("gbc")
-  eq(get_lines(), { "/* hello world */" })
-  feed("gbc")
-  eq(get_lines(), { "hello world" })
+  validate_steps({ "hello world" }, {
+    { "gbc", { "/* hello world */" } },
+    { "gbc", { "hello world" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["gbc on blank and whitespace lines"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "" })
-  set_cursor(0, 0)
-  feed("gbc")
-  eq(get_lines(), { "/*  */" })
-  set_lines({ "   " })
-  set_cursor(0, 0)
-  feed("gbc")
-  eq(get_lines(), { "/*     */" })
-  set_lines({ "" })
-  feed("\\<C-v>")
-  feed("gb")
-  eq(get_lines(), { "/*  */" })
-  set_lines({ "" })
-  feed("v")
-  feed("gb")
-  eq(get_lines(), { "/*  */" })
+  validate_steps({ "" }, { { "gbc", { "/*  */" } } }, { bo = { filetype = "cpp" } })
+  validate_steps({ "   " }, { { "gbc", { "/*     */" } } })
+  validate_steps({ "" }, { { { "\\<C-v>", "gb" }, { "/*  */" } } })
+  validate_steps({ "" }, { { { "v", "gb" }, { "/*  */" } } })
 end
 
 T["blockwise"]["gb + ap on paragraph"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "start", "line1", "line2", "line3", "end" })
-  set_cursor(1, 0)
-  feed("gb", "ap")
-  eq(get_lines(), { "/* start", "line1", "line2", "line3", "end */" })
-  feed("gb", "ap")
-  eq(get_lines(), { "start", "line1", "line2", "line3", "end" })
+  validate_steps({ "start", "line1", "line2", "line3", "end" }, {
+    { { 1, 0 }, { "gb", "ap" }, { "/* start", "line1", "line2", "line3", "end */" } },
+    { { "gb", "ap" }, { "start", "line1", "line2", "line3", "end" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["visual line gb"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "aa", "bb", "cc" })
-  set_cursor(0, 0)
-  feed("V", "j", "gb")
-  eq(get_lines(), { "/* aa", "bb */", "cc" })
+  validate_steps({ "aa", "bb", "cc" }, {
+    { { 0, 0, 1, 0, "V" }, "gb", { "/* aa", "bb */", "cc" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["visual block C-v + gb per line"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "aaaa", "bbbb", "cccc" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "2j", "$", "gb")
-  eq(get_lines(), { "/* aaaa", "bbbb", "cccc */" })
+  validate_steps({ "aaaa", "bbbb", "cccc" }, {
+    { { "\\<C-v>", "2j", "$", "gb" }, { "/* aaaa", "bbbb", "cccc */" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["C-v mid-column gb per line"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "aaaabbbb", "aaaabbbb", "aaaabbbb" })
-  set_cursor(0, 4)
-  feed("\\<C-v>", "2j", "l", "l", "gb")
-  eq(get_lines(), { "/* aaaabbbb", "aaaabbbb", "aaaabbbb */" })
-  set_cursor(0, 4)
-  feed("\\<C-v>", "2j", "l", "l", "gb")
-  eq(get_lines(), { "aaaabbbb", "aaaabbbb", "aaaabbbb" })
+  validate_steps({ "aaaabbbb", "aaaabbbb", "aaaabbbb" }, {
+    { { 0, 4 }, { "\\<C-v>", "2j", "l", "l", "gb" }, { "/* aaaabbbb", "aaaabbbb", "aaaabbbb */" } },
+    { { 0, 4 }, { "\\<C-v>", "2j", "l", "l", "gb" }, { "aaaabbbb", "aaaabbbb", "aaaabbbb" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["C-v with variable line lengths wraps first/last"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({
-    "local a = vim.fn.doSomething()",
-    "  local b = vim.fn.otherFunc(arg1)",
-    "  return a + b",
-  })
-  set_cursor(0, 12)
-  feed("\\<C-v>", "j", "j", "$", "gb")
   -- comment.nvim behavior: /* after indent on first line, */ at end of last line
-  eq(get_lines(), {
-    "/* local a = vim.fn.doSomething()",
-    "  local b = vim.fn.otherFunc(arg1)",
-    "  return a + b */",
-  })
-  -- Toggle back
-  set_cursor(0, 12)
-  feed("\\<C-v>", "j", "j", "$", "gb")
-  eq(get_lines(), {
+  validate_steps({
     "local a = vim.fn.doSomething()",
     "  local b = vim.fn.otherFunc(arg1)",
     "  return a + b",
-  })
+  }, {
+    {
+      { 0, 12 },
+      { "\\<C-v>", "j", "j", "$", "gb" },
+      { "/* local a = vim.fn.doSomething()", "  local b = vim.fn.otherFunc(arg1)", "  return a + b */" },
+    },
+    {
+      { 0, 12 },
+      { "\\<C-v>", "j", "j", "$", "gb" },
+      { "local a = vim.fn.doSomething()", "  local b = vim.fn.otherFunc(arg1)", "  return a + b" },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["C-v tab indent and mixed scenarios"] = function()
   -- Tab indent at tabstop=4
-  child.bo.tabstop = 4
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-
-  set_lines({ "\t\taaa", "\t\tbbb" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "j", "$", "gb")
-  eq(get_lines(), { "\t\t/* aaa", "\t\tbbb */" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "j", "$", "gb")
-  eq(get_lines(), { "\t\taaa", "\t\tbbb" })
+  validate_steps({ "\t\taaa", "\t\tbbb" }, {
+    { { 0, 0 }, { "\\<C-v>", "j", "$", "gb" }, { "\t\t/* aaa", "\t\tbbb */" } },
+    { { 0, 0 }, { "\\<C-v>", "j", "$", "gb" }, { "\t\taaa", "\t\tbbb" } },
+  }, { bo = { tabstop = 4, filetype = "cpp", commentstring = "// %s" } })
 
   -- Mixed indent (spaces of different widths)
-  set_lines({ "    aaa", "  bbb", "    ccc" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "j", "j", "$", "gb")
-  eq(get_lines(), { "    /* aaa", "  bbb", "    ccc */" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "j", "j", "$", "gb")
-  eq(get_lines(), { "    aaa", "  bbb", "    ccc" })
+  validate_steps({ "    aaa", "  bbb", "    ccc" }, {
+    { { 0, 0 }, { "\\<C-v>", "j", "j", "$", "gb" }, { "    /* aaa", "  bbb", "    ccc */" } },
+    { { 0, 0 }, { "\\<C-v>", "j", "j", "$", "gb" }, { "    aaa", "  bbb", "    ccc" } },
+  })
 
   -- Different tab widths, consistent tab indentation
-  set_lines({ "\taaa", "\t\tbbb", "\tccc" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "j", "j", "$", "gb")
-  eq(get_lines(), { "\t/* aaa", "\t\tbbb", "\tccc */" })
-  set_cursor(0, 0)
-  feed("\\<C-v>", "j", "j", "$", "gb")
-  eq(get_lines(), { "\taaa", "\t\tbbb", "\tccc" })
+  validate_steps({ "\taaa", "\t\tbbb", "\tccc" }, {
+    { { 0, 0 }, { "\\<C-v>", "j", "j", "$", "gb" }, { "\t/* aaa", "\t\tbbb", "\tccc */" } },
+    { { 0, 0 }, { "\\<C-v>", "j", "j", "$", "gb" }, { "\taaa", "\t\tbbb", "\tccc" } },
+  })
 end
 
 T["blockwise"]["v multi-line mid-column gb wraps first/last"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "  start", "  middle text", "  more lines", "  end line" })
-  set_cursor(1, 2)
-  feed("v", "j", "j", "$", "gb")
-  local result = get_lines()
-  eq(result[2], "  /* middle text")
-  eq(result[1], "  start")
-  eq(result[3], "  more lines")
-  eq(result[4], "  end line */")
+  validate_steps({ "  start", "  middle text", "  more lines", "  end line" }, {
+    { { 1, 2 }, { "vjj", "$", "gb" }, { "  start", "  /* middle text", "  more lines", "  end line */" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v single-line mid-column gb wraps selection"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello world" })
-  set_cursor(0, 2)
-  feed("v", "6l", "gb")
-  eq(get_lines(), { "he/* llo wor */ld" })
-  -- Select from /* to */ via textobject (i( or similar not reliable)
-  -- Use gbgb (textobject_blockwise + toggle) instead
-  set_cursor(0, 4)
-  feed("gbgb")
-  eq(get_lines(), { "hello world" })
-
-  -- inclusive selection ending on a multibyte character
-  set_lines({ "a你b" })
-  set_cursor(0, 0)
-  feed("v", "l", "gb")
-  eq(get_lines(), { "/* a你 */b" })
+  validate_steps({ "hello world" }, {
+    { { 0, 2 }, { "v", "6l", "gb" }, { "he/* llo wor */ld" } },
+    { { 0, 4 }, "gbgb", { "hello world" } },
+    { lines = { "a你b" }, { 0, 0 }, { "v", "l", "gb" }, { "/* a你 */b" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v multi-line both mid-column gb wraps first/last"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "aa", "bbbbbbbb", "cccccccc", "dd" })
-  -- Start at line2 col2, end at line3 col5
-  set_cursor(1, 2)
-  feed("v", "j", "3l", "gb")
-  local result = get_lines()
-  eq(result[2], "bb/* bbbbbb")
-  eq(result[3], "cccccc */cc")
-  eq(result[1], "aa")
-  eq(result[4], "dd")
-  -- Toggle back via gbgb (textobject selects exact pair boundaries)
-  set_cursor(1, 4)
-  feed("gbgb")
-  eq(get_lines(), { "aa", "bbbbbbbb", "cccccccc", "dd" })
+  validate_steps({ "aa", "bbbbbbbb", "cccccccc", "dd" }, {
+    { { 1, 2 }, { "v", "j", "3l", "gb" }, { "aa", "bb/* bbbbbb", "cccccc */cc", "dd" } },
+    { { 1, 4 }, { "gbgb" }, { "aa", "bbbbbbbb", "cccccccc", "dd" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["gbgb toggles block comment via textobject"] = function()
-  child.bo.filetype = "lua"
-  child.bo.commentstring = "-- %s"
-  set_lines({ "  --[[ line 1", "  line 2", "  line 3 ]]" })
-  set_cursor(0, 0)
-  feed("gb", "ap")
-  eq(get_lines(), { "  line 1", "  line 2", "  line 3" })
+  validate_steps({ "  --[[ line 1", "  line 2", "  line 3 ]]" }, {
+    { { "gb", "ap" }, { "  line 1", "  line 2", "  line 3" } },
+  }, { bo = { filetype = "lua", commentstring = "-- %s" } })
 end
 
 T["blockwise"]["block_nesting=false: nested /* */ is uncommented"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b */ c */" })
-  set_cursor(0, 5)
-  feed("gbc")
-  eq(get_lines(), { "a /* b */ c" })
+  validate_steps({ "/* a /* b */ c */" }, { { { 0, 5 }, "gbc", { "a /* b */ c" } } }, {
+    bo = { filetype = "cpp", commentstring = "// %s" },
+  })
 end
 
 T["blockwise"]["gbc then gbgb on inline block comment restores original"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
   local input = "        /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1),"
-  set_lines({ input })
-  set_cursor(0, 30)
-  feed("gbc")
-  eq(get_lines()[1], "        /* /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1), */")
-  set_cursor(0, 30)
-  feed("gbgb")
-  eq(get_lines()[1], input)
+  validate_steps({ input }, {
+    {
+      { 0, 30 },
+      "gbc",
+      { "        /* /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1), */" },
+    },
+    { { 0, 30 }, "gbgb", { input } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v selects partial inner /* */ adds comment layer"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
   local line = "        /* /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1), */"
-  set_lines({ line })
-  set_cursor(0, 10)
-  feed("v", "19l", "gb")
-  eq(get_lines()[1], "        /*/*  /* key */ EncodeAsS */tring(k), /* timestamp */ EncodeAsUint64(k + 1), */")
+  validate_steps({ line }, {
+    {
+      { 0, 10 },
+      { "v", "19l", "gb" },
+      { "        /*/*  /* key */ EncodeAsS */tring(k), /* timestamp */ EncodeAsUint64(k + 1), */" },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v selects /* key */ Enco without rcs adds layer, not remove"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
   local line = "        /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1),"
-  set_lines({ line })
-  -- Select /* key */ Enco (no matching */ in selection)
-  set_cursor(0, 8)
-  feed("v", "10l", "gb")
-  eq(get_lines()[1], "        /* /* key */ E */ncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1),")
+  validate_steps({ line }, {
+    {
+      { 0, 8 },
+      { "v", "10l", "gb" },
+      { "        /* /* key */ E */ncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1)," },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v selects /* key */ with trailing space wraps not remove"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
   local line = "        /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1),"
-  set_lines({ line })
-  set_cursor(0, 8)
-  feed("v", "9l", "gb")
-  eq(get_lines()[1], "        /* /* key */  */EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1),")
+  validate_steps({ line }, {
+    {
+      { 0, 8 },
+      { "v", "9l", "gb" },
+      { "        /* /* key */  */EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1)," },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v selects exact /* timestamp */ removes inner pair"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
   local line = "        /* /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1), */"
-  set_lines({ line })
-  -- Select exactly /* timestamp */ (17 chars)
-  set_cursor(0, 36)
-  feed("v", "16l", "gb")
-  eq(get_lines()[1], "        /* /* key */ EncodeAsString(/* k), /* timestamp  */*/ EncodeAsUint64(k + 1), */")
+  validate_steps({ line }, {
+    {
+      { 0, 36 },
+      { "v", "16l", "gb" },
+      { "        /* /* key */ EncodeAsString(/* k), /* timestamp  */*/ EncodeAsUint64(k + 1), */" },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["v selects /* timestamp */ with trailing space tolerates whitespace"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
   local line = "        /* /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k + 1), */"
-  set_lines({ line })
-  -- Select /* timestamp */  with trailing space
-  set_cursor(0, 36)
-  feed("v", "17l", "gb")
-  eq(get_lines()[1], "        /* /* key */ EncodeAsString(/* k), /* timestamp * *// EncodeAsUint64(k + 1), */")
+  validate_steps({ line }, {
+    {
+      { 0, 36 },
+      { "v", "17l", "gb" },
+      { "        /* /* key */ EncodeAsString(/* k), /* timestamp * *// EncodeAsUint64(k + 1), */" },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["gbgb outermost content on nested line removes outer"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b */ c */" })
-  set_cursor(0, 4)
-  feed("gbgb")
-  eq(get_lines(), { "a /* b */ c" })
+  validate_steps({ "/* a /* b */ c */" }, { { { 0, 4 }, "gbgb", { "a /* b */ c" } } }, {
+    bo = { filetype = "cpp", commentstring = "// %s" },
+  })
 end
 
 T["blockwise"]["gbgb inside innermost nested removes only inner"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b */ c */" })
-  set_cursor(0, 11)
-  feed("gbgb")
-  eq(get_lines(), { "/* a b c */" })
+  validate_steps({ "/* a /* b */ c */" }, { { { 0, 11 }, "gbgb", { "/* a b c */" } } }, {
+    bo = { filetype = "cpp", commentstring = "// %s" },
+  })
 end
 
 T["blockwise"]["gbgb outermost content targets outermost pair"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b */ c */" })
-  set_cursor(0, 4)
-  feed("gbgb")
-  eq(get_lines(), { "a /* b */ c" })
+  validate_steps({ "/* a /* b */ c */" }, { { { 0, 4 }, "gbgb", { "a /* b */ c" } } }, {
+    bo = { filetype = "cpp", commentstring = "// %s" },
+  })
 end
 
 T["blockwise"]["gbgb between two block comments returns"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a */ str() /* b */" })
-  set_cursor(0, 9)
-  feed("gbgb")
-  eq(get_lines(), { "/* a */ str() /* b */" })
+  validate_steps({ "/* a */ str() /* b */" }, { { { 0, 9 }, "gbgb", { "/* a */ str() /* b */" } } }, {
+    bo = { filetype = "cpp", commentstring = "// %s" },
+  })
 end
 
 T["blockwise"]["gbgb three-level nested various cursor positions"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b /* c */ d */ e */" })
   -- Cursor in innermost (c) → removes innermost pair
-  set_cursor(0, 16)
-  feed("gbgb")
-  eq(get_lines(), { "/* a /* b c d */ e */" })
-  -- Reset
-  set_lines({ "/* a /* b /* c */ d */ e */" })
+  validate_steps({ "/* a /* b /* c */ d */ e */" }, {
+    { { 0, 16 }, "gbgb", { "/* a /* b c d */ e */" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
   -- Cursor in intermediate (b) → also removes innermost pair (gb count=1)
-  set_cursor(0, 10)
-  feed("gbgb")
-  eq(get_lines(), { "/* a /* b c d */ e */" })
-  -- Reset
-  set_lines({ "/* a /* b /* c */ d */ e */" })
+  validate_steps({ "/* a /* b /* c */ d */ e */" }, {
+    { { 0, 10 }, "gbgb", { "/* a /* b c d */ e */" } },
+  })
   -- Cursor in outermost (a) → only outermost pair found, removes it
-  set_cursor(0, 4)
-  feed("gbgb")
-  eq(get_lines(), { "a /* b /* c */ d */ e" })
+  validate_steps({ "/* a /* b /* c */ d */ e */" }, {
+    { { 0, 4 }, "gbgb", { "a /* b /* c */ d */ e" } },
+  })
 end
 
 T["blockwise"]["d2gb deletes middle pair in 3-level nested"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b /* c */ d */ e */" })
-  set_cursor(0, 11)
-  feed("d", "2", "gb")
-  eq(get_lines(), { "/* a  e */" })
+  validate_steps({ "/* a /* b /* c */ d */ e */" }, {
+    { { 0, 11 }, { "d", "2", "gb" }, { "/* a  e */" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["d3gb deletes outermost pair"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a /* b /* c */ d */ e */" })
-  set_cursor(0, 11)
-  feed("d", "3", "gb")
-  eq(get_lines(), { "" })
+  validate_steps({ "/* a /* b /* c */ d */ e */" }, {
+    { { 0, 11 }, { "d", "3", "gb" }, { "" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["gbap multi-line nested with block_nesting=false"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "/* a", "  /* b */", "c */" })
-  set_cursor(0, 1)
-  feed("gb", "ap")
-  eq(get_lines(), { "a", "  /* b */", "c" })
+  validate_steps({ "/* a", "  /* b */", "c */" }, {
+    { { 0, 1 }, { "gb", "ap" }, { "a", "  /* b */", "c" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["blockwise"]["gbgb on python docstring"] = function()
-  child.bo.filetype = "python"
-  set_lines({ '"""', "hello", '"""' })
-  set_cursor(1, 0)
-  feed("gbgb")
-  eq(get_lines(), { "", "hello", "" })
+  validate_steps({ '"""', "hello", '"""' }, {
+    { { 1, 0 }, "gbgb", { "", "hello", "" } },
+  }, { bo = { filetype = "python" } })
 end
 
 T["blockwise"]["empty selection and use set_text"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = { hooks = { pre_commit_edits = function(ctx) ctx.o_use_set_text = true end } }
-  end)
-  child.bo.filetype = "cpp"
-  set_lines({ "begin", "", "", "", "", "", "end" })
-  set_cursor(1, 1)
-  -- case1:
-  feed("v")
-  feed("gb")
-  eq(get_lines(), { "begin", "/*  */", "", "", "", "", "end" })
-  feed("u")
-  eq(get_lines(), { "begin", "", "", "", "", "", "end" })
-
-  -- case2:
-  set_cursor(1, 1)
-  feed("\\<C-v>")
-  feed("gb")
-  eq(get_lines(), { "begin", "/*  */", "", "", "", "", "end" })
-  feed("u")
-
-  -- case3:
-  set_cursor(1, 1)
-  feed("v", "3j")
-  feed("gb")
-  eq(get_lines(), { "begin", "/* ", "", "", " */", "", "end" })
-  feed("u")
-  eq(get_lines(), { "begin", "", "", "", "", "", "end" })
-
-  -- case4:
-  set_cursor(1, 1)
-  feed("\\<C-v>")
-  feed("3j")
-  feed("gb")
-  eq(get_lines(), { "begin", "/* ", "", "", " */", "", "end" })
-  feed("u")
-  eq(get_lines(), { "begin", "", "", "", "", "", "end" })
+  validate_steps({ "begin", "", "", "", "", "", "end" }, {
+    -- case1:
+    { { 1, 1 }, { "v", "gb" }, { "begin", "/*  */", "", "", "", "", "end" } },
+    { "u", { "begin", "", "", "", "", "", "end" } },
+    -- case2:
+    { { 1, 1 }, { "\\<C-v>", "gb" }, { "begin", "/*  */", "", "", "", "", "end" } },
+    { "u" },
+    -- case3:
+    { { 1, 1 }, { "v", "3j", "gb" }, { "begin", "/* ", "", "", " */", "", "end" } },
+    { "u", { "begin", "", "", "", "", "", "end" } },
+    -- case4:
+    { { 1, 1 }, { "\\<C-v>", "3j", "gb" }, { "begin", "/* ", "", "", " */", "", "end" } },
+    { "u", { "begin", "", "", "", "", "", "end" } },
+  }, {
+    bo = { filetype = "cpp" },
+    config = function()
+      return { hooks = { pre_commit_edits = function(ctx) ctx.o_use_set_text = true end } }
+    end,
+  })
 end
 
 T["blockwise"]["multi block cms works"] = function()
-  child.bo.filetype = "unknown"
-  child.b.celeste_comment_block_commentstring = { "{-%s-}", "{+%s+}" }
-
-  -- gbc add (first pair)
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gbc")
-  eq(get_lines(), { "{- hello -}" })
-
-  -- gbc toggle (remove)
-  feed("gbc")
-  eq(get_lines(), { "hello" })
-
-  -- gb2j multi-line block comment
-  set_lines({ "a", "b", "c" })
-  set_cursor(0, 0)
-  feed("gb", "2j")
-  eq(get_lines(), { "{- a", "b", "c -}" })
-
-  -- gbgb textobject toggle on multi-line block
-  set_cursor(0, 3)
-  feed("gbgb")
-  eq(get_lines(), { "a", "b", "c" })
-
-  set_lines({ "{+ a", "b", "c +}" })
-  set_cursor(0, 0)
-  feed("gbgb")
-  eq(get_lines(), { "a", "b", "c" })
-
-  -- gbc using first pair (always the default for adding)
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gbc")
-  eq(get_lines(), { "{- hello -}" })
-
-  -- gbgb toggle on first pair
-  set_cursor(0, 3)
-  feed("gbgb")
-  eq(get_lines(), { "hello" })
-
-  -- gbc toggle on second pair marker detects and removes it
-  set_lines({ "{+ hello +}" })
-  set_cursor(0, 3)
-  feed("gbc")
-  eq(get_lines(), { "hello" })
-
-  -- charwise v4lgb inline block comment
-  set_lines({ "before hello after" })
-  set_cursor(0, 7)
-  feed("v", "4l", "gb")
-  eq(get_lines(), { "before {- hello -} after" })
-
-  -- gbgb toggle inline block comment
-  set_cursor(0, 8)
-  feed("gbgb")
-  eq(get_lines(), { "before hello after" })
-
-  -- dgb delete multi-line inline block comment
-  set_lines({ "x {- a", "b -} y" })
-  set_cursor(0, 3)
-  feed("dgb")
-  eq(get_lines(), { "x  y" })
-
-  -- charwise across two lines
-  set_lines({ "a b ", "c d e" })
-  set_cursor(0, 2)
-  feed("v", "j", "2l", "gb")
-  eq(get_lines(), { "a {- b ", "c d e -}" })
-
-  -- two inline blocks, cursor in first
-  set_lines({ "{- a -}  {+ b +}" })
-  set_cursor(0, 2)
-  feed("gbgb")
-  eq(get_lines(), { "a  {+ b +}" })
-
-  -- two inline blocks, cursor in second
-  set_lines({ "{- a -}  {+ b +}" })
-  set_cursor(0, 12)
-  feed("gbgb")
-  eq(get_lines(), { "{- a -}  b" })
-
-  -- nested different markers, cursor in inner
-  set_lines({ "{- a {+ b +} c -}" })
-  set_cursor(0, 8)
-  feed("gbgb")
-  eq(get_lines(), { "{- a b c -}" })
-
-  -- nested, cursor in outer
-  set_cursor(0, 3)
-  feed("gbgb")
-  eq(get_lines(), { "a b c" })
-
-  -- multi-line dgb
-  set_lines({ "  {- a", "  b -}  c" })
-  set_cursor(0, 5)
-  feed("dgb")
-  eq(get_lines(), { "    c" })
+  validate_steps({ "hello" }, {
+    { { 0, 0 }, "gbc", { "{- hello -}" } },
+    { "gbc", { "hello" } },
+    { lines = { "a", "b", "c" }, { 0, 0 }, { "gb", "2j" }, { "{- a", "b", "c -}" } },
+    { { 0, 3 }, "gbgb", { "a", "b", "c" } },
+    { lines = { "{+ a", "b", "c +}" }, { 0, 0 }, "gbgb", { "a", "b", "c" } },
+    { lines = { "hello" }, { 0, 0 }, "gbc", { "{- hello -}" } },
+    { { 0, 3 }, "gbgb", { "hello" } },
+    { lines = { "{+ hello +}" }, { 0, 3 }, "gbc", { "hello" } },
+    { lines = { "before hello after" }, { 0, 7 }, { "v", "4l", "gb" }, { "before {- hello -} after" } },
+    { { 0, 8 }, "gbgb", { "before hello after" } },
+    { lines = { "x {- a", "b -} y" }, { 0, 3 }, "dgb", { "x  y" } },
+    { lines = { "a b ", "c d e" }, { 0, 2 }, { "v", "j", "2l", "gb" }, { "a {- b ", "c d e -}" } },
+    { lines = { "{- a -}  {+ b +}" }, { 0, 2 }, "gbgb", { "a  {+ b +}" } },
+    { lines = { "{- a -}  {+ b +}" }, { 0, 12 }, "gbgb", { "{- a -}  b" } },
+    { lines = { "{- a {+ b +} c -}" }, { 0, 8 }, "gbgb", { "{- a b c -}" } },
+    { { 0, 3 }, "gbgb", { "a b c" } },
+    { lines = { "  {- a", "  b -}  c" }, { 0, 5 }, "dgb", { "    c" } },
+  }, { bo = { filetype = "unknown" }, b = { celeste_comment_block_commentstring = { "{-%s-}", "{+%s+}" } } })
 end
 
 T["blockwise"]["overlapping markers with /*/{}"] = function()
-  child.bo.filetype = "unknown"
   -- overlapping markers: {/* (len3) vs /* (len2), */} (len3) vs */ (len2)
-  child.b.celeste_comment_block_commentstring = { "{/*%s*/}", "/*%s*/" }
-
-  -- gbgb selects the full {/* ... */} (not the inner /* ... */)
-  set_lines({ "x = {/* aaa */}" })
-  set_cursor(0, 7)
-  feed("gbgb")
-  eq(get_lines(), { "x = aaa" })
-
-  -- two inline blocks, cursor in the first ({/* */})
-  set_lines({ "{/* aaa */}  /* bbb */" })
-  set_cursor(0, 4)
-  feed("gbgb")
-  eq(get_lines(), { "aaa  /* bbb */" })
-
-  -- two inline blocks, cursor in the second (/* */)
-  set_lines({ "{/* aaa */}  /* bbb */" })
-  set_cursor(0, 15)
-  feed("gbgb")
-  eq(get_lines(), { "{/* aaa */}  bbb" })
+  validate_steps({ "x = {/* aaa */}" }, {
+    { { 0, 7 }, "gbgb", { "x = aaa" } },
+    { lines = { "{/* aaa */}  /* bbb */" }, { 0, 4 }, "gbgb", { "aaa  /* bbb */" } },
+    { lines = { "{/* aaa */}  /* bbb */" }, { 0, 15 }, "gbgb", { "{/* aaa */}  bbb" } },
+  }, { bo = { filetype = "unknown" }, b = { celeste_comment_block_commentstring = { "{/*%s*/}", "/*%s*/" } } })
 end
 
 T["blockwise"]["overlapping markers with {{/{{{"] = function()
-  child.bo.filetype = "unknown"
-  child.b.celeste_comment_block_commentstring = { "{{%s}}", "{{{%s}}}" }
-
-  -- gbgb on {{{ a }}} → selects the outer pair (longer opener wins)
-  set_lines({ "{{{ a }}}" })
-  set_cursor(0, 3)
-  feed("gbgb")
-  eq(get_lines(), { "a" })
-
-  -- gbgb on {{ a }} → only the shorter pair matches
-  set_lines({ "{{ a }}" })
-  set_cursor(0, 2)
-  feed("gbgb")
-  eq(get_lines(), { "a" })
-
-  -- two inline blocks, cursor in the first ({{{}}})
-  set_lines({ "{{{ a }}}  {{ b }}" })
-  set_cursor(0, 3)
-  feed("gbgb")
-  eq(get_lines(), { "a  {{ b }}" })
-
-  -- two inline blocks, cursor in the second ({{}})
-  set_lines({ "{{{ a }}}  {{ b }}" })
-  set_cursor(0, 12)
-  feed("gbgb")
-  eq(get_lines(), { "{{{ a }}}  b" })
+  validate_steps({ "{{{ a }}}" }, {
+    -- gbgb on {{{ a }}} → selects the outer pair (longer opener wins)
+    { { 0, 3 }, "gbgb", { "a" } },
+    { lines = { "{{ a }}" }, { 0, 2 }, "gbgb", { "a" } },
+    { lines = { "{{{ a }}}  {{ b }}" }, { 0, 3 }, "gbgb", { "a  {{ b }}" } },
+    { lines = { "{{{ a }}}  {{ b }}" }, { 0, 12 }, "gbgb", { "{{{ a }}}  b" } },
+  }, { bo = { filetype = "unknown" }, b = { celeste_comment_block_commentstring = { "{{%s}}", "{{{%s}}}" } } })
 end
 
 -- block_relaxed_detect tests ──────────────────────────────────────────────────
 
 T["block_relaxed_detect"] = new_set({
   hooks = {
-    pre_case = function() child.b.celeste_comment_config = { block_relaxed_detect = true } end,
+    pre_case = function() set_context({ config = { block_relaxed_detect = true } }) end,
   },
 })
 
 T["block_relaxed_detect"]["works"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({
+  set_context({ bo = { filetype = "cpp" } })
+  local lines = {
     "   \t\t\t   \t\t\t    ",
     "             ",
     "\t\t               \t",
@@ -3186,89 +2699,86 @@ T["block_relaxed_detect"]["works"] = function()
     "a",
     "\t*/    ",
     "                         \t\t\t",
+  }
+  validate_steps(lines, {
+    {
+      { 0, 0, 3, 13 },
+      "gb",
+      {
+        "/*    \t\t\t   \t\t\t    ",
+        "             ",
+        "\t\t               \t",
+        "               *//*\t\t\t\t    z",
+        "       \t\t   b   ",
+        "    h    ",
+        "a",
+        "\t*/    ",
+        "                         \t\t\t",
+      },
+      { 3, 13 },
+    },
+    { "u" },
+    {
+      { 0, 6, 4, 0 },
+      "gb",
+      {
+        "   \t\t\t/*    \t\t\t    ",
+        "             ",
+        "\t\t               \t",
+        "              /*\t\t\t\t    z",
+        "  */      \t\t   b   ",
+        "    h    ",
+        "a",
+        "\t*/    ",
+        "                         \t\t\t",
+      },
+      { 4, 0 },
+    },
+    { "u" },
+    {
+      { 1, 3, 8, 7 },
+      "gb",
+      {
+        "   \t\t\t   \t\t\t    ",
+        "             ",
+        "\t\t               \t",
+        "              \t\t\t\t    z",
+        "       \t\t   b   ",
+        "    h    ",
+        "a",
+        "\t    ",
+        "                         \t\t\t",
+      },
+      { 8, 7 },
+    },
   })
-  selection(0, 0, 3, 13)
-  feed("gb")
-  eq(get_lines(), {
-    "/*    \t\t\t   \t\t\t    ",
-    "             ",
-    "\t\t               \t",
-    "               *//*\t\t\t\t    z",
-    "       \t\t   b   ",
-    "    h    ",
-    "a",
-    "\t*/    ",
-    "                         \t\t\t",
-  })
-  eq(get_cursor(), { 3, 13 })
-  feed("u")
-
-  selection(0, 6, 4, 0)
-  feed("gb")
-  eq(get_lines(), {
-    "   \t\t\t/*    \t\t\t    ",
-    "             ",
-    "\t\t               \t",
-    "              /*\t\t\t\t    z",
-    "  */      \t\t   b   ",
-    "    h    ",
-    "a",
-    "\t*/    ",
-    "                         \t\t\t",
-  })
-  eq(get_cursor(), { 4, 0 })
-  feed("u")
-
-  selection(1, 3, 8, 7)
-  feed("gb")
-  eq(get_lines(), {
-    "   \t\t\t   \t\t\t    ",
-    "             ",
-    "\t\t               \t",
-    "              \t\t\t\t    z",
-    "       \t\t   b   ",
-    "    h    ",
-    "a",
-    "\t    ",
-    "                         \t\t\t",
-  })
-  eq(get_cursor(), { 8, 7 })
 end
 
 T["block_relaxed_detect"]["bugfix for gbip"] = function()
-  child.bo.filetype = "lua"
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.b.celeste_comment_config = { block_relaxed_detect = true }
-  set_lines({
+  set_context({ bo = { filetype = "lua", tabstop = 2, expandtab = true }, config = { block_relaxed_detect = true } })
+  local lines = {
     "function test()",
     "",
     '  map("n", ".", "xxx", {})',
     '  map("n", ".", "yyy", {})',
     "",
     "end",
-  })
-  set_cursor(2, 3)
-  feed("gbip")
-  eq(get_cursor(), { 2, 8 })
-  eq(get_lines(), {
-    "function test()",
-    "",
-    '  --[[ map("n", ".", "xxx", {})',
-    '  map("n", ".", "yyy", {}) ]]',
-    "",
-    "end",
-  })
-
-  feed(".")
-  eq(get_cursor(), { 2, 3 })
-  eq(get_lines(), {
-    "function test()",
-    "",
-    '  map("n", ".", "xxx", {})',
-    '  map("n", ".", "yyy", {})',
-    "",
-    "end",
+  }
+  validate_steps(lines, {
+    {
+      { 2, 3 },
+      "gbip",
+      {
+        "function test()",
+        "",
+        '  --[[ map("n", ".", "xxx", {})',
+        '  map("n", ".", "yyy", {}) ]]',
+        "",
+        "end",
+      },
+      { 2, 8 },
+    },
+    { ".", lines, { 2, 3 } },
   })
 end
 
@@ -3276,175 +2786,138 @@ end
 
 T["textobject"] = new_set()
 
+local function validate_mp(lines, lbegin, csi_pair, pos_pair, exp)
+  local pos = make_pos(unpack(pos_pair))
+  local csi = H.make_csi(csi_pair)
+  local all = H.textobject_block_match_pairs(lines, lbegin, csi, pos)
+  for i, r in ipairs(exp) do
+    eq(r, all[i].range)
+  end
+end
+
 T["textobject"]["block_match_pairs"] = function()
-  local mp = H.textobject_block_match_pairs
-  local c = function(lcs, rcs) return H.make_csi({ { lcs, rcs } }) end
+  local cs = { { "/* ", " */" } }
+
   -- Single pair → 1 result
-  local r = mp({ "/* a */" }, 1, c("/* ", " */"), make_pos(0, 0, 3))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 0, 6 })
+  validate_mp({ "/* a */" }, 1, cs, { 0, 0, 1 }, { { 0, 0, 0, 6 } })
 
   -- No pair
-  eq(#mp({ "hello" }, 1, c("/* ", " */"), make_pos(0, 0, 1)), 0)
+  validate_mp({ "hello" }, 1, cs, { 0, 0, 1 }, {})
 
   -- Cursor between two blocks → no pair
-  eq(#mp({ "/* a */ code /* b */" }, 1, c("/* ", " */"), make_pos(0, 0, 10)), 0)
+  validate_mp({ "/* a */ code /* b */" }, 1, cs, { 0, 0, 10 }, {})
 
   -- Orphan rcs
-  eq(#mp({ "hello */ world" }, 1, c("/* ", " */"), make_pos(0, 0, 1)), 0)
+  validate_mp({ "hello */ world" }, 1, cs, { 0, 0, 1 }, {})
 
   -- Three levels, cursor at innermost → 3 pairs, innermost first
-  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 11))
-  eq(#r, 3)
-  eq(r[1].range[2], 10)
-  eq(r[1].range[4], 16) -- innermost: /* c */
-  eq(r[2].range[2], 5)
-  eq(r[2].range[4], 21) -- middle: /* b /* c */ d */
-  eq(r[3].range[2], 0)
-  eq(r[3].range[4], 26) -- outermost: /* a /* b /* c */ d */ e */
+  -- * innermost: /* c */
+  -- * middle: /* b /* c */ d */
+  -- * outermost: /* a /* b /* c */ d */ e */
+  validate_mp(
+    { "/* a /* b /* c */ d */ e */" },
+    1,
+    cs,
+    { 0, 0, 11 },
+    { { 0, 10, 0, 16 }, { 0, 5, 0, 21 }, { 0, 0, 0, 26 } }
+  )
 
   -- Three levels, cursor at outermost → 1 pair (outermost only)
-  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 0))
-  eq(#r, 1)
-  eq(r[1].range[2], 0)
-  eq(r[1].range[4], 26)
+  validate_mp({ "/* a /* b /* c */ d */ e */" }, 1, cs, { 0, 0, 0 }, { { 0, 0, 0, 26 } })
 
   -- Three levels, cursor in middle → 2 pairs (middle + outer)
-  r = mp({ "/* a /* b /* c */ d */ e */" }, 1, c("/* ", " */"), make_pos(0, 0, 7))
-  eq(#r, 2)
-  eq(r[1].range[2], 5)
-  eq(r[1].range[4], 21) -- middle
-  eq(r[2].range[2], 0)
-  eq(r[2].range[4], 26) -- outermost
+  validate_mp({ "/* a /* b /* c */ d */ e */" }, 1, cs, { 0, 0, 7 }, { { 0, 5, 0, 21 }, { 0, 0, 0, 26 } })
 
   -- Cross-line nested
-  r = mp({ "/* a", "/* b */", "c */" }, 1, c("/* ", " */"), make_pos(0, 1, 3))
-  eq(#r, 2)
-  eq(r[1].range, { 1, 0, 1, 6 }) -- innermost: /* b */
-  eq(r[2].range, { 0, 0, 2, 3 }) -- outermost
+  validate_mp({ "/* a", "/* b */", "c */" }, 1, cs, { 0, 1, 3 }, { { 1, 0, 1, 6 }, { 0, 0, 2, 3 } })
 
   -- Lua --[[ ]] style
-  r = mp({ "--[[ a ", "  b ]] " }, 1, c("--[[ ", " ]]"), make_pos(0, 1, 3))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 1, 5 })
+  validate_mp({ "--[[ a ", "  b ]] " }, 1, { { "--[[ ", " ]]" } }, { 0, 1, 3 }, { { 0, 0, 1, 5 } })
 end
 
 T["textobject"]["block_match_pairs multi block cms"] = function()
-  local mp = H.textobject_block_match_pairs
-  local csi = H.make_csi({ { "{-", "-}" }, { "{#", "#}" } })
-  local pos = H.make_pos
+  local cs = { { "{-", "-}" }, { "{#", "#}" } }
 
   -- single line, pair 1
-  local r = mp({ "{- hello -}" }, 1, csi, pos(0, 0, 3))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 0, 10 })
+  validate_mp({ "{- hello -}" }, 1, cs, { 0, 0, 3 }, { { 0, 0, 0, 10 } })
 
   -- single line, pair 2
-  r = mp({ "{# hello #}" }, 1, csi, pos(0, 0, 3))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 0, 10 })
+  validate_mp({ "{# hello #}" }, 1, cs, { 0, 0, 3 }, { { 0, 0, 0, 10 } })
 
   -- multi line, pair 1 spans two lines
-  r = mp({ "{- a", "b -}" }, 1, csi, pos(0, 1, 1))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 1, 3 })
+  validate_mp({ "{- a", "b -}" }, 1, cs, { 0, 1, 1 }, { { 0, 0, 1, 3 } })
 
   -- two inline blocks on one line, cursor in first
-  r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 2))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 0, 6 })
+  validate_mp({ "{- a -} code {# b #}" }, 1, cs, { 0, 0, 2 }, { { 0, 0, 0, 6 } })
 
   -- two inline blocks on one line, cursor in second
-  r = mp({ "{- a -} code {# b #}" }, 1, csi, pos(0, 0, 14))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 13, 0, 19 })
+  validate_mp({ "{- a -} code {# b #}" }, 1, cs, { 0, 0, 14 }, { { 0, 13, 0, 19 } })
 
   -- nested both markers, cursor in outer pair
-  r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 2))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 0, 16 })
+  validate_mp({ "{- a {# b #} c -}" }, 1, cs, { 0, 0, 2 }, { { 0, 0, 0, 16 } })
 
   -- nested both markers, cursor in inner pair
-  r = mp({ "{- a {# b #} c -}" }, 1, csi, pos(0, 0, 8))
-  eq(#r, 2)
-  eq(r[1].range, { 0, 5, 0, 11 })
-  eq(r[2].range, { 0, 0, 0, 16 })
+  validate_mp({ "{- a {# b #} c -}" }, 1, cs, { 0, 0, 8 }, { { 0, 5, 0, 11 }, { 0, 0, 0, 16 } })
 
   -- cursor between two blocks, no match
-  r = mp({ "{- a -}  {# b #}" }, 1, csi, pos(0, 0, 7))
-  eq(r, {})
+  validate_mp({ "{- a -}  {# b #}" }, 1, cs, { 0, 0, 7 }, {})
 
   -- no match
-  r = mp({ "hello" }, 1, csi, pos(0, 0, 1))
-  eq(r, {})
+  validate_mp({ "hello" }, 1, cs, { 0, 0, 1 }, {})
 end
 
 T["textobject"]["block_match_pairs overlapping markers"] = function()
-  local mp = H.textobject_block_match_pairs
-  local pos = H.make_pos
-  local csi = H.make_csi({ { "{/*", "*/}" }, { "/*", "*/" } })
+  local cs = { { "{/*", "*/}" }, { "/*", "*/" } }
 
   -- Single line, cursor inside → both match, outer first
-  local r = mp({ "{/* aaa */}" }, 1, csi, pos(0, 0, 5))
-  eq(#r, 2)
-  eq(r[1].range, { 0, 0, 0, 10 })
-  eq(r[2].range, { 0, 1, 0, 9 })
+  validate_mp({ "{/* aaa */}" }, 1, cs, { 0, 0, 5 }, { { 0, 0, 0, 10 }, { 0, 1, 0, 9 } })
 
   -- Standalone /* */ → only the inner pair matches
-  r = mp({ "/* bbb */" }, 1, csi, pos(0, 0, 5))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 0, 8 })
+  validate_mp({ "/* bbb */" }, 1, cs, { 0, 0, 5 }, { { 0, 0, 0, 8 } })
 
   -- Two blocks inline, cursor in the second
-  r = mp({ "{/* aaa */}  /* bbb */" }, 1, csi, pos(0, 0, 15))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 13, 0, 21 })
+  validate_mp({ "{/* aaa */}  /* bbb */" }, 1, cs, { 0, 0, 15 }, { { 0, 13, 0, 21 } })
 
   -- Two blocks inline, cursor in the first → outer first
-  r = mp({ "{/* aaa */}  /* bbb */" }, 1, csi, pos(0, 0, 5))
-  eq(#r, 2)
-  eq(r[1].range, { 0, 0, 0, 10 })
-  eq(r[2].range, { 0, 1, 0, 9 })
+  validate_mp({ "{/* aaa */}  /* bbb */" }, 1, cs, { 0, 0, 5 }, { { 0, 0, 0, 10 }, { 0, 1, 0, 9 } })
 
   -- Multi-line {/*  */}, cursor on first line → outer first
-  r = mp({ "{/* aaa", "bbb */}" }, 1, csi, pos(0, 0, 5))
-  eq(#r, 2)
-  eq(r[1].range, { 0, 0, 1, 6 })
-  eq(r[2].range, { 0, 1, 1, 5 })
+  validate_mp({ "{/* aaa", "bbb */}" }, 1, cs, { 0, 0, 5 }, { { 0, 0, 1, 6 }, { 0, 1, 1, 5 } })
 
   -- Multi-line standalone /* */ → only inner pair matches
-  r = mp({ "/* bbb", "ccc */" }, 1, csi, pos(0, 1, 3))
-  eq(#r, 1)
-  eq(r[1].range, { 0, 0, 1, 5 })
+  validate_mp({ "/* bbb", "ccc */" }, 1, cs, { 0, 1, 3 }, { { 0, 0, 1, 5 } })
 end
 
 T["textobject"]["block_match_pairs ordering"] = function()
-  local mp = H.textobject_block_match_pairs
-  local pos = H.make_pos
-  local c = function(pairs) return H.make_csi(pairs) end
-  local validate = function(all, exp)
-    for i, r in ipairs(exp) do
-      eq(r, all[i].range)
-    end
-  end
+  validate_mp(
+    { "[bc]C....B" },
+    1,
+    { { "[", "]" }, { "c", "B" }, { "bc", "C" } },
+    { 0, 0, 2 },
+    { { 0, 0, 0, 3 }, { 0, 2, 0, 9 }, { 0, 1, 0, 4 } }
+  )
 
-  local r = mp({ "[bc]C....B" }, 1, c({ { "[", "]" }, { "c", "B" }, { "bc", "C" } }), pos(0, 0, 2))
-  validate(r, { { 0, 0, 0, 3 }, { 0, 2, 0, 9 }, { 0, 1, 0, 4 } })
+  validate_mp(
+    { "bXcA...B....C" },
+    1,
+    { { "X", "A" }, { "bXc", "B" }, { "c", "C" } },
+    { 0, 0, 3 },
+    { { 0, 2, 0, 12 }, { 0, 0, 0, 7 }, { 0, 1, 0, 3 } }
+  )
 
-  r = mp({ "bXcA...B....C" }, 1, c({ { "X", "A" }, { "bXc", "B" }, { "c", "C" } }), pos(0, 0, 3))
-  validate(r, { { 0, 2, 0, 12 }, { 0, 0, 0, 7 }, { 0, 1, 0, 3 } })
+  validate_mp(
+    { "     <-c2.1.3" },
+    1,
+    { { "<-", "1" }, { "-", "2" }, { "c", "3" } },
+    { 0, 0, 7 },
+    { { 0, 5, 0, 10 }, { 0, 6, 0, 8 }, { 0, 7, 0, 12 } }
+  )
 
-  r = mp({ "     <-c2.1.3" }, 1, c({ { "<-", "1" }, { "-", "2" }, { "c", "3" } }), pos(0, 0, 7))
-  validate(r, { { 0, 5, 0, 10 }, { 0, 6, 0, 8 }, { 0, 7, 0, 12 } })
+  validate_mp({ "a..bA..B" }, 1, { { "a", "A" }, { "b", "B" } }, { 0, 0, 4 }, { { 0, 3, 0, 7 }, { 0, 0, 0, 4 } })
 
-  r = mp({ "a..bA..B" }, 1, c({ { "a", "A" }, { "b", "B" } }), pos(0, 0, 4))
-  validate(r, { { 0, 3, 0, 7 }, { 0, 0, 0, 4 } })
+  validate_mp({ "## a ##" }, 1, { { "##", "##" } }, { 0, 0, 3 }, { { 0, 0, 0, 6 } })
 
-  r = mp({ "## a ##" }, 1, c({ { "##", "##" } }), pos(0, 0, 3))
-  validate(r, { { 0, 0, 0, 6 } })
-
-  r = mp({ "aA" }, 1, c({ { "a", "A" }, { "a", "A" } }), pos(0, 0, 0))
-  validate(r, { { 0, 0, 0, 1 } })
+  validate_mp({ "aA" }, 1, { { "a", "A" }, { "a", "A" } }, { 0, 0, 0 }, { { 0, 0, 0, 1 } })
 end
 
 T["textobject"]["block_inner_range"] = function()
@@ -3472,407 +2945,275 @@ end
 T["textobject"]["block_match_ts inner"] = function()
   local bmts = H.textobject_block_match_ts
   local pad = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local buf = vim.api.nvim_create_buf(true, false)
-  local set = function(lines) vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines) end
 
   -- single line
-  set({ "/* hello world */" })
-  eq(bmts(buf, pad, { 0, 0, 0, 16 }, true), { 0, 3, 0, 13 })
+  eq(bmts({ "/* hello world */" }, pad, { 0, 0, 0, 16 }, true), { 0, 3, 0, 13 })
 
   -- no inner → returns ts_range as-is
-  eq(bmts(buf, pad, { 0, 0, 0, 16 }, false), { 0, 0, 0, 16 })
+  eq(bmts({ "/* hello world */" }, pad, { 0, 0, 0, 16 }, false), { 0, 0, 0, 16 })
 
   -- multi-line
-  set({ "/* a", "  b  ", " c */" })
-  eq(bmts(buf, pad, { 0, 0, 2, 4 }, true), { 0, 3, 2, 1 })
+  eq(bmts({ "/* a", "  b  ", " c */" }, pad, { 0, 0, 2, 4 }, true), { 0, 3, 2, 1 })
 
   -- multi-line with empty trailing line
-  set({ "/* a", " */" })
-  eq(bmts(buf, pad, { 0, 0, 1, 2 }, true), { 0, 3, 0, 3 })
+  eq(bmts({ "/* a", " */" }, pad, { 0, 0, 1, 2 }, true), { 0, 3, 0, 3 })
 
   -- empty content
-  set({ "/**/" })
-  eq(bmts(buf, pad, { 0, 0, 0, 3 }, true), nil)
+  eq(bmts({ "/**/" }, pad, { 0, 0, 0, 3 }, true), nil)
 
   -- marker mismatch → nil (ts_range doesn't match any pair)
-  set({ "/* hello world */" })
-  eq(bmts(buf, pad, { 0, 0, 0, 15 }, true), nil)
+  eq(bmts({ "/* hello world */" }, pad, { 0, 0, 0, 15 }, true), nil)
 end
 
 T["textobject"]["line textobject works"] = function()
-  set_lines({ "aa", "#bb", "# cc", "dd", "#ee", "#ff" })
-  set_cursor(1, 2)
-  feed("d", "gc")
-  eq(get_lines(), { "aa", "dd", "#ee", "#ff" })
-
-  set_cursor(3, 0)
-  feed(".")
-  eq(get_lines(), { "aa", "dd" })
-
-  set_cursor(0, 0)
-  feed(".")
-  eq(get_lines(), { "aa", "dd" })
+  validate_steps({ "aa", "#bb", "# cc", "dd", "#ee", "#ff" }, {
+    { { 1, 2 }, { "d", "gc" }, { "aa", "dd", "#ee", "#ff" } },
+    { { 3, 0 }, ".", { "aa", "dd" } },
+    { { 0, 0 }, ".", { "aa", "dd" } },
+  })
 end
 
 T["textobject"]["block textobject works"] = function()
-  child.b.celeste_comment_block_commentstring = "--[[%s]]"
-  set_lines({ "aaa", "--[[bbb]] ccc --[[ddd  ]] eeee", "ffff --[[ggg   ", "", "hh", "ii ]] jjj" })
-  set_cursor(1, 14)
-  feed("d", "gb")
-  eq(get_lines(), { "aaa", "--[[bbb]] ccc  eeee", "ffff --[[ggg   ", "", "hh", "ii ]] jjj" })
-
-  set_cursor(2, 6)
-  feed(".")
-  eq(get_lines(), { "aaa", "--[[bbb]] ccc  eeee", "ffff  jjj" })
-
-  set_cursor(1, 9)
-  feed(".")
-  eq(get_lines(), { "aaa", "--[[bbb]] ccc  eeee", "ffff  jjj" }) -- do nothing
+  validate_steps({ "aaa", "--[[bbb]] ccc --[[ddd  ]] eeee", "ffff --[[ggg   ", "", "hh", "ii ]] jjj" }, {
+    {
+      { 1, 14 },
+      { "d", "gb" },
+      { "aaa", "--[[bbb]] ccc  eeee", "ffff --[[ggg   ", "", "hh", "ii ]] jjj" },
+    },
+    { { 2, 6 }, ".", { "aaa", "--[[bbb]] ccc  eeee", "ffff  jjj" } },
+    { { 1, 9 }, ".", { "aaa", "--[[bbb]] ccc  eeee", "ffff  jjj" } }, -- do nothing
+  }, { b = { celeste_comment_block_commentstring = "--[[%s]]" } })
 end
 
 T["textobject"]["linewise inner"] = function()
-  set_lines({ "# hello world", "# hello world   ", "#" })
-  set_cursor(0, 3)
-  feed("d", "gic")
-  eq(get_lines(), { "# ", "# hello world   ", "#" })
-  set_cursor(1, 3)
-  feed("d", "gic")
-  eq(get_lines(), { "# ", "# ", "#" })
-  set_cursor(2, 0)
-  feed("d", "gic") -- empty content: do nothing
-  eq(get_lines(), { "# ", "# ", "#" })
+  validate_steps({ "# hello world", "# hello world   ", "#" }, {
+    { { 0, 3 }, { "d", "gic" }, { "# ", "# hello world   ", "#" } },
+    { { 1, 3 }, { "d", "gic" }, { "# ", "# ", "#" } },
+    { { 2, 0 }, { "d", "gic" }, { "# ", "# ", "#" } }, -- empty content: do nothing
+  })
 end
 
 T["textobject"]["blockwise inner"] = function()
-  child.b.celeste_comment_block_commentstring = "/*%s*/"
-  set_lines({ "/* hello world */", "/* a", "  b  ", " c */" })
-  set_cursor(0, 4)
-  feed("d", "gib")
-  eq(get_lines(), { "/*  */", "/* a", "  b  ", " c */" })
-  set_cursor(1, 2)
-  feed("d", "gib")
-  eq(get_lines(), { "/*  */", "/*  */" })
+  validate_steps({ "/* hello world */", "/* a", "  b  ", " c */" }, {
+    { { 0, 4 }, { "d", "gib" }, { "/*  */", "/* a", "  b  ", " c */" } },
+    { { 1, 2 }, { "d", "gib" }, { "/*  */", "/*  */" } },
+  }, { b = { celeste_comment_block_commentstring = "/*%s*/" } })
 
   -- empty content
-  set_lines({ "/**/" })
-  set_cursor(0, 0)
-  feed("d", "gib")
-  eq(get_lines(), { "/**/" })
+  validate_steps({ "/**/" }, { { { 0, 0 }, { "d", "gib" }, { "/**/" } } })
 end
 
 T["textobject"]["auto inner"] = function()
-  child.b.celeste_comment_block_commentstring = "/*%s*/"
-  set_lines({ "# hello world", "/* hello world */" })
-  set_cursor(0, 3)
-  feed("d", "gia")
-  eq(get_lines(), { "# ", "/* hello world */" })
-  set_cursor(1, 4)
-  feed("d", "gia")
-  eq(get_lines(), { "# ", "/*  */" })
+  validate_steps({ "# hello world", "/* hello world */" }, {
+    { { 0, 3 }, { "d", "gia" }, { "# ", "/* hello world */" } },
+    { { 1, 4 }, { "d", "gia" }, { "# ", "/*  */" } },
+  }, { b = { celeste_comment_block_commentstring = "/*%s*/" } })
 end
 
 T["textobject"]["auto eol line comment"] = function()
   local lines = { "x = 1 # hello world" }
 
-  set_lines(lines)
-  set_cursor(0, 9)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 6, 0, 18 }, "v" })
-  feed("<Esc>")
+  validate_steps(lines, {
+    { { 0, 9 }, { "v", "ga" }, nil, nil, { { 0, 6, 0, 18 }, "v" } },
+    { "<Esc>" },
+    { { 0, 9 }, { "v", "gia" }, nil, nil, { { 0, 8, 0, 18 }, "v" } },
+    { "<Esc>" },
+    { { 0, 9 }, { "d", "ga" }, { "x = 1 " } },
+  })
 
-  set_cursor(0, 9)
-  feed("v", "gia")
-  eq(get_selection(), { { 0, 8, 0, 18 }, "v" })
-  feed("<Esc>")
-
-  set_cursor(0, 9)
-  feed("d", "ga")
-  eq(get_lines(), { "x = 1 " })
-
-  set_lines(lines)
-  set_cursor(0, 9)
-  feed("d", "gia")
-  eq(get_lines(), { "x = 1 # " })
+  validate_steps(lines, { { { 0, 9 }, { "d", "gia" }, { "x = 1 # " } } })
 
   -- cursor on code or on the whitespace before the marker: no match
-  set_lines(lines)
-  set_cursor(0, 0)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), lines)
-  set_cursor(0, 5)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), lines)
+  validate_steps(lines, {
+    { { 0, 0 }, { "d", "ga", "<Esc>" }, lines },
+    { { 0, 5 }, { "d", "ga", "<Esc>" }, lines },
+  })
 
   -- marker must be preceded by whitespace
-  set_lines({ "x=1#hi" })
-  set_cursor(0, 4)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), { "x=1#hi" })
+  validate_steps({ "x=1#hi" }, {
+    { { 0, 4 }, { "d", "ga", "<Esc>" }, { "x=1#hi" } },
+  })
 
   -- skip a marker not preceded by whitespace, match the next one
-  set_lines({ "a#b # c" })
-  set_cursor(0, 6)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 4, 0, 6 }, "v" })
-  feed("<Esc>")
+  validate_steps({ "a#b # c" }, {
+    { { 0, 6 }, { "v", "ga" }, nil, nil, { { 0, 4, 0, 6 }, "v" } },
+    { "<Esc>" },
+  })
 
   -- lua: -- and --[[ share the same prefix
-  child.bo.filetype = "lua"
+  set_context({ bo = { filetype = "lua" } })
   local lua_lines = { "local x = 1 -- hello" }
 
-  set_lines(lua_lines)
-  set_cursor(0, 16)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 12, 0, 19 }, "v" })
-  feed("<Esc>")
-
-  set_cursor(0, 16)
-  feed("v", "gia")
-  eq(get_selection(), { { 0, 15, 0, 19 }, "v" })
-  feed("<Esc>")
+  validate_steps(lua_lines, {
+    { { 0, 16 }, { "v", "ga" }, nil, nil, { { 0, 12, 0, 19 }, "v" } },
+    { "<Esc>" },
+    { { 0, 16 }, { "v", "gia" }, nil, nil, { { 0, 15, 0, 19 }, "v" } },
+    { "<Esc>" },
+  })
 
   -- trailing block comment is skipped, only the line comment after it is matched
-  set_lines({ "local x = 1 --[[ a ]] -- tail" })
-  set_cursor(0, 26)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 22, 0, 28 }, "v" })
-  feed("<Esc>")
-  set_cursor(0, 26)
-  feed("v", "gia")
-  eq(get_selection(), { { 0, 25, 0, 28 }, "v" })
-  feed("<Esc>")
+  validate_steps({ "local x = 1 --[[ a ]] -- tail" }, {
+    { { 0, 26 }, { "v", "ga" }, nil, nil, { { 0, 22, 0, 28 }, "v" } },
+    { "<Esc>" },
+    { { 0, 26 }, { "v", "gia" }, nil, nil, { { 0, 25, 0, 28 }, "v" } },
+    { "<Esc>" },
+  })
 
   -- empty content: outer selects the marker, inner does nothing
-  set_lines({ "x --" })
-  set_cursor(0, 3)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 2, 0, 3 }, "v" })
-  feed("<Esc>")
-  set_cursor(0, 3)
-  feed("d", "gia", "<Esc>")
-  eq(get_lines(), { "x --" })
+  validate_steps({ "x --" }, {
+    { { 0, 3 }, { "v", "ga" }, nil, nil, { { 0, 2, 0, 3 }, "v" } },
+    { "<Esc>" },
+    { { 0, 3 }, { "d", "gia", "<Esc>" }, { "x --" } },
+  })
 
   -- block comment at end of line, cursor after it: no match
-  set_lines({ "local x = 1 --[[ hi ]] " })
-  set_cursor(0, 22)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), { "local x = 1 --[[ hi ]] " })
+  validate_steps({ "local x = 1 --[[ hi ]] " }, {
+    { { 0, 22 }, { "d", "ga", "<Esc>" }, { "local x = 1 --[[ hi ]] " } },
+  })
 
   -- unclosed block comment (no closer in the whole buffer): no match
-  set_lines({ "local x = 1 --[[ open" })
-  set_cursor(0, 18)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), { "local x = 1 --[[ open" })
-  set_cursor(0, 18)
-  feed("d", "gia", "<Esc>")
-  eq(get_lines(), { "local x = 1 --[[ open" })
+  validate_steps({ "local x = 1 --[[ open" }, {
+    { { 0, 18 }, { "d", "ga", "<Esc>" }, { "local x = 1 --[[ open" } },
+    { { 0, 18 }, { "d", "gia", "<Esc>" }, { "local x = 1 --[[ open" } },
+  })
 
   -- block comment closed on a later line: block wins, EOL fallback is not used
-  set_lines({ "local x = 1 --[[ open", "still", " ]]" })
-  set_cursor(0, 18)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 12, 2, 2 }, "v" })
-  feed("<Esc>")
-  set_cursor(0, 18)
-  feed("v", "gia")
-  eq(get_selection(), { { 0, 17, 1, 4 }, "v" })
-  feed("<Esc>")
+  validate_steps({ "local x = 1 --[[ open", "still", " ]]" }, {
+    { { 0, 18 }, { "v", "ga" }, nil, nil, { { 0, 12, 2, 2 }, "v" } },
+    { "<Esc>" },
+    { { 0, 18 }, { "v", "gia" }, nil, nil, { { 0, 17, 1, 4 }, "v" } },
+    { "<Esc>" },
+  })
 
   -- once an unclosed block is seen, later markers on the line are not line comments
-  set_lines({ "local x = 1 --[[ // not comment" })
-  set_cursor(0, 21)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), { "local x = 1 --[[ // not comment" })
+  validate_steps({ "local x = 1 --[[ // not comment" }, {
+    { { 0, 21 }, { "d", "ga", "<Esc>" }, { "local x = 1 --[[ // not comment" } },
+  })
 
   -- uncomment_auto does not handle eol comments
-  set_lines(lua_lines)
-  set_cursor(0, 16)
-  feed("gcu")
-  eq(get_lines(), lua_lines)
+  validate_steps(lua_lines, { { { 0, 16 }, "gcu", lua_lines } })
 
   -- cpp: multi-char closer adjacency and block skipping
-  child.bo.filetype = "cpp"
+  set_context({ bo = { filetype = "cpp" } })
   local cpp_lines = { "int x = 1; /* a // b */ // tail" }
 
-  set_lines(cpp_lines)
-  set_cursor(0, 28)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 24, 0, 30 }, "v" })
-  feed("<Esc>")
-
-  set_cursor(0, 28)
-  feed("v", "gia")
-  eq(get_selection(), { { 0, 27, 0, 30 }, "v" })
-  feed("<Esc>")
-
-  set_cursor(0, 28)
-  feed("d", "ga")
-  eq(get_lines(), { "int x = 1; /* a // b */ " })
+  validate_steps(cpp_lines, {
+    { { 0, 28 }, { "v", "ga" }, nil, nil, { { 0, 24, 0, 30 }, "v" } },
+    { "<Esc>" },
+    { { 0, 28 }, { "v", "gia" }, nil, nil, { { 0, 27, 0, 30 }, "v" } },
+    { "<Esc>" },
+    { { 0, 28 }, { "d", "ga" }, { "int x = 1; /* a // b */ " } },
+  })
 
   -- block comment starting at the first non-blank: skipped, no match
-  set_lines({ "/* a // b */ x" })
-  set_cursor(0, 13)
-  feed("d", "ga", "<Esc>")
-  eq(get_lines(), { "/* a // b */ x" })
+  validate_steps({ "/* a // b */ x" }, {
+    { { 0, 13 }, { "d", "ga", "<Esc>" }, { "/* a // b */ x" } },
+  })
 
   -- multi-char closer followed immediately by code (regression)
-  set_lines({ "/* a */*p = 1; // tail" })
-  set_cursor(0, 18)
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 15, 0, 21 }, "v" })
-  feed("<Esc>")
-  set_cursor(0, 18)
-  feed("v", "gia")
-  eq(get_selection(), { { 0, 18, 0, 21 }, "v" })
-  feed("<Esc>")
+  validate_steps({ "/* a */*p = 1; // tail" }, {
+    { { 0, 18 }, { "v", "ga" }, nil, nil, { { 0, 15, 0, 21 }, "v" } },
+    { "<Esc>" },
+    { { 0, 18 }, { "v", "gia" }, nil, nil, { { 0, 18, 0, 21 }, "v" } },
+    { "<Esc>" },
+  })
 end
 
 -- Referenced from: https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L797
 T["textobject"]["respect tree-sitter injections"] = function()
-  child.lua_func(function()
-    vim.bo.filetype = "vim"
-    vim.treesitter.start()
-  end)
-  set_lines({
+  set_context({ bo = { filetype = "vim" } })
+  child.lua_func(function() vim.treesitter.start() end)
+  validate_steps({
     '"set background=dark',
     '"set termguicolors',
     "lua << EOF",
     "-- print(1)",
     "-- print(2)",
     "EOF",
-  })
-  set_cursor(0, 0)
-  feed("dgc")
-  eq(get_lines(), {
-    "lua << EOF",
-    "-- print(1)",
-    "-- print(2)",
-    "EOF",
-  })
-
-  set_cursor(1, 0)
-  feed(".")
-  eq(get_lines(), {
-    "lua << EOF",
-    "EOF",
+  }, {
+    { { 0, 0 }, { "d", "gc" }, { "lua << EOF", "-- print(1)", "-- print(2)", "EOF" } },
+    { { 1, 0 }, ".", { "lua << EOF", "EOF" } },
   })
 end
 
 T["textobject"]["auto_linewise_detect"] = function()
-  set_lines({ "aaa", "# bbb", "# ccc", "# ddd", "eee" })
-  set_cursor(1, 3)
-  feed("v", "ga")
-  eq(get_cursor(), { 3, 3 })
-  feed("gc")
-  eq(get_cursor(), { 3, 1 })
-  eq(get_lines(), { "aaa", "bbb", "ccc", "ddd", "eee" })
-  feed("u")
-  eq(get_lines(), { "aaa", "# bbb", "# ccc", "# ddd", "eee" })
-  feed("dga")
-  eq(get_lines(), { "aaa", "eee" })
+  validate_steps({ "aaa", "# bbb", "# ccc", "# ddd", "eee" }, {
+    { { 1, 3 }, { "v", "ga" }, nil, { 3, 3 } },
+    { "gc", { "aaa", "bbb", "ccc", "ddd", "eee" }, { 3, 1 } },
+    { "u", { "aaa", "# bbb", "# ccc", "# ddd", "eee" } },
+    { "dga", { "aaa", "eee" } },
+  })
 end
 
 T["textobject"]["auto_linewise_detect with ignore_empty_lines=always"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ " \t", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" })
-  set_cursor(3, 0)
-  feed("vgad")
-  eq(get_cursor(), { 3, 0 })
-  eq(get_lines(), { " \t", "# aaa", "\t \t ", "", "   ", "#bbb", "\t\t\t" })
-  feed("u")
-  eq(get_lines(), { " \t", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" })
+  local original = { " \t", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" }
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_cursor(4, 1)
-  feed("vgad")
-  eq(get_cursor(), { 4, 1 })
-  eq(get_lines(), { " \t", "# aaa", "\t \t ", " ", "  ", "#bbb", "\t\t\t" })
-  feed("u")
-  eq(get_lines(), { " \t", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" })
+  validate_steps(original, {
+    { { 3, 0 }, "vgad", { " \t", "# aaa", "\t \t ", "", "   ", "#bbb", "\t\t\t" }, { 3, 0 } },
+    { "u", original },
+  }, { config = { ignore_empty_lines = "never" } })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_cursor(4, 2)
-  feed("vgad")
-  eq(get_lines(), { " \t", "\t\t\t" })
-  eq(get_cursor(), { 1, 0 })
-  feed("u")
-  eq(get_lines(), { " \t", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" })
-  set_cursor(0, 1)
-  feed("vgad")
-  eq(get_lines(), { " ", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" })
-  eq(get_cursor(), { 0, 0 })
+  validate_steps(nil, {
+    { { 4, 1 }, "vgad", { " \t", "# aaa", "\t \t ", " ", "  ", "#bbb", "\t\t\t" }, { 4, 1 } },
+    { "u", original },
+  }, { config = { ignore_empty_lines = "mixed" } })
+
+  validate_steps(nil, {
+    { { 4, 2 }, "vgad", { " \t", "\t\t\t" }, { 1, 0 } },
+    { "u", original },
+  }, { config = { ignore_empty_lines = "always" } })
+  validate_steps(nil, {
+    { { 0, 1 }, "vgad", { " ", "# aaa", "\t \t ", " ", "   ", "#bbb", "\t\t\t" }, { 0, 0 } },
+  })
 end
 
 T["textobject"]["auto_blockwise_detect"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "start", "/* comment", "\t\t", " \t", "block */", "end" })
-  set_cursor(2, 2)
-  feed("v", "ga")
-  eq(get_cursor(), { 4, 7 })
-  feed("gb")
-  eq(get_cursor(), { 4, 4 })
-  eq(get_lines(), { "start", "comment", "\t\t", " \t", "block", "end" })
-  feed("u")
-  eq(get_lines(), { "start", "/* comment", "\t\t", " \t", "block */", "end" })
-  feed("dga")
-  eq(get_lines(), { "start", "", "end" })
+  validate_steps({ "start", "/* comment", "\t\t", " \t", "block */", "end" }, {
+    { { 2, 2 }, { "v", "ga" }, nil, { 4, 7 } },
+    { "gb", { "start", "comment", "\t\t", " \t", "block", "end" }, { 4, 4 } },
+    { "u", { "start", "/* comment", "\t\t", " \t", "block */", "end" } },
+    { "dga", { "start", "", "end" } },
+  }, { bo = { filetype = "cpp" } })
 end
 
 T["textobject"]["block textobject works with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.b.celeste_comment_block_commentstring = "/*%s*/"
-  set_lines({ "  /* hello */  tail", "  after" })
-  set_cursor(0, 4)
-  feed("d", "gb")
-  eq(get_lines(), { "    tail", "  after" })
+  validate_steps({ "  /* hello */  tail", "  after" }, {
+    { { 0, 4 }, { "d", "gb" }, { "    tail", "  after" } },
+  }, { o = { selection = "exclusive" }, b = { celeste_comment_block_commentstring = "/*%s*/" } })
 end
 
 T["textobject"]["auto textobject works with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.bo.filetype = "cpp"
-  set_lines({ "  /* hello */  tail", "  after" })
-  set_cursor(0, 4)
-  feed("d", "ga")
-  eq(get_lines(), { "    tail", "  after" })
+  validate_steps({ "  /* hello */  tail", "  after" }, {
+    { { 0, 4 }, { "d", "ga" }, { "    tail", "  after" } },
+  }, { bo = { filetype = "cpp" }, o = { selection = "exclusive" } })
 end
 
 T["textobject"]["line textobject works with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  set_lines({ "aa", "#bb", "# cc", "dd" })
-  set_cursor(1, 2)
-  feed("d", "gc")
-  eq(get_lines(), { "aa", "dd" })
+  validate_steps({ "aa", "#bb", "# cc", "dd" }, {
+    { { 1, 2 }, { "d", "gc" }, { "aa", "dd" } },
+  }, { o = { selection = "exclusive" } })
 end
 
 T["textobject"]["tabstop + noexpandtab"] = function()
-  child.bo.filetype = "php"
-  child.bo.tabstop = 2
-  child.bo.expandtab = false
-  set_lines({
+  validate_steps({
     "\tpublic function test(): void {",
     "\t\techo 'hi';",
     "\t}",
-  })
-  selection(0, 1, 2, 1)
-  feed("gb")
-  eq(get_lines(), {
-    "\t/* public function test(): void {",
-    "\t\techo 'hi';",
-    "\t} */",
-  })
-  feed("gbgb")
-  eq(get_lines(), {
-    "\tpublic function test(): void {",
-    "\t\techo 'hi';",
-    "\t}",
-  })
+  }, {
+    {
+      { 0, 1, 2, 1 },
+      "gb",
+      { "\t/* public function test(): void {", "\t\techo 'hi';", "\t} */" },
+    },
+    {
+      "gbgb",
+      { "\tpublic function test(): void {", "\t\techo 'hi';", "\t}" },
+    },
+  }, { bo = { filetype = "php", tabstop = 2, expandtab = false } })
 end
 
 T["textobject"]["nested linewise and blockwise comment auto detect"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.tabstop = 2
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_lines({
+  validate_steps({
     "  aaa",
     "  /* bbb",
     "  \t\t\t\t\t\t\t\t",
@@ -3882,194 +3223,86 @@ T["textobject"]["nested linewise and blockwise comment auto detect"] = function(
     "  // ee",
     "",
     "   */",
-  })
-  set_cursor(5, 6)
-  feed("vga")
-  eq(get_cursor(), { 6, 6 })
-  feed("d")
-  eq(get_lines(), {
-    "  aaa",
-    "  /* bbb",
-    "  \t\t\t\t\t\t\t\t",
-    "",
-    "   */",
-  })
-
-  feed("u")
-  set_cursor(5, 6)
-  feed("gcu")
-  eq(get_lines(), {
-    "  aaa",
-    "  /* bbb",
-    "  \t\t\t\t\t\t\t\t",
-    "  cc",
-    "  dd",
-    "\t\t\t\t\t\t\t\t\t",
-    "  ee",
-    "",
-    "   */",
-  })
-  eq(get_cursor(), { 5, 6 })
-  feed("gcu")
-  eq(get_lines(), {
-    "  aaa",
-    "  bbb",
-    "  \t\t\t\t\t\t\t\t",
-    "  cc",
-    "  dd",
-    "\t\t\t\t\t\t\t\t\t",
-    "  ee",
-    "",
-    "  ",
-  })
-  eq(get_cursor(), { 5, 6 })
+  }, {
+    { { 5, 6 }, "vga", nil, { 6, 6 } },
+    { "d", { "  aaa", "  /* bbb", "  \t\t\t\t\t\t\t\t", "", "   */" } },
+    { "u" },
+    {
+      { 5, 6 },
+      "gcu",
+      { "  aaa", "  /* bbb", "  \t\t\t\t\t\t\t\t", "  cc", "  dd", "\t\t\t\t\t\t\t\t\t", "  ee", "", "   */" },
+      { 5, 6 },
+    },
+    {
+      "gcu",
+      { "  aaa", "  bbb", "  \t\t\t\t\t\t\t\t", "  cc", "  dd", "\t\t\t\t\t\t\t\t\t", "  ee", "", "  " },
+      { 5, 6 },
+    },
+  }, { bo = { filetype = "cpp", tabstop = 2 }, config = { ignore_empty_lines = "always" } })
 end
 
 T["textobject"]["auto_uncomment_do_nothing"] = function()
-  set_lines({ "aaa", "bbb", "ccc" })
-  set_cursor(1, 1)
-  feed("gcu")
-  eq(get_lines(), { "aaa", "bbb", "ccc" })
-  eq(get_cursor(), { 1, 1 })
+  validate_steps({ "aaa", "bbb", "ccc" }, {
+    { { 1, 1 }, "gcu", { "aaa", "bbb", "ccc" }, { 1, 1 } },
+  })
+  validate_steps({ "aaa", "", "ccc" }, {
+    { { 1, 0 }, "gcu", { "aaa", "", "ccc" }, { 1, 0 } },
+  })
 
-  set_lines({ "aaa", "", "ccc" })
-  set_cursor(1, 0)
-  feed("gcu")
-  eq(get_lines(), { "aaa", "", "ccc" })
-  eq(get_cursor(), { 1, 0 })
+  validate_steps({ "--1-- 2 -- 3 --" }, {
+    { { 0, 5 }, "gcu", { "--1-- 2 -- 3 --" }, { 0, 5 } },
+    { { 0, 6 }, "gcu", { "--1-- 2 -- 3 --" }, { 0, 6 } },
+    { { 0, 7 }, "gcu", { "--1-- 2 -- 3 --" }, { 0, 7 } },
+    { { 0, 8 }, "gcu", { "--1-- 2 3" }, { 0, 8 } },
+    { { 0, 4 }, "gcu", { "1 2 3" }, { 0, 0 } },
+  }, {
+    bo = { filetype = "unknown", commentstring = "" },
+    b = { celeste_comment_block_commentstring = "--%s--" },
+  })
 
-  child.bo.filetype = "unknown"
-  child.bo.commentstring = ""
-  child.b.celeste_comment_block_commentstring = "--%s--"
-  set_lines({ "--1-- 2 -- 3 --" })
-
-  set_cursor(0, 5)
-  feed("gcu")
-  eq(get_cursor(), { 0, 5 })
-  eq(get_lines(), { "--1-- 2 -- 3 --" })
-
-  set_cursor(0, 6)
-  feed("gcu")
-  eq(get_cursor(), { 0, 6 })
-  eq(get_lines(), { "--1-- 2 -- 3 --" })
-
-  set_cursor(0, 7)
-  feed("gcu")
-  eq(get_cursor(), { 0, 7 })
-  eq(get_lines(), { "--1-- 2 -- 3 --" })
-
-  set_cursor(0, 8)
-  feed("gcu")
-  eq(get_cursor(), { 0, 8 })
-  eq(get_lines(), { "--1-- 2 3" })
-
-  set_cursor(0, 4)
-  feed("gcu")
-  eq(get_cursor(), { 0, 0 })
-  eq(get_lines(), { "1 2 3" })
-
-  child.bo.filetype = "unknown"
-  child.bo.commentstring = ""
-  set_lines({ "aaa", "# bbb", "ccc" })
-  set_cursor(1, 1)
-  feed("gcu")
-  eq(get_lines(), { "aaa", "# bbb", "ccc" })
-  eq(get_cursor(), { 1, 1 })
+  validate_steps({ "aaa", "# bbb", "ccc" }, {
+    { { 1, 1 }, "gcu", { "aaa", "# bbb", "ccc" }, { 1, 1 } },
+  }, { bo = { filetype = "unknown", commentstring = "" } })
 end
 
 T["textobject"]["gcu respect ignore_empty_lines"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_lines({ "aaa", "# bbb", "# ccc", " ", "# eee" })
-  set_cursor(1, 1)
-  feed("gcu")
-  eq(get_lines(), { "aaa", "bbb", "ccc", " ", "eee" })
-  eq(get_cursor(), { 1, 0 })
+  local original = { "aaa", "# bbb", "# ccc", " ", "# eee" }
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  feed("u")
-  set_cursor(1, 1)
-  feed("gcu")
-  eq(get_lines(), { "aaa", "bbb", "ccc", " ", "# eee" })
-  eq(get_cursor(), { 1, 0 })
+  validate_steps(original, {
+    { { 1, 1 }, "gcu", { "aaa", "bbb", "ccc", " ", "eee" }, { 1, 0 } },
+  }, { config = { ignore_empty_lines = "always" } })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  feed("u")
-  set_cursor(1, 1)
-  feed("gcu")
-  eq(get_lines(), { "aaa", "bbb", "ccc", " ", "# eee" })
-  eq(get_cursor(), { 1, 0 })
+  validate_steps(nil, {
+    { "u" },
+    { { 1, 1 }, "gcu", { "aaa", "bbb", "ccc", " ", "# eee" }, { 1, 0 } },
+  }, { config = { ignore_empty_lines = "never" } })
+
+  validate_steps(nil, {
+    { "u" },
+    { { 1, 1 }, "gcu", { "aaa", "bbb", "ccc", " ", "# eee" }, { 1, 0 } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 end
 
 T["textobject"]["gcu special case1"] = function()
-  child.bo.filetype = "lua"
-  child.lua_func(
-    function()
-      vim.b.celeste_comment_config = {
-        cms_confs = { lua = { { "--%s", "---%s", "--[[%s]]" }, "--[[%s]]" } },
-      }
-    end
-  )
-  set_lines({
-    "--[[aaa]]",
-    "---@param xx",
-    "-- test",
-  })
-  set_cursor(2, 4)
-  feed("gcu")
-  eq(get_cursor(), { 2, 1 })
-  eq(get_lines(), {
-    "aaa",
-    "@param xx",
-    "test",
-  })
+  validate_steps({ "--[[aaa]]", "---@param xx", "-- test" }, {
+    { { 2, 4 }, "gcu", { "aaa", "@param xx", "test" }, { 2, 1 } },
+  }, { bo = { filetype = "lua" }, config = { cms_confs = { lua = { { "--%s", "---%s", "--[[%s]]" }, "--[[%s]]" } } } })
 end
 
 T["textobject"]["gcu special case2 : block lcs startswith line lcs"] = function()
-  child.bo.filetype = "lua"
-  child.bo.tabstop = 2
-  child.lua_func(
-    function()
-      vim.b.celeste_comment_config = {
-        cms_confs = { lua = { { "--%s" }, "--[[%s]]" } },
-      }
-    end
-  )
-  set_lines({
-    "  hello",
-    "  world",
-  })
-  set_cursor(0, 2)
-  feed("gbj")
-  eq(get_cursor(), { 0, 7 })
-  eq(get_lines(), {
-    "  --[[ hello",
-    "  world ]]",
-  })
-  feed("gcu")
-  eq(get_cursor(), { 0, 2 })
-  eq(get_lines(), {
-    "  hello",
-    "  world",
-  })
+  validate_steps({ "  hello", "  world" }, {
+    { { 0, 2 }, "gbj", { "  --[[ hello", "  world ]]" }, { 0, 7 } },
+    { "gcu", { "  hello", "  world" }, { 0, 2 } },
+  }, { bo = { filetype = "lua", tabstop = 2 }, config = { cms_confs = { lua = { { "--%s" }, "--[[%s]]" } } } })
 end
 
 T["textobject"]["gcu dot repeatable"] = function()
-  child.lua_func(function() vim.bo.filetype = "lua" end)
-  local lines = { "a", "b", "", "c", "d" }
-  set_lines(lines)
-  set_cursor(0, 0)
-  feed("gcj")
-  set_cursor(3, 0)
-  feed("gbj")
-  eq(get_lines(), { "-- a", "-- b", "", "--[[ c", "d ]]" })
-  set_cursor(1, 3)
-  feed("gcu")
-  eq(get_cursor(), { 1, 0 })
-  eq(get_lines(), { "a", "b", "", "--[[ c", "d ]]" })
-  set_cursor(3, 3)
-  feed(".")
-  eq(get_cursor(), { 3, 0 })
-  eq(get_lines(), { "a", "b", "", "c", "d" })
+  validate_steps({ "a", "b", "", "c", "d" }, {
+    { { 0, 0 }, "gcj" },
+    { { 3, 0 }, "gbj", { "-- a", "-- b", "", "--[[ c", "d ]]" } },
+    { { 1, 3 }, "gcu", { "a", "b", "", "--[[ c", "d ]]" }, { 1, 0 } },
+    { { 3, 3 }, ".", { "a", "b", "", "c", "d" }, { 3, 0 } },
+  }, { bo = { filetype = "lua" } })
 end
 
 -- textobject treesitter ──────────────────────────────────────────────────────
@@ -4086,14 +3319,14 @@ local ts_comment_at_cursor = function(pos)
 end
 
 T["textobject treesitter"]["works"] = function()
+  set_context({
+    bo = { filetype = "cpp", tabstop = 2, expandtab = true },
+    config = { textobj_treesitter_detect = true },
+  })
   child.lua_func(function()
-    vim.bo.filetype = "cpp"
-    vim.bo.tabstop = 2
-    vim.bo.expandtab = true
     vim.cmd("packadd nvim-treesitter-textobjects")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
   end)
   set_lines({
     "int func() {",
@@ -4113,41 +3346,47 @@ T["textobject treesitter"]["works"] = function()
   eq(ts_comment_at_cursor({ 5, 5 }), vim.NIL)
   eq(ts_comment_at_cursor({ 7, 2 }), { 7, 2, 7, 16 })
 
-  set_cursor(1, 13)
-  feed("gbgb")
-  eq(get_cursor(), { 1, 13 })
-  eq(get_lines(1, 1), { '  printf("/* hello, world */");' })
-
-  set_cursor(3, 2)
-  feed(".")
-  eq(get_lines(), {
+  validate_steps({
     "int func() {",
     '  printf("/* hello, world */");',
     "",
-    "  this is a test ...........",
+    "  /* this is a test ...........",
     "     really a test ............",
-    "    ",
+    "   */  ",
     "",
     "  // hello world!",
     "}",
+  }, {
+    { { 1, 13 }, "gbgb", { from = 2, '  printf("/* hello, world */");' }, { 1, 13 } },
+    {
+      { 3, 2 },
+      ".",
+      {
+        "int func() {",
+        '  printf("/* hello, world */");',
+        "",
+        "  this is a test ...........",
+        "     really a test ............",
+        "    ",
+        "",
+        "  // hello world!",
+        "}",
+      },
+    },
+    { { 7, 2 }, "gcgc", { from = 8, "  hello world!" }, { 7, 2 } },
   })
-
-  set_cursor(7, 2)
-  feed("gcgc")
-  eq(get_cursor(), { 7, 2 })
-  eq(get_lines(7, 7), { "  hello world!" })
 end
 
 T["textobject treesitter"]["works in markdown"] = function()
+  set_context({
+    bo = { filetype = "markdown", tabstop = 2, expandtab = true },
+    config = { textobj_treesitter_detect = true },
+  })
   child.lua_func(function()
-    vim.bo.filetype = "markdown"
-    vim.bo.tabstop = 2
-    vim.bo.expandtab = true
     vim.cmd("packadd nvim-treesitter-textobjects")
     vim.treesitter.language.add("markdown")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
   end)
   set_lines({
     "# title1",
@@ -4167,34 +3406,16 @@ T["textobject treesitter"]["works in markdown"] = function()
   eq(ts_comment_at_cursor({ 3, 0 }), { 3, 0, 5, 2 })
   eq(ts_comment_at_cursor({ 6, 1 }), { 6, 1, 6, 6 })
 
-  set_cursor(8, 0)
-  feed("gcu")
-  eq(get_cursor(), { 8, 0 })
-  eq(get_lines(8, 8), { "aaa" })
-
-  set_cursor(6, 4)
-  feed("gcu")
-  eq(get_cursor(), { 6, 1 })
-  eq(get_lines(6, 6), { " 123" })
-  set_cursor(4, 3)
-  feed("gcu")
-  eq(get_cursor(), { 4, 3 })
-  eq(get_lines(3, 5), {
-    "hello",
-    "   world",
-    "",
+  validate_steps(nil, {
+    { { 8, 0 }, "gcu", { from = 9, "aaa" }, { 8, 0 } },
+    { { 6, 4 }, "gcu", { from = 7, " 123" }, { 6, 1 } },
+    { { 4, 3 }, "gcu", { from = 4, "hello", "   world", "" }, { 4, 3 } },
+    { { 2, 8 }, "gcu", { from = 3, 'printf("/*hello world*/!");' }, { 2, 8 } },
   })
-  set_cursor(2, 8)
-  feed("gcu")
-  eq(get_cursor(), { 2, 8 })
-  eq(get_lines(2, 2), { 'printf("/*hello world*/!");' })
 end
 
 T["textobject treesitter"]["fallback to text match impl while no query"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  set_lines({
+  validate_steps({
     "int func() {",
     '  printf("/* hello, world */");',
     "",
@@ -4204,66 +3425,53 @@ T["textobject treesitter"]["fallback to text match impl while no query"] = funct
     "",
     "  // hello world!",
     "}",
-  })
-  set_cursor(1, 10)
-  feed("gcu")
-  eq(get_cursor(), { 1, 10 })
-  eq(get_lines(1, 1), { '  printf("hello, world");' })
+  }, {
+    { { 1, 10 }, "gcu", { from = 2, '  printf("hello, world");' }, { 1, 10 } },
+  }, { bo = { filetype = "cpp", tabstop = 2, expandtab = true } })
 end
 
 T["textobject treesitter"]["fallback to text match impl while disable textobj_treesitter_detect"] = function()
+  set_context({ bo = { filetype = "cpp", tabstop = 2, expandtab = true } })
   child.lua_func(function()
-    vim.bo.filetype = "cpp"
-    vim.bo.tabstop = 2
-    vim.bo.expandtab = true
     vim.cmd("packadd nvim-treesitter-textobjects")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
   end)
-  child.b.celeste_comment_config = { textobj_treesitter_detect = true }
-  set_lines({ "// hello /* world */" })
-  set_cursor(0, 9)
-  feed("gbgb")
-  eq(get_cursor(), { 0, 9 })
-  eq(get_lines(), { "// hello /* world */" })
+  validate_steps({ "// hello /* world */" }, {
+    { { 0, 9 }, "gbgb", { "// hello /* world */" }, { 0, 9 } },
+  }, { config = { textobj_treesitter_detect = true } })
 
-  child.b.celeste_comment_config = { textobj_treesitter_detect = false }
-  feed("gbgb")
-  eq(get_lines(), { "// hello world" })
+  validate_steps(nil, { { "gbgb", { "// hello world" } } }, { config = { textobj_treesitter_detect = false } })
 end
 
 T["textobject treesitter"]["inner works on block comment"] = function()
+  set_context({
+    bo = { filetype = "cpp", tabstop = 2, expandtab = true },
+    config = { textobj_treesitter_detect = true },
+  })
   child.lua_func(function()
-    vim.bo.filetype = "cpp"
-    vim.bo.tabstop = 2
-    vim.bo.expandtab = true
     vim.cmd("packadd nvim-treesitter-textobjects")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
   end)
-  set_lines({ "/* hello world */" })
-
-  set_cursor(0, 7)
-  feed("d", "gib")
-  eq(get_lines(0, 0), { "/*  */" })
+  validate_steps({ "/* hello world */" }, {
+    { { 0, 7 }, { "d", "gib" }, { from = 1, "/*  */" } },
+  })
 end
 
 T["textobject treesitter"]["inner works on line comment"] = function()
+  set_context({
+    bo = { filetype = "cpp", tabstop = 2, expandtab = true },
+    config = { textobj_treesitter_detect = true },
+  })
   child.lua_func(function()
-    vim.bo.filetype = "cpp"
-    vim.bo.tabstop = 2
-    vim.bo.expandtab = true
     vim.cmd("packadd nvim-treesitter-textobjects")
     vim.treesitter.language.add("cpp")
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { textobj_treesitter_detect = true }
   end)
-  set_lines({ "// hello world" })
-
-  set_cursor(0, 7)
-  feed("d", "gic")
-  eq(get_lines(0, 0), { "// " })
+  validate_steps({ "// hello world" }, {
+    { { 0, 7 }, { "d", "gic" }, { from = 1, "// " } },
+  })
 end
 
 -- keep cursor tests ──────────────────────────────────────────────────────────
@@ -4271,181 +3479,85 @@ end
 T["keep_cursor"] = new_set()
 
 T["keep_cursor"]["gcc comment/uncomment restore cursor"] = function()
-  set_lines({ "aaa", "  bbbb", "ccc" })
-  set_cursor(1, 2)
-  feed("gcc")
-  eq(get_cursor(), { 1, 4 })
-  eq(get_lines(), { "aaa", "#   bbbb", "ccc" })
-  feed("gcc")
-  eq(get_lines(), { "aaa", "  bbbb", "ccc" })
-  eq(get_cursor(), { 1, 2 })
+  validate_steps({ "aaa", "  bbbb", "ccc" }, {
+    { { 1, 2 }, "gcc", { "aaa", "#   bbbb", "ccc" }, { 1, 4 } },
+    { "gcc", { "aaa", "  bbbb", "ccc" }, { 1, 2 } },
+  })
 end
 
 T["keep_cursor"]["gcc uncomment special, match vscode's NeverGroupAtTypeEdge"] = function()
-  child.bo.filetype = "lua"
-  set_lines({ "  -- print('here')" })
-  set_cursor(0, 2)
-  feed("gcc")
-  eq(get_lines(), { "  print('here')" })
-  eq(get_cursor(), { 0, 2 })
-
-  set_lines({ "  -- print('here')" })
-  set_cursor(0, 3)
-  feed("gcc")
-  eq(get_lines(), { "  print('here')" })
-  eq(get_cursor(), { 0, 2 })
-
-  set_lines({ "  -- print('here')" })
-  set_cursor(0, 3)
-  feed("gcc")
-  eq(get_lines(), { "  print('here')" })
-  eq(get_cursor(), { 0, 2 })
-
-  set_lines({ "  -- print('here')" })
-  set_cursor(0, 4)
-  feed("gcc")
-  eq(get_lines(), { "  print('here')" })
-  eq(get_cursor(), { 0, 2 })
+  set_context({ bo = { filetype = "lua" } })
+  local lines = { "  -- print('here')" }
+  validate_steps(lines, { { { 0, 2 }, "gcc", { "  print('here')" }, { 0, 2 } } })
+  validate_steps(lines, { { { 0, 3 }, "gcc", { "  print('here')" }, { 0, 2 } } })
+  validate_steps(lines, { { { 0, 3 }, "gcc", { "  print('here')" }, { 0, 2 } } })
+  validate_steps(lines, { { { 0, 4 }, "gcc", { "  print('here')" }, { 0, 2 } } })
 end
 
 T["keep_cursor"]["gcc keep_cursor=false not restore cursor"] = function()
-  child.b.celeste_comment_config = { keep_cursor = false }
-  set_lines({ "aaa", "bbbb", "ccc" })
-  set_cursor(1, 2)
-  feed("gcc")
-  eq(get_cursor(), { 1, 0 })
-  eq(get_lines(), { "aaa", "# bbbb", "ccc" })
-  feed("gcc")
-  eq(get_lines(), { "aaa", "bbbb", "ccc" })
-  eq(get_cursor(), { 1, 0 })
+  validate_steps({ "aaa", "bbbb", "ccc" }, {
+    { { 1, 2 }, "gcc", { "aaa", "# bbbb", "ccc" }, { 1, 0 } },
+    { "gcc", { "aaa", "bbbb", "ccc" }, { 1, 0 } },
+  }, { config = { keep_cursor = false } })
 end
 
 T["keep_cursor"]["visual-line mode gc restore cursor"] = function()
-  set_lines({ "aaaaa", "bbbb", "ccc" })
-  set_cursor(0, 2)
-  feed("V", "j")
-  eq(get_cursor(), { 1, 2 })
-  feed("gc")
-  eq(get_cursor(), { 1, 4 })
-  eq(get_lines(), { "# aaaaa", "# bbbb", "ccc" })
+  validate_steps({ "aaaaa", "bbbb", "ccc" }, {
+    { { 0, 2 }, { "V", "j" }, nil, { 1, 2 } },
+    { "gc", { "# aaaaa", "# bbbb", "ccc" }, { 1, 4 } },
+  })
 end
 
 T["keep_cursor"]["visual mode gb restore cursor"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "aaaaa", "bbbb", "ccc" })
-  set_cursor(0, 2)
-  feed("v", "j", "l")
-  eq(get_cursor(), { 1, 3 })
-  feed("gb")
-  eq(get_cursor(), { 1, 3 })
-  eq(get_lines(), { "aa/* aaa", "bbbb */", "ccc" })
+  validate_steps({ "aaaaa", "bbbb", "ccc" }, {
+    { { 0, 2 }, { "v", "j", "l" }, nil, { 1, 3 } },
+    { "gb", { "aa/* aaa", "bbbb */", "ccc" }, { 1, 3 } },
+  }, { bo = { filetype = "cpp" } })
 end
 
 T["keep_cursor"]["C-v mode gb restore cursor"] = function()
-  child.bo.filetype = "cpp"
-  --
-  set_lines({ "aaaaaa", "bbbbbbb", "cccccccc" })
-  set_cursor(0, 3)
-  feed("\\<C-v>", "2j")
-  eq(get_cursor(), { 2, 3 })
-  feed("gb")
-  eq(get_cursor(), { 2, 3 })
-  eq(get_lines(), { "/* aaaaaa", "bbbbbbb", "cccccccc */" })
+  validate_steps({ "aaaaaa", "bbbbbbb", "cccccccc" }, {
+    { { 0, 3 }, { "\\<C-v>", "2j" }, nil, { 2, 3 } },
+    { "gb", { "/* aaaaaa", "bbbbbbb", "cccccccc */" }, { 2, 3 } },
+  }, { bo = { filetype = "cpp" } })
 end
 
 T["keep_cursor"]["gcc cursor before offset no shift"] = function()
-  set_lines({ "  hello" })
-  set_cursor(0, 1)
-  feed("gcc")
-  eq(get_cursor(), { 0, 3 })
-  eq(get_lines(), { "#   hello" })
+  validate_steps({ "  hello" }, { { { 0, 1 }, "gcc", { "#   hello" }, { 0, 3 } } })
 end
 
 T["keep_cursor"]["gbc comment/uncomment restore cursor"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "hello" })
-  set_cursor(0, 2)
-  feed("gbc")
-  eq(get_cursor(), { 0, 5 })
-  eq(get_lines(), { "/* hello */" })
-  feed("gbc")
-  eq(get_cursor(), { 0, 2 })
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { { 0, 2 }, "gbc", { "/* hello */" }, { 0, 5 } },
+    { "gbc", { "hello" }, { 0, 2 } },
+  }, { bo = { filetype = "cpp" } })
 end
 
 T["keep_cursor"]["gbgb uncomment restore cursor"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "/* hello */" })
-  set_cursor(0, 7)
-  feed("gbgb")
-  eq(get_cursor(), { 0, 4 })
-  eq(get_lines(), { "hello" })
+  validate_steps({ "/* hello */" }, { { { 0, 7 }, "gbgb", { "hello" }, { 0, 4 } } }, { bo = { filetype = "cpp" } })
 end
 
 T["keep_cursor"]["gc2j restore cursor"] = function()
-  set_lines({ "aaaa", "bbbb", "cccc" })
-  set_cursor(0, 2)
-  feed("gc", "2j")
-  eq(get_cursor(), { 0, 4 })
-  eq(get_lines(), { "# aaaa", "# bbbb", "# cccc" })
+  validate_steps({ "aaaa", "bbbb", "cccc" }, {
+    { { 0, 2 }, { "gc", "2j" }, { "# aaaa", "# bbbb", "# cccc" }, { 0, 4 } },
+  })
 end
 
 T["keep_cursor"]["gbiw restore cursor"] = function()
-  child.b.celeste_comment_block_commentstring = "!@#%s#@!"
-  set_lines({ "aaaa bbb cccc" })
-  set_cursor(0, 6)
-  feed("gbiw")
-  eq(get_lines(), { "aaaa !@# bbb #@! cccc" })
-  eq(get_cursor(), { 0, 10 })
+  validate_steps({ "aaaa bbb cccc" }, {
+    { { 0, 6 }, "gbiw", { "aaaa !@# bbb #@! cccc" }, { 0, 10 } },
+  }, { b = { celeste_comment_block_commentstring = "!@#%s#@!" } })
 end
 
 T["keep_cursor"]["dot-repeat works"] = function()
-  child.bo.tabstop = 2
-  child.b.celeste_comment_block_commentstring = "!@#%s#@!"
-  set_lines({
-    "  hello",
-    "  world",
-  })
-  set_cursor(0, 4)
-  feed("gcc")
-  eq(get_cursor(), { 0, 6 })
-  eq(get_lines(), {
-    "  # hello",
-    "  world",
-  })
-  feed(".")
-  eq(get_cursor(), { 0, 4 })
-  eq(get_lines(), {
-    "  hello",
-    "  world",
-  })
-  set_cursor(1, 5)
-  feed(".")
-  eq(get_cursor(), { 1, 7 })
-  eq(get_lines(), {
-    "  hello",
-    "  # world",
-  })
-  feed(".")
-  eq(get_cursor(), { 1, 5 })
-  eq(get_lines(), {
-    "  hello",
-    "  world",
-  })
-
-  set_cursor(0, 5)
-  feed("gbip")
-  eq(get_cursor(), { 0, 9 })
-  eq(get_lines(), {
-    "  !@# hello",
-    "  world #@!",
-  })
-  feed(".")
-  eq(get_cursor(), { 0, 5 })
-  eq(get_lines(), {
-    "  hello",
-    "  world",
-  })
+  validate_steps({ "  hello", "  world" }, {
+    { { 0, 4 }, "gcc", { "  # hello", "  world" }, { 0, 6 } },
+    { ".", { "  hello", "  world" }, { 0, 4 } },
+    { { 1, 5 }, ".", { "  hello", "  # world" }, { 1, 7 } },
+    { ".", { "  hello", "  world" }, { 1, 5 } },
+    { { 0, 5 }, "gbip", { "  !@# hello", "  world #@!" }, { 0, 9 } },
+    { ".", { "  hello", "  world" }, { 0, 5 } },
+  }, { bo = { tabstop = 2 }, b = { celeste_comment_block_commentstring = "!@#%s#@!" } })
 end
 
 T["keep_cursor"]["bugfix restore the cursor not in textobj range"] = function()
@@ -4458,45 +3570,22 @@ T["keep_cursor"]["bugfix restore the cursor not in textobj range"] = function()
     end)
   end)
   local lines = { "first liens", "second line", "third line" }
-  set_lines(lines)
-  set_cursor(0, 2)
-  feed("gc")
-  feed("<esc>")
-  feed("gb")
-  feed("<esc>")
-  eq(get_cursor(), { 0, 2 })
-  eq(get_lines(), lines)
-  feed("gcii")
-  eq(get_lines(), { "first liens", "-- second line", "-- third line" })
-  eq(get_cursor(), { 0, 2 })
-  feed("gc")
-  feed("<esc>")
-  eq(get_cursor(), { 0, 2 })
-  feed(".")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 0, 2 })
-  feed("g@ii")
-  eq(get_lines(), { "first liens", "-- second line", "-- third line" })
-  eq(get_cursor(), { 0, 2 })
+  validate_steps(lines, {
+    { { 0, 2 }, { "gc", "<esc>", "gb", "<esc>" }, lines, { 0, 2 } },
+    { "gcii", { "first liens", "-- second line", "-- third line" }, { 0, 2 } },
+    { { "gc", "<esc>" }, nil, { 0, 2 } },
+    { ".", lines, { 0, 2 } },
+    { "g@ii", { "first liens", "-- second line", "-- third line" }, { 0, 2 } },
+  })
 end
 
 T["keep_cursor"]["bugfix cancel operator not impact visual gb"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = { keep_selection = "adjust | expand_block" }
-    vim.bo.filetype = "lua"
-  end)
-  local lines = { "first lines", "second lines", "third lines" }
-  set_lines(lines)
-  set_cursor(0, 2)
   -- cancel operator
-  feed("gc")
-  feed("<esc>")
-  selection(2, 4, 1, 6)
-  feed("gb")
-  eq(get_lines(), { "first lines", "second--[[  lines", "third ]] lines" })
-  eq(get_cursor(), { 1, 11 })
-  feed("gv")
-  eq(get_selection(), { { 2, 7, 1, 6 }, "v" })
+  validate_steps({ "first lines", "second lines", "third lines" }, {
+    { { 0, 2 }, { "gc", "<esc>" } },
+    { { 2, 4, 1, 6 }, "gb", { "first lines", "second--[[  lines", "third ]] lines" }, { 1, 11 } },
+    { "gv", nil, nil, { { 2, 7, 1, 6 }, "v" } },
+  }, { bo = { filetype = "lua" }, config = { keep_selection = "adjust | expand_block" } })
 end
 
 -- Keep selection ─────────────────────────────────────────────────────────────
@@ -4504,11 +3593,7 @@ end
 T["keep_selection"] = new_set({
   hooks = {
     pre_case = function()
-      child.lua_func(function()
-        vim.b.celeste_comment_config = { keep_selection = "adjust | keep_visual" }
-        vim.bo.filetype = "cpp"
-        vim.bo.tabstop = 2
-      end)
+      set_context({ bo = { filetype = "cpp", tabstop = 2 }, config = { keep_selection = "adjust | keep_visual" } })
     end,
   },
 })
@@ -4518,95 +3603,62 @@ T["keep_selection"]["works in `v` mode"] = function()
     "  first line, 11",
     "  second line, 2222",
   }
-  set_lines(lines)
-
-  selection(0, 0, 1, 18)
-  feed("gc")
-  eq(get_lines(), {
-    "  // first line, 11",
-    "  // second line, 2222",
+  validate_steps(lines, {
+    {
+      { 0, 0, 1, 18 },
+      "gc",
+      { "  // first line, 11", "  // second line, 2222" },
+      { 1, 21 },
+      { { 0, 0, 1, 21 }, "v" },
+    },
+    { "gc", lines, { 1, 18 }, { { 0, 0, 1, 18 }, "v" } },
+    {
+      "gb",
+      { "/*   first line, 11", "  second line, 2222 */" },
+      { 1, 18 },
+      { { 0, 3, 1, 18 }, "v" },
+    },
+    { "<Esc>" },
+    { "gbgb", lines, { 1, 18 } },
+    {
+      { 0, 4, 1, 6 },
+      "gb",
+      { "  fi/* rst line, 11", "  secon */d line, 2222" },
+      { 1, 6 },
+      { { 0, 7, 1, 6 }, "v" },
+    },
+    { "<Esc>" },
+    { "gbgb", lines, { 1, 6 } },
   })
-  eq(get_cursor(), { 1, 21 })
-  eq(get_selection(), { { 0, 0, 1, 21 }, "v" })
-
-  feed("gc")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 1, 18 })
-  eq(get_selection(), { { 0, 0, 1, 18 }, "v" })
-
-  feed("gb")
-  eq(get_lines(), {
-    "/*   first line, 11",
-    "  second line, 2222 */",
-  })
-  eq(get_cursor(), { 1, 18 })
-  eq(get_selection(), { { 0, 3, 1, 18 }, "v" })
-  feed("<Esc>")
-  feed("gbgb")
-  eq(get_cursor(), { 1, 18 })
-  eq(get_lines(), lines)
-
-  selection(0, 4, 1, 6)
-  feed("gb")
-  eq(get_lines(), {
-    "  fi/* rst line, 11",
-    "  secon */d line, 2222",
-  })
-  eq(get_cursor(), { 1, 6 })
-  eq(get_selection(), { { 0, 7, 1, 6 }, "v" })
-  feed("<Esc>")
-  feed("gbgb")
-  eq(get_cursor(), { 1, 6 })
-  eq(get_lines(), lines)
 end
 
 T["keep_selection"]["works in `v` mode with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  local lines = {
-    "  first line, 11",
-    "  second line, 2222",
-  }
-  set_lines(lines)
-
-  selection(0, 0, 1, 18)
-  feed("gc")
-  eq(get_lines(), {
-    "  // first line, 11",
-    "  // second line, 2222",
-  })
-  eq(get_cursor(), { 1, 21 })
-  eq(get_selection(), { { 0, 0, 1, 21 }, "v" })
-
-  feed("gc")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 1, 18 })
-  eq(get_selection(), { { 0, 0, 1, 18 }, "v" })
-
-  feed("<Esc>")
-  selection(0, 4, 1, 6)
-  feed("gb")
-  eq(get_lines(), {
-    "  fi/* rst line, 11",
-    "  seco */nd line, 2222",
-  })
-  eq(get_cursor(), { 1, 6 })
-  eq(get_selection(), { { 0, 7, 1, 6 }, "v" })
-  feed("d")
-  eq(get_lines(), { "  fi/*  */nd line, 2222" })
-  feed("u")
-  eq(get_lines(), {
-    "  fi/* rst line, 11",
-    "  seco */nd line, 2222",
-  })
-
-  selection(0, 4, 1, 9)
-  feed("gb")
-  eq(get_lines(), lines)
-  eq(get_selection(), { { 0, 4, 1, 6 }, "v" })
+  local lines = { "  first line, 11", "  second line, 2222" }
+  validate_steps(lines, {
+    {
+      { 0, 0, 1, 18 },
+      "gc",
+      { "  // first line, 11", "  // second line, 2222" },
+      { 1, 21 },
+      { { 0, 0, 1, 21 }, "v" },
+    },
+    { "gc", lines, { 1, 18 }, { { 0, 0, 1, 18 }, "v" } },
+    { "<Esc>" },
+    {
+      { 0, 4, 1, 6 },
+      "gb",
+      { "  fi/* rst line, 11", "  seco */nd line, 2222" },
+      { 1, 6 },
+      { { 0, 7, 1, 6 }, "v" },
+    },
+    { "d", { "  fi/*  */nd line, 2222" } },
+    { "u", { "  fi/* rst line, 11", "  seco */nd line, 2222" } },
+    { { 0, 4, 1, 9 }, "gb", lines, nil, { { 0, 4, 1, 6 }, "v" } },
+  }, { o = { selection = "exclusive" } })
 end
 
 T["keep_selection"]["restores exact selection content with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
+  set_context({ o = { selection = "exclusive" } })
   set_lines({ "  first line, 11", "  second line, 2222" })
 
   -- original exclusive selection: cursor at (2,18) excludes the last `2`
@@ -4623,453 +3675,317 @@ T["keep_selection"]["restores exact selection content with selection=exclusive"]
 end
 
 T["keep_selection"]["works in `V` mode"] = function()
-  local lines = {
-    "  first line, 11",
-    "  second line, 2222",
-  }
-  set_lines(lines)
-
-  selection(0, 0, 1, 18, "V")
-  feed("gc")
-  eq(get_lines(), {
-    "  // first line, 11",
-    "  // second line, 2222",
+  local lines = { "  first line, 11", "  second line, 2222" }
+  validate_steps(lines, {
+    {
+      { 0, 0, 1, 18, "V" },
+      "gc",
+      { "  // first line, 11", "  // second line, 2222" },
+      { 1, 21 },
+      { { 0, 0, 1, 21 }, "V" },
+    },
+    { "gc", lines, { 1, 18 }, { { 0, 0, 1, 18 }, "V" } },
+    {
+      "gb",
+      { "  /* first line, 11", "  second line, 2222 */" },
+      { 1, 18 },
+      { { 0, 0, 1, 18 }, "V" },
+    },
+    { "gb", lines, { 1, 18 }, { { 0, 0, 1, 18 }, "V" } },
+    { "<Esc>" },
+    {
+      { 0, 4, 1, 6, "V" },
+      "gc",
+      { "  // first line, 11", "  // second line, 2222" },
+      { 1, 9 },
+      { { 0, 7, 1, 9 }, "V" },
+    },
+    { "gc", lines, { 1, 6 }, { { 0, 4, 1, 6 }, "V" } },
   })
-  eq(get_cursor(), { 1, 21 })
-  eq(get_selection(), { { 0, 0, 1, 21 }, "V" })
-
-  feed("gc")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 1, 18 })
-  eq(get_selection(), { { 0, 0, 1, 18 }, "V" })
-
-  feed("gb")
-  eq(get_lines(), {
-    "  /* first line, 11",
-    "  second line, 2222 */",
-  })
-  eq(get_cursor(), { 1, 18 })
-  eq(get_selection(), { { 0, 0, 1, 18 }, "V" })
-
-  feed("gb")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 1, 18 })
-  eq(get_selection(), { { 0, 0, 1, 18 }, "V" })
-
-  feed("<Esc>")
-  selection(0, 4, 1, 6, "V")
-  feed("gc")
-  eq(get_lines(), {
-    "  // first line, 11",
-    "  // second line, 2222",
-  })
-  eq(get_cursor(), { 1, 9 })
-  eq(get_selection(), { { 0, 7, 1, 9 }, "V" })
-
-  feed("gc")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 1, 6 })
-  eq(get_selection(), { { 0, 4, 1, 6 }, "V" })
 end
 
 T["keep_selection"]["works with multibyte marker and selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.bo.filetype = "unknown"
-  child.bo.tabstop = 2
-  child.b.celeste_comment_block_commentstring = "※%s※"
-  child.b.celeste_comment_config = { keep_selection = "adjust | keep_visual" }
-  set_lines({ "  hello你好  tail" })
-  selection(0, 2, 0, 13)
-  feed("d")
-  eq(get_lines(), { "    tail" })
-  feed("u")
-  eq(get_lines(), { "  hello你好  tail" })
-
-  selection(0, 2, 0, 13)
-  feed("gb")
-  eq(get_cursor(), { 0, 17 })
-  eq(get_lines(), { "  ※ hello你好 ※  tail" })
-  eq(get_selection(), { { 0, 6, 0, 17 }, "v" })
-  feed("d")
-  eq(get_lines(), { "  ※  ※  tail" })
-  feed("u")
-  eq(get_lines(), { "  ※ hello你好 ※  tail" })
-
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 2, 0, 21 }, "v" })
-  feed("d")
-  eq(get_lines(), { "    tail" })
-  feed("u")
-  eq(get_lines(), { "  ※ hello你好 ※  tail" })
-
-  feed("v", "ga")
-  eq(get_selection(), { { 0, 2, 0, 21 }, "v" })
-  feed("gb")
-  eq(get_cursor(), { 0, 13 })
-  eq(get_lines(), { "  hello你好  tail" })
-  eq(get_selection(), { { 0, 2, 0, 13 }, "v" })
-  feed("d")
-  eq(get_lines(), { "    tail" })
+  local lines = { "  hello你好  tail" }
+  validate_steps(lines, {
+    { { 0, 2, 0, 13 }, "d", { "    tail" } },
+    { "u", lines },
+    {
+      { 0, 2, 0, 13 },
+      "gb",
+      { "  ※ hello你好 ※  tail" },
+      { 0, 17 },
+      { { 0, 6, 0, 17 }, "v" },
+    },
+    { "d", { "  ※  ※  tail" } },
+    { "u", { "  ※ hello你好 ※  tail" } },
+    { { "v", "ga" }, nil, nil, { { 0, 2, 0, 21 }, "v" } },
+    { "d", { "    tail" } },
+    { "u", { "  ※ hello你好 ※  tail" } },
+    { { "v", "ga" }, nil, nil, { { 0, 2, 0, 21 }, "v" } },
+    { "gb", lines, { 0, 13 }, { { 0, 2, 0, 13 }, "v" } },
+    { "d", { "    tail" } },
+  }, {
+    o = { selection = "exclusive" },
+    bo = { filetype = "unknown", tabstop = 2 },
+    b = { celeste_comment_block_commentstring = "※%s※" },
+    config = { keep_selection = "adjust | keep_visual" },
+  })
 end
 
 T["keep_selection"]["expand_block includes multibyte markers"] = function()
-  child.o.selection = "exclusive"
-  child.bo.filetype = "unknown"
-  child.b.celeste_comment_block_commentstring = "※%s※"
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
-  set_lines({ "a你b" })
-  selection(0, 1, 0, 4)
-  feed("gb")
-  eq(get_lines(), { "a※ 你 ※b" })
-  eq(get_cursor(), { 0, 12 })
-  eq(get_selection(), { { 0, 1, 0, 12 }, "v" })
+  validate_steps({ "a你b" }, {
+    {
+      { 0, 1, 0, 4 },
+      "gb",
+      { "a※ 你 ※b" },
+      { 0, 12 },
+      { { 0, 1, 0, 12 }, "v" },
+    },
+  }, {
+    bo = { filetype = "unknown" },
+    o = { selection = "exclusive" },
+    config = { keep_selection = "expand_block | keep_visual" },
+    b = { celeste_comment_block_commentstring = "※%s※" },
+  })
 end
 
 T["keep_selection"]["expand_block includes multibyte markers (backward)"] = function()
-  child.bo.filetype = "unknown"
-  child.b.celeste_comment_block_commentstring = "※%s※"
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
-
   -- Backward selection whose document-order end is the multibyte `※` marker;
   -- marks must still point at the character's first byte.
-  set_lines({ "a你b" })
-  selection(0, 1, 0, 0) -- anchor on 你, cursor before it
-  feed("gb")
-  eq(get_lines(), { "※ a你 ※b" })
-  eq(get_cursor(), { 0, 0 })
-  eq(get_selection(), { { 0, 9, 0, 0 }, "v" })
-  eq(child.api.nvim_buf_get_mark(0, "<"), { 1, 0 })
-  eq(child.api.nvim_buf_get_mark(0, ">"), { 1, 9 })
+  validate_steps({ "a你b" }, {
+    { { 0, 1, 0, 0 }, "gb", { "※ a你 ※b" }, { 0, 0 }, { { 0, 9, 0, 0 }, "v" } },
+  }, {
+    bo = { filetype = "unknown" },
+    config = { keep_selection = "expand_block | keep_visual" },
+    b = { celeste_comment_block_commentstring = "※%s※" },
+  })
+  eq_marks({ "<", ">" }, { { 1, 0 }, { 1, 9 } })
 
   feed("<Esc>")
-  child.o.selection = "exclusive"
-  set_lines({ "a你b" })
-  selection(0, 1, 0, 0)
-  feed("gb")
-  eq(get_lines(), { "※ a ※你b" })
-  eq(get_cursor(), { 0, 9 })
-  eq(get_selection(), { { 0, 0, 0, 9 }, "v" })
-  eq(child.api.nvim_buf_get_mark(0, "<"), { 1, 0 })
-  eq(child.api.nvim_buf_get_mark(0, ">"), { 1, 9 })
+  validate_steps({ "a你b" }, {
+    { { 0, 1, 0, 0 }, "gb", { "※ a ※你b" }, { 0, 9 }, { { 0, 0, 0, 9 }, "v" } },
+  }, { o = { selection = "exclusive" } })
+  eq_marks({ "<", ">" }, { { 1, 0 }, { 1, 9 } })
 end
 
 T["keep_selection"]["expand_block includes block comment markers"] = function()
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
-
   -- with selection == 'inclusive'
-  child.o.selection = "inclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(0, 2, 0, 13)
-  feed("gb")
-  eq(get_lines(), { "  /* hello world */", "  second" })
-  eq(get_selection(), { { 0, 2, 0, 18 }, "v" })
+  validate_steps({ "  hello world", "  second" }, {
+    { { 0, 2, 0, 13 }, "gb", { "  /* hello world */", "  second" }, nil, { { 0, 2, 0, 18 }, "v" } },
+  }, { o = { selection = "inclusive" }, config = { keep_selection = "expand_block | keep_visual" } })
   feed('"zy')
   eq(child.fn.getreg("z"), "/* hello world */")
 
-  set_lines({ "  hello world", "  second" })
-  selection(0, 0, 1, 0, "V")
-  feed("gb")
-  eq(get_lines(), { "  /* hello world", "  second */" })
+  validate_steps({ "  hello world", "  second" }, {
+    { { 0, 0, 1, 0, "V" }, "gb", { "  /* hello world", "  second */" } },
+  })
   feed('"zy')
   eq(child.fn.getreg("z"), "  /* hello world\n  second */\n")
 
-  set_cursor(1, 0)
-  feed("gbgb")
-  eq(get_lines(), { "  hello world", "  second" })
-
-  selection(0, 4, 1, 6)
-  feed("gb")
-  eq(get_cursor(), { 1, 9 })
-  eq(get_selection(), { { 0, 4, 1, 9 }, "v" })
-  eq(get_lines(), { "  he/* llo world", "  secon */d" })
-  feed("gb")
-  eq(get_cursor(), { 1, 6 })
-  eq(get_selection(), { { 0, 4, 1, 6 }, "v" })
-  eq(get_lines(), { "  hello world", "  second" })
-  feed("gb")
-  eq(get_cursor(), { 1, 9 })
-  eq(get_selection(), { { 0, 4, 1, 9 }, "v" })
-  eq(get_lines(), { "  he/* llo world", "  secon */d" })
-  feed("gb")
-  eq(get_cursor(), { 1, 6 })
-  eq(get_selection(), { { 0, 4, 1, 6 }, "v" })
-  eq(get_lines(), { "  hello world", "  second" })
-  feed("<Esc>")
+  validate_steps(nil, {
+    { { 1, 0 }, "gbgb", { "  hello world", "  second" } },
+    {
+      { 0, 4, 1, 6 },
+      "gb",
+      { "  he/* llo world", "  secon */d" },
+      { 1, 9 },
+      { { 0, 4, 1, 9 }, "v" },
+    },
+    { "gb", { "  hello world", "  second" }, { 1, 6 }, { { 0, 4, 1, 6 }, "v" } },
+    { "gb", { "  he/* llo world", "  secon */d" }, { 1, 9 }, { { 0, 4, 1, 9 }, "v" } },
+    { "gb", { "  hello world", "  second" }, { 1, 6 }, { { 0, 4, 1, 6 }, "v" } },
+    { "<Esc>" },
+  })
 
   -- with selection == 'exclusive'
-  child.o.selection = "exclusive"
-  selection(0, 4, 1, 7)
-  feed("gb")
-  eq(get_cursor(), { 1, 10 })
-  eq(get_selection(), { { 0, 4, 1, 10 }, "v" })
-  eq(get_lines(), { "  he/* llo world", "  secon */d" })
-  feed("gb")
-  eq(get_cursor(), { 1, 7 })
-  eq(get_selection(), { { 0, 4, 1, 7 }, "v" })
-  eq(get_lines(), { "  hello world", "  second" })
-  feed("gb")
-  eq(get_cursor(), { 1, 10 })
-  eq(get_selection(), { { 0, 4, 1, 10 }, "v" })
-  eq(get_lines(), { "  he/* llo world", "  secon */d" })
-  feed("gb")
-  eq(get_cursor(), { 1, 7 })
-  eq(get_selection(), { { 0, 4, 1, 7 }, "v" })
-  eq(get_lines(), { "  hello world", "  second" })
+  validate_steps(nil, {
+    { { 0, 4, 1, 7 }, "gb", { "  he/* llo world", "  secon */d" }, { 1, 10 }, { { 0, 4, 1, 10 }, "v" } },
+    { "gb", { "  hello world", "  second" }, { 1, 7 }, { { 0, 4, 1, 7 }, "v" } },
+    { "gb", { "  he/* llo world", "  secon */d" }, { 1, 10 }, { { 0, 4, 1, 10 }, "v" } },
+    { "gb", { "  hello world", "  second" }, { 1, 7 }, { { 0, 4, 1, 7 }, "v" } },
+  }, { o = { selection = "exclusive" } })
 end
 
 T["keep_selection"]["expand_block does not expand fallback-to-block"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
+  -- selection == 'inclusive'
+  validate_steps({ "  hello world", "  second" }, {
+    -- charwise "hello"; content-only, not expanded
+    { { 0, 2, 0, 6 }, "gc", { "  <# hello world #>", "  second" }, nil, { { 0, 5, 0, 9 }, "v" } },
+    { "<Esc>" },
+  }, {
+    config = {
       keep_selection = "expand_block | keep_visual",
       cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
       fallback_to_block = "if_line_cms_wrapped",
-    }
+    },
     -- wrapped line comment string: `gc` falls back to block (motion forced to "line")
-    vim.bo.commentstring = "<#%s#>"
-    vim.b.celeste_comment_block_commentstring = "<%#%s%#>"
-  end)
-
-  child.o.selection = "inclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(0, 2, 0, 6) -- charwise "hello"
-  feed("gc")
-  eq(get_lines(), { "  <# hello world #>", "  second" })
-  eq(get_selection(), { { 0, 5, 0, 9 }, "v" }) -- content-only "hello", not expanded
-  feed("<Esc>")
+    bo = { commentstring = "<#%s#>" },
+    b = { celeste_comment_block_commentstring = "<%#%s%#>" },
+    o = { selection = "inclusive" },
+  })
 
   -- exclusive also stays content-only
-  child.o.selection = "exclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(0, 2, 0, 6)
-  feed("gc")
-  eq(get_lines(), { "  <# hello world #>", "  second" })
-  eq(get_selection(), { { 0, 5, 0, 9 }, "v" })
+  validate_steps({ "  hello world", "  second" }, {
+    { { 0, 2, 0, 6 }, "gc", { "  <# hello world #>", "  second" }, nil, { { 0, 5, 0, 9 }, "v" } },
+  }, { o = { selection = "exclusive" } })
 end
 
 T["keep_selection"]["expand_block does not expand wrapped line comment"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
+  validate_steps({ "  hello world", "  second" }, {
+    -- charwise "hello"; expand_block is block-only, keep_visual restores original
+    { { 0, 2, 0, 6 }, "gc", { "  <# hello world #>", "  second" }, nil, { { 0, 2, 0, 6 }, "v" } },
+  }, {
+    config = {
       keep_selection = "expand_block | keep_visual",
       cms_confs = false, -- rely on `commentstring` so the wrapped `<#%s#>` is used
       fallback_to_block = "never", -- use the wrapped line comment directly (ctype=kLine)
-    }
-    vim.bo.commentstring = "<#%s#>"
-    vim.b.celeste_comment_block_commentstring = "<%#%s%#>"
-  end)
-
-  child.o.selection = "inclusive"
-  set_lines({ "  hello world", "  second" })
-  selection(0, 2, 0, 6) -- charwise "hello"
-  feed("gc")
-  eq(get_lines(), { "  <# hello world #>", "  second" })
-  eq(get_selection(), { { 0, 2, 0, 6 }, "v" }) -- expand_block is block-only; keep_visual restores original
+    },
+    bo = { commentstring = "<#%s#>" },
+    b = { celeste_comment_block_commentstring = "<%#%s%#>" },
+    o = { selection = "inclusive" },
+  })
 end
 
 T["keep_selection"]["o-swapped charwise keeps cursor at the start"] = function()
-  child.bo.filetype = "cpp"
-  local lines = { "  first line", "  second line" }
-
   -- accurate: cursor keeps the shifted start-side position
-  set_lines(lines)
-  selection(0, 2, 1, 5) -- v top-down: cursor (1,5), anchor (0,2)
-  feed("o") -- swap: cursor (0,2), anchor (1,5)
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  seco */nd line" })
-  eq(get_cursor(), { 0, 5 })
-  eq(get_selection(), { { 1, 5, 0, 5 }, "v" })
+  validate_steps({ "  first line", "  second line" }, {
+    { { 0, 2, 1, 5 }, { "o", "gb" }, { "  /* first line", "  seco */nd line" }, { 0, 5 }, { { 1, 5, 0, 5 }, "v" } },
+    { "<Esc>" },
+  }, { bo = { filetype = "cpp" } })
 
   -- expand_block: cursor stays at the LHS marker
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
-  feed("<Esc>")
-  set_lines(lines)
-  selection(0, 2, 1, 5)
-  feed("o")
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  seco */nd line" })
-  eq(get_cursor(), { 0, 2 })
-  eq(get_selection(), { { 1, 8, 0, 2 }, "v" })
+  validate_steps({ "  first line", "  second line" }, {
+    { { 0, 2, 1, 5 }, { "o", "gb" }, { "  /* first line", "  seco */nd line" }, { 0, 2 }, { { 1, 8, 0, 2 }, "v" } },
+  }, { config = { keep_selection = "expand_block | keep_visual" } })
 end
 
 T["keep_selection"]["o-swapped V with horizontal move does not collapse"] = function()
-  child.bo.filetype = "cpp"
-  local lines = { "  first line", "  second line" }
-
-  -- bottom-up selection then o: cursor stays at the bottom
-  set_lines(lines)
-  selection(1, 4, 0, 5, "V")
-  feed("o") -- swap endpoints
-  feed("l") -- horizontal move
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  second line */" })
-  eq(get_cursor(), { 1, 5 })
-  eq(get_selection(), { { 0, 8, 1, 5 }, "V" })
-
-  -- top-down selection then o: cursor stays at the top
-  feed("<Esc>")
-  set_lines(lines)
-  selection(0, 5, 1, 4, "V")
-  feed("o")
-  feed("l")
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  second line */" })
-  eq(get_cursor(), { 0, 9 })
-  eq(get_selection(), { { 1, 4, 0, 9 }, "V" })
-
-  -- top-down + o + gc (line comment)
-  feed("<Esc>")
-  set_lines(lines)
-  selection(0, 5, 1, 4, "V")
-  feed("o")
-  feed("l")
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 0, 9 })
-  eq(get_selection(), { { 1, 7, 0, 9 }, "V" })
+  validate_steps({ "  first line", "  second line" }, {
+    -- bottom-up selection then o: cursor stays at the bottom
+    {
+      { 1, 4, 0, 5, "V" },
+      { "o", "l", "gb" },
+      { "  /* first line", "  second line */" },
+      { 1, 5 },
+      { { 0, 8, 1, 5 }, "V" },
+    },
+    { "<Esc>" },
+    -- top-down selection then o: cursor stays at the top
+    {
+      lines = { "  first line", "  second line" },
+      { 0, 5, 1, 4, "V" },
+      { "o", "l", "gb" },
+      { "  /* first line", "  second line */" },
+      { 0, 9 },
+      { { 1, 4, 0, 9 }, "V" },
+    },
+    { "<Esc>" },
+    -- top-down + o + gc (line comment)
+    {
+      lines = { "  first line", "  second line" },
+      { 0, 5, 1, 4, "V" },
+      { "o", "l", "gc" },
+      { "  // first line", "  // second line" },
+      { 0, 9 },
+      { { 1, 7, 0, 9 }, "V" },
+    },
+  }, { bo = { filetype = "cpp" } })
 end
 
 T["keep_selection"]["backward V selection restores cursor at the top"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "  first line", "  second line" })
-  selection(1, 4, 0, 3, "V") -- backward: cursor ends at the top
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 0, 6 })
-  eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
+  validate_steps({ "  first line", "  second line" }, {
+    -- backward: cursor ends at the top
+    { { 1, 4, 0, 3, "V" }, "gc", { "  // first line", "  // second line" }, { 0, 6 }, { { 1, 7, 0, 6 }, "V" } },
+  }, { bo = { filetype = "cpp" } })
 end
 
 T["keep_selection"]["o-swapped charwise keeps cursor at the start with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.bo.filetype = "cpp"
-  local lines = { "  first line", "  second line" }
-
   -- accurate
-  set_lines(lines)
-  selection(0, 2, 1, 5)
-  feed("o")
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  sec */ond line" })
-  eq(get_cursor(), { 0, 5 })
-  eq(get_selection(), { { 1, 5, 0, 5 }, "v" })
+  validate_steps({ "  first line", "  second line" }, {
+    { { 0, 2, 1, 5 }, { "o", "gb" }, { "  /* first line", "  sec */ond line" }, { 0, 5 }, { { 1, 5, 0, 5 }, "v" } },
+    { "<Esc>" },
+  }, { bo = { filetype = "cpp" }, o = { selection = "exclusive" } })
 
   -- expand_block
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block | keep_visual" } end)
-  feed("<Esc>")
-  set_lines(lines)
-  selection(0, 2, 1, 5)
-  feed("o")
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  sec */ond line" })
-  eq(get_cursor(), { 0, 2 })
-  eq(get_selection(), { { 1, 8, 0, 2 }, "v" })
+  validate_steps({ "  first line", "  second line" }, {
+    { { 0, 2, 1, 5 }, { "o", "gb" }, { "  /* first line", "  sec */ond line" }, { 0, 2 }, { { 1, 8, 0, 2 }, "v" } },
+  }, { config = { keep_selection = "expand_block | keep_visual" } })
 end
 
 T["keep_selection"]["o-swapped V with horizontal move does not collapse with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.bo.filetype = "cpp"
-  local lines = { "  first line", "  second line" }
-
-  -- bottom-up + o: cursor stays at the bottom
-  set_lines(lines)
-  selection(1, 4, 0, 5, "V")
-  feed("o")
-  feed("l")
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  second line */" })
-  eq(get_cursor(), { 1, 5 })
-  eq(get_selection(), { { 0, 8, 1, 5 }, "V" })
-
-  -- top-down + o: cursor stays at the top
-  feed("<Esc>")
-  set_lines(lines)
-  selection(0, 5, 1, 4, "V")
-  feed("o")
-  feed("l")
-  feed("gb")
-  eq(get_lines(), { "  /* first line", "  second line */" })
-  eq(get_cursor(), { 0, 9 })
-  eq(get_selection(), { { 1, 4, 0, 9 }, "V" })
-
-  -- top-down + o + gc
-  feed("<Esc>")
-  set_lines(lines)
-  selection(0, 5, 1, 4, "V")
-  feed("o")
-  feed("l")
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 0, 9 })
-  eq(get_selection(), { { 1, 7, 0, 9 }, "V" })
+  validate_steps({ "  first line", "  second line" }, {
+    -- bottom-up + o: cursor stays at the bottom
+    {
+      { 1, 4, 0, 5, "V" },
+      { "o", "l", "gb" },
+      { "  /* first line", "  second line */" },
+      { 1, 5 },
+      { { 0, 8, 1, 5 }, "V" },
+    },
+    { "<Esc>" },
+    -- top-down + o: cursor stays at the top
+    {
+      lines = { "  first line", "  second line" },
+      { 0, 5, 1, 4, "V" },
+      { "o", "l", "gb" },
+      { "  /* first line", "  second line */" },
+      { 0, 9 },
+      { { 1, 4, 0, 9 }, "V" },
+    },
+    { "<Esc>" },
+    -- top-down + o + gc
+    {
+      lines = { "  first line", "  second line" },
+      { 0, 5, 1, 4, "V" },
+      { "o", "l", "gc" },
+      { "  // first line", "  // second line" },
+      { 0, 9 },
+      { { 1, 7, 0, 9 }, "V" },
+    },
+  }, { bo = { filetype = "cpp" }, o = { selection = "exclusive" } })
 end
 
 T["keep_selection"]["backward V selection restores cursor at the top with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.bo.filetype = "cpp"
-  set_lines({ "  first line", "  second line" })
-  selection(1, 4, 0, 3, "V")
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 0, 6 })
-  eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
+  validate_steps({ "  first line", "  second line" }, {
+    { { 1, 4, 0, 3, "V" }, "gc", { "  // first line", "  // second line" }, { 0, 6 }, { { 1, 7, 0, 6 }, "V" } },
+  }, { bo = { filetype = "cpp" }, o = { selection = "exclusive" } })
 end
 
 T["keep_selection"]["expand_line o-swapped and backward V"] = function()
-  child.bo.filetype = "cpp"
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_line | keep_visual" } end)
-  local lines = { "  first line", "  second line" }
-
-  -- o-swapped charwise: v mode → o → gc → V mode
-  set_lines(lines)
-  selection(0, 2, 1, 5)
-  feed("o")
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 0, 5 })
-  eq(get_selection(), { { 1, 8, 0, 5 }, "V" })
-
-  -- o-swapped V + horizontal move: bottom-up → o → l → gc → V mode
-  feed("<Esc>")
-  set_lines(lines)
-  selection(1, 4, 0, 5, "V")
-  feed("o")
-  feed("l")
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 1, 8 })
-  eq(get_selection(), { { 0, 8, 1, 8 }, "V" })
-
-  -- backward V: bottom-up → gc → V mode at top
-  feed("<Esc>")
-  set_lines(lines)
-  selection(1, 4, 0, 3, "V")
-  feed("gc")
-  eq(get_lines(), { "  // first line", "  // second line" })
-  eq(get_cursor(), { 0, 6 })
-  eq(get_selection(), { { 1, 7, 0, 6 }, "V" })
+  validate_steps({ "  first line", "  second line" }, {
+    -- o-swapped charwise: v mode → o → gc → V mode
+    { { 0, 2, 1, 5 }, { "o", "gc" }, { "  // first line", "  // second line" }, { 0, 5 }, { { 1, 8, 0, 5 }, "V" } },
+    { "<Esc>" },
+    -- o-swapped V + horizontal move: bottom-up → o → l → gc → V mode
+    {
+      lines = { "  first line", "  second line" },
+      { 1, 4, 0, 5, "V" },
+      { "o", "l", "gc" },
+      { "  // first line", "  // second line" },
+      { 1, 8 },
+      { { 0, 8, 1, 8 }, "V" },
+    },
+    { "<Esc>" },
+    -- backward V: bottom-up → gc → V mode at top
+    {
+      lines = { "  first line", "  second line" },
+      { 1, 4, 0, 3, "V" },
+      "gc",
+      { "  // first line", "  // second line" },
+      { 0, 6 },
+      { { 1, 7, 0, 6 }, "V" },
+    },
+  }, { bo = { filetype = "cpp" }, config = { keep_selection = "expand_line | keep_visual" } })
 end
 
 T["keep_selection"]["bugfix : only expand_block should restore cursor, gv should select all block"] = function()
-  child.bo.filetype = "cpp"
-  child.lua_func(function() vim.b.celeste_comment_config = { keep_selection = "expand_block" } end)
-  local lines = { "  first line", "  second line" }
-  set_lines(lines)
-  selection(0, 3, 1, 5)
-  feed("gb")
-  eq(get_cursor(), { 1, 5 })
-  eq(get_lines(), { "  f/* irst line", "  seco */nd line" })
-  eq(get_selection(), {})
-  eq(get_cursor(), { 1, 5 })
-  feed("gv")
-  eq(get_cursor(), { 1, 8 })
-  eq(get_selection(), { { 0, 3, 1, 8 }, "v" })
-  feed("o")
-  eq(get_cursor(), { 0, 3 })
-  feed("gb")
-  eq(get_lines(), { "  first line", "  second line" })
-  eq(get_selection(), {})
-  eq(get_cursor(), { 0, 3 })
-  feed("gv")
-  eq(get_selection(), { { 1, 5, 0, 3 }, "v" })
-  eq(get_cursor(), { 0, 3 })
+  validate_steps({ "  first line", "  second line" }, {
+    { { 0, 3, 1, 5 }, "gb", { "  f/* irst line", "  seco */nd line" }, { 1, 5 }, {} },
+    { "gv", nil, { 1, 8 }, { { 0, 3, 1, 8 }, "v" } },
+    { "o", nil, { 0, 3 } },
+    { "gb", { "  first line", "  second line" }, { 0, 3 }, {} },
+    { "gv", nil, { 0, 3 }, { { 1, 5, 0, 3 }, "v" } },
+  }, { bo = { filetype = "cpp" }, config = { keep_selection = "expand_block" } })
 end
 
 -- Equivalence classes: cover all 16 flag combinations, verifying per-axis
@@ -5146,20 +4062,20 @@ local KEEP_SEL_EQ_OPS = {
 }
 
 local function keep_sel_run_equiv(flags, code, op)
-  set_config({ keep_selection = flags })
+  set_context({ config = { keep_selection = flags } })
   set_lines({ "  hello world", "  second" })
   op.select()
   feed(op.cmd)
-  eq(get_lines(), op.lines)
+  eq_lines(op.lines)
 
   if code == "-" then
-    eq(get_cursor(), op.cursor)
+    eq_cursor(op.cursor)
     eq(child.fn.mode(), "n")
     return
   end
 
   if code == "-v" then
-    eq(get_selection(), op.original)
+    eq_selection(op.original)
     return
   end
 
@@ -5169,7 +4085,7 @@ local function keep_sel_run_equiv(flags, code, op)
   end
 
   local sel = (code == "+e" or code == "+ev") and op.expand or op.content
-  eq(get_selection(), sel)
+  eq_selection(sel)
   if op.check_yank and (code == "+e" or code == "+ev") then
     feed('"zy')
     eq(child.fn.getreg("z"), op.check_yank)
@@ -5191,134 +4107,140 @@ end
 T["pre_commit_edits"] = new_set()
 
 T["pre_commit_edits"]["multi_line edit with pre_commit_edits restores cursor"] = function()
-  child.bo.filetype = "cpp"
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      hooks = {
-        pre_commit_edits = function(ctx)
-          if ctx.ctype ~= 2 then return end
-          local lines = vim.api.nvim_buf_get_lines(0, ctx.range[1], ctx.range[3] + 1, false)
-          local e = ctx.edits
-          e[1] = {
-            range = { e[1].range[1], 0, e[1].range[1], #lines[1] },
-            text = { (lines[1]:match("^(%s*)") or "") .. "/*", lines[1] },
-          }
-          e[2] = {
-            range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] },
-            text = { lines[#lines], (lines[#lines]:match("^(%s*)") or "") .. "*/" },
-          }
-          e.any_multi = true
-          ctx.o_use_set_text = true
-        end,
-      },
-    }
-  end)
-  set_lines({ "  aaa", "  bbb", "  ccc" })
-  set_cursor(0, 2)
-  feed("gb", "2j")
-  eq(get_cursor(), { 1, 2 })
+  validate_steps({ "  aaa", "  bbb", "  ccc" }, {
+    { { 0, 2 }, { "gb", "2j" }, nil, { 1, 2 } },
+  }, {
+    bo = { filetype = "cpp" },
+    config = function()
+      return {
+        hooks = {
+          pre_commit_edits = function(ctx)
+            if ctx.ctype ~= 2 then return end
+            local lines = vim.api.nvim_buf_get_lines(0, ctx.range[1], ctx.range[3] + 1, false)
+            local e = ctx.edits
+            e[1] = {
+              range = { e[1].range[1], 0, e[1].range[1], #lines[1] },
+              text = { (lines[1]:match("^(%s*)") or "") .. "/*", lines[1] },
+            }
+            e[2] = {
+              range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] },
+              text = { lines[#lines], (lines[#lines]:match("^(%s*)") or "") .. "*/" },
+            }
+            e.any_multi = true
+            ctx.o_use_set_text = true
+          end,
+        },
+      }
+    end,
+  })
 end
 
 T["pre_commit_edits"]["multi_line edit keep_cursor=false does not restore cursor"] = function()
-  child.bo.filetype = "cpp"
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      keep_cursor = false,
-      hooks = {
-        pre_commit_edits = function(ctx)
-          if ctx.ctype ~= 2 then return end
-          local lines = vim.api.nvim_buf_get_lines(0, ctx.range[1], ctx.range[3] + 1, false)
-          local e = ctx.edits
-          e[1] = { range = { e[1].range[1], 0, e[1].range[1], #lines[1] }, text = { "/*", lines[1] } }
-          e[2] = { range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] }, text = { lines[#lines], "*/" } }
-          e.any_multi = true
-          ctx.o_use_set_text = true
-        end,
-      },
-    }
-  end)
-  set_lines({ "aaa", "bbb", "ccc" })
-  set_cursor(0, 0)
-  feed("gb", "j")
-  eq(get_cursor(), { 0, 0 })
+  validate_steps({ "aaa", "bbb", "ccc" }, {
+    { { 0, 0 }, { "gb", "j" }, nil, { 0, 0 } },
+  }, {
+    bo = { filetype = "cpp" },
+    config = function()
+      return {
+        keep_cursor = false,
+        hooks = {
+          pre_commit_edits = function(ctx)
+            if ctx.ctype ~= 2 then return end
+            local lines = vim.api.nvim_buf_get_lines(0, ctx.range[1], ctx.range[3] + 1, false)
+            local e = ctx.edits
+            e[1] = { range = { e[1].range[1], 0, e[1].range[1], #lines[1] }, text = { "/*", lines[1] } }
+            e[2] = { range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] }, text = { lines[#lines], "*/" } }
+            e.any_multi = true
+            ctx.o_use_set_text = true
+          end,
+        },
+      }
+    end,
+  })
 end
 
 T["pre_commit_edits"]["pre_commit_edits above/below lines"] = function()
-  child.bo.filetype = "cpp"
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      hooks = {
-        pre_commit_edits = function(ctx)
-          if ctx.ctype ~= 2 then return end
-          local lines = ctx.lines
-          local l1, ln = lines[1], lines[#lines]
-          local e = ctx.edits
-          e[1] = { range = { e[1].range[1], 0, e[1].range[1], #l1 }, text = { (l1:match("^(%s*)") or "") .. "/*", l1 } }
-          e[2] = { range = { e[2].range[1], 0, e[2].range[1], #ln }, text = { ln, (ln:match("^(%s*)") or "") .. "*/" } }
-          e.any_multi = true
-          ctx.o_use_set_text = true
-        end,
-      },
-    }
-  end)
-  set_lines({ "  void f() {", "    int a;", "  }" })
-  set_cursor(0, 0)
-  feed("3gbc")
-  eq(get_lines(), { "  /*", "  void f() {", "    int a;", "  }", "  */" })
+  validate_steps({ "  void f() {", "    int a;", "  }" }, {
+    { { 0, 0 }, "3gbc", { "  /*", "  void f() {", "    int a;", "  }", "  */" } },
+  }, {
+    bo = { filetype = "cpp" },
+    config = function()
+      return {
+        hooks = {
+          pre_commit_edits = function(ctx)
+            if ctx.ctype ~= 2 then return end
+            local lines = ctx.lines
+            local l1, ln = lines[1], lines[#lines]
+            local e = ctx.edits
+            e[1] =
+              { range = { e[1].range[1], 0, e[1].range[1], #l1 }, text = { (l1:match("^(%s*)") or "") .. "/*", l1 } }
+            e[2] =
+              { range = { e[2].range[1], 0, e[2].range[1], #ln }, text = { ln, (ln:match("^(%s*)") or "") .. "*/" } }
+            e.any_multi = true
+            ctx.o_use_set_text = true
+          end,
+        },
+      }
+    end,
+  })
 end
 
 T["pre_commit_edits"]["pre_commit_edits edge: last line selection"] = function()
-  child.bo.filetype = "cpp"
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      hooks = {
-        pre_commit_edits = function(ctx)
-          if ctx.ctype ~= 2 then return end
-          local lines = ctx.lines
-          local e = ctx.edits
-          e[1] = { range = { e[1].range[1], 0, e[1].range[1], #lines[1] }, text = { "/*", lines[1] } }
-          e[2] = { range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] }, text = { lines[#lines], "*/" } }
-          e.any_multi = true
-          ctx.o_use_set_text = true
-        end,
-      },
-    }
-  end)
-  set_lines({ "line1", "line2" })
-  set_cursor(1, 0)
-  feed("gbc")
-  eq(get_lines(), { "line1", "/*", "line2", "*/" })
+  validate_steps({ "line1", "line2" }, {
+    { { 1, 0 }, "gbc", { "line1", "/*", "line2", "*/" } },
+  }, {
+    bo = { filetype = "cpp" },
+    config = function()
+      return {
+        hooks = {
+          pre_commit_edits = function(ctx)
+            if ctx.ctype ~= 2 then return end
+            local lines = ctx.lines
+            local e = ctx.edits
+            e[1] = { range = { e[1].range[1], 0, e[1].range[1], #lines[1] }, text = { "/*", lines[1] } }
+            e[2] = { range = { e[2].range[1], 0, e[2].range[1], #lines[#lines] }, text = { lines[#lines], "*/" } }
+            e.any_multi = true
+            ctx.o_use_set_text = true
+          end,
+        },
+      }
+    end,
+  })
 end
 
 T["pre_commit_edits"]["out of range fallback to set lines"] = function()
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      hooks = {
-        pre_commit_edits = function(ctx)
-          ctx.edits[#ctx.edits + 1] = {
-            range = { 2, 0, 2, 3 },
-            text = { "ccc" },
-          }
-          ctx.o_use_set_text = true
-        end,
-      },
-    }
-  end)
-  set_lines({ "aaa", "bbb" })
-  set_cursor(0, 0)
-  feed("gcj")
-  eq(get_lines(), { "# aaa", "# bbb", "ccc" })
+  validate_steps({ "aaa", "bbb" }, {
+    { { 0, 0 }, "gcj", { "# aaa", "# bbb", "ccc" } },
+  }, {
+    config = function()
+      return {
+        hooks = {
+          pre_commit_edits = function(ctx)
+            ctx.edits[#ctx.edits + 1] = {
+              range = { 2, 0, 2, 3 },
+              text = { "ccc" },
+            }
+            ctx.o_use_set_text = true
+          end,
+        },
+      }
+    end,
+  })
 end
 
 T["pre_commit_edits"]["o_use_set_text preserves extmarks inside the range"] = function()
-  child.bo.filetype = "c"
+  set_context({ bo = { filetype = "c" } })
   set_lines({ "aaa", "bbb", "ccc", "ddd" })
+  set_context({
+    config = function()
+      return {
+        hooks = {
+          pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
+        },
+      }
+    end,
+  })
   child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      hooks = {
-        pre_commit_edits = function(ctx) ctx.o_use_set_text = true end,
-      },
-    }
     local ns = vim.api.nvim_create_namespace("celeste_test")
     _G.__em = {
       first_pt = vim.api.nvim_buf_set_extmark(0, ns, 0, 1, {}),
@@ -5330,7 +4252,7 @@ T["pre_commit_edits"]["o_use_set_text preserves extmarks inside the range"] = fu
   end)
   selection(0, 0, 2, 0, "V")
   feed("gb")
-  eq(get_lines(), { "/* aaa", "bbb", "ccc */", "ddd" })
+  eq_lines({ "/* aaa", "bbb", "ccc */", "ddd" })
 
   local res = child.lua_func(function()
     local ns = vim.api.nvim_create_namespace("celeste_test")
@@ -5359,7 +4281,7 @@ T["pre_commit_edits"]["o_use_set_text preserves extmarks inside the range"] = fu
 end
 
 T["pre_commit_edits"]["default commit displaces extmarks inside the range"] = function()
-  child.bo.filetype = "c"
+  set_context({ bo = { filetype = "c" } })
   set_lines({ "aaa", "bbb", "ccc", "ddd" })
   child.lua_func(function()
     _G.__ns = vim.api.nvim_create_namespace("celeste_test")
@@ -5367,7 +4289,7 @@ T["pre_commit_edits"]["default commit displaces extmarks inside the range"] = fu
   end)
   selection(0, 0, 2, 0, "V")
   feed("gb")
-  eq(get_lines(), { "/* aaa", "bbb", "ccc */", "ddd" })
+  eq_lines({ "/* aaa", "bbb", "ccc */", "ddd" })
   local pos = child.lua_func(function() return vim.api.nvim_buf_get_extmark_by_id(0, _G.__ns, _G.__mid, {}) end)
   -- default whole-range `set_lines` displaces in-range extmarks to the range end
   eq(pos, { 3, 0 })
@@ -5378,48 +4300,22 @@ end
 T["treesitter"] = new_set()
 
 T["treesitter"]["gcc/gbc respects injected languages in vim heredoc"] = function()
-  set_lines({
-    "set background=dark",
-    "lua << EOF",
-    "  print(1)",
-    "  vim.cmd('set bg=light')",
-    "EOF",
-    "set nocursorline",
-  })
-  child.bo.tabstop = 2
-  child.bo.filetype = "vim"
+  local lines =
+    { "set background=dark", "lua << EOF", "  print(1)", "  vim.cmd('set bg=light')", "EOF", "set nocursorline" }
+  set_context({ bo = { tabstop = 2, filetype = "vim" } })
   child.treesitter.start()
 
-  set_cursor(2, 2)
-  feed("gcc")
-  eq(get_lines(2, 2), { "  -- print(1)" })
-  eq(get_cursor(), { 2, 5 })
-
-  set_cursor(1, 0)
-  feed(".")
-  eq(get_lines(1, 1), { '" lua << EOF' })
-  feed(".")
-
-  set_cursor(5, 0)
-  feed(".")
-  eq(get_lines(5, 5), { '" set nocursorline' })
-  feed(".")
-
-  set_cursor(2, 5)
-  feed(".")
-  eq(get_lines(2, 2), { "  print(1)" })
-  eq(get_cursor(), { 2, 2 })
-
-  feed("gbc")
-  eq(get_lines(2, 2), { "  --[[ print(1) ]]" })
-  eq(get_cursor(), { 2, 7 })
-  feed(".")
-  eq(get_lines(2, 2), { "  print(1)" })
-  eq(get_cursor(), { 2, 2 })
-
-  set_cursor(0, 4)
-  feed(".")
-  eq(get_lines(0, 0), { "set background=dark" }) -- do nothing, vim does not have block comment string
+  validate_steps(lines, {
+    { { 2, 2 }, "gcc", { from = 3, "  -- print(1)" }, { 2, 5 } },
+    { { 1, 0 }, ".", { from = 2, '" lua << EOF' } },
+    { "." },
+    { { 5, 0 }, ".", { from = 6, '" set nocursorline' } },
+    { "." },
+    { { 2, 5 }, ".", { from = 3, "  print(1)" }, { 2, 2 } },
+    { "gbc", { from = 3, "  --[[ print(1) ]]" }, { 2, 7 } },
+    { ".", { from = 3, "  print(1)" }, { 2, 2 } },
+    { { 0, 4 }, ".", { from = 1, "set background=dark" } }, -- vim does not have block comment string
+  })
 end
 
 T["treesitter"]["gco/gcO/gcA respect injected languages"] = function()
@@ -5430,71 +4326,45 @@ T["treesitter"]["gco/gcO/gcA respect injected languages"] = function()
     "EOF",
     "set nocursorline",
   })
-  child.bo.filetype = "vim"
+  set_context({ bo = { filetype = "vim" } })
   child.treesitter.start()
 
-  set_cursor(2, 2)
-  feed("gco")
-  eq(get_cursor(), { 3, 5 })
-  eq(get_lines(3, 3), { "  -- " })
-  feed("<Esc>", "u")
-
-  set_cursor(2, 2)
-  feed("gcA")
-  eq(get_cursor(), { 2, 14 })
-  eq(get_lines(2, 2), { "  print(1) -- " })
-  feed("<Esc>", "u")
-
-  set_cursor(2, 2)
-  feed("gcO")
-  eq(get_cursor(), { 2, 3 })
-  eq(get_lines(2, 2), { "-- " })
-  feed("<Esc>", "u")
-
-  set_cursor(0, 0)
-  feed("gcO")
-  eq(get_cursor(), { 0, 2 })
-  eq(get_lines(0, 0), { '" ' })
-  feed("<Esc>", "u")
-
-  set_cursor(4, 0)
-  feed("gco")
-  eq(get_cursor(), { 5, 2 })
-  eq(get_lines(5, 5), { '" ' })
-  feed("<Esc>", "u")
-
-  set_cursor(4, 0)
-  feed("gcA")
-  eq(get_cursor(), { 4, 19 })
-  eq(get_lines(4, 4), { 'set nocursorline " ' })
-  feed("<Esc>", "u")
+  local lines = { "set bg=dark", "lua << EOF", "  print(1)", "EOF", "set nocursorline" }
+  validate_steps(lines, {
+    { { 2, 2 }, "gco", { from = 4, "  -- " }, { 3, 5 } },
+    { { "<Esc>", "u" } },
+    { { 2, 2 }, "gcA", { from = 3, "  print(1) -- " }, { 2, 14 } },
+    { { "<Esc>", "u" } },
+    { { 2, 2 }, "gcO", { from = 3, "-- " }, { 2, 3 } },
+    { { "<Esc>", "u" } },
+    { { 0, 0 }, "gcO", { from = 1, '" ' }, { 0, 2 } },
+    { { "<Esc>", "u" } },
+    { { 4, 0 }, "gco", { from = 6, '" ' }, { 5, 2 } },
+    { { "<Esc>", "u" } },
+    { { 4, 0 }, "gcA", { from = 5, 'set nocursorline " ' }, { 4, 19 } },
+    { { "<Esc>", "u" } },
+  })
 end
 
 T["treesitter"]["handles mismatch between parser name and filetype"] = function()
+  set_context({ bo = { filetype = "celeste_test_filetype", commentstring = "" }, config = { cms_confs = false } })
   child.lua_func(function()
-    vim.bo.filetype = "celeste_test_filetype"
-    vim.bo.commentstring = ""
     vim.treesitter.language.add("c")
     vim.treesitter.language.register("c", { "celeste_test_filetype" })
-    vim.b.celeste_comment_config = { cms_confs = false }
   end)
   eq(child.lua_get([[ vim.treesitter.language.get_filetypes("c") ]]), { "c", "celeste_test_filetype" })
 
-  set_lines({ "hello" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, { { { 0, 0 }, "gcc", { "hello" } } })
 
   child.lua_func(function() vim.treesitter.start() end)
 
-  feed(".")
-  eq(get_lines(), { "// hello" })
-  eq(get_cursor(), { 0, 3 })
+  validate_steps(nil, { { ".", { "// hello" }, { 0, 3 } } })
   eq(child.bo.commentstring, "")
 end
 
 -- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L592
 T["treesitter"]["respects tree-sitter commentstring metadata : nvim-like builtin resolver"] = function()
+  set_context({ bo = { tabstop = 2, filetype = "vim" }, config = { cms_confs = false } })
   child.lua_func(function()
     vim.treesitter.query.set(
       "vim",
@@ -5503,48 +4373,37 @@ T["treesitter"]["respects tree-sitter commentstring metadata : nvim-like builtin
         ((list) @_list (#set! @_list bo.commentstring "!! %s"))
       ]]
     )
-    vim.bo.tabstop = 2
-    vim.bo.filetype = "vim"
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { cms_confs = false }
   end)
 
-  set_lines({
+  local lines = {
     "set background=dark",
     "let mylist = [",
     [[  \"a",]],
     [[  \"b",]],
     [[  \"c",]],
     "  \\]",
+  }
+  validate_steps(lines, {
+    {
+      { 0, 0 },
+      "gcc",
+      { '" set background=dark', "let mylist = [", [[  \"a",]], [[  \"b",]], [[  \"c",]], "  \\]" },
+      { 0, 2 },
+    },
+    -- should work with dot-repeat
+    {
+      { 3, 0 },
+      ".",
+      { '" set background=dark', "let mylist = [", [[  \"a",]], [[  !! \"b",]], [[  \"c",]], "  \\]" },
+      { 3, 0 },
+    },
   })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), {
-    '" set background=dark',
-    "let mylist = [",
-    [[  \"a",]],
-    [[  \"b",]],
-    [[  \"c",]],
-    "  \\]",
-  })
-  eq(get_cursor(), { 0, 2 })
-
-  -- should work with dot-repeat
-  set_cursor(3, 0)
-  feed(".")
-  eq(get_lines(), {
-    '" set background=dark',
-    "let mylist = [",
-    [[  \"a",]],
-    [[  !! \"b",]],
-    [[  \"c",]],
-    "  \\]",
-  })
-  eq(get_cursor(), { 3, 0 })
 end
 
 -- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L630
 T["treesitter"]["only applies the innermost tree-sitter commentstring metadata : nvim-like builtin resolver"] = function()
+  set_context({ bo = { tabstop = 2, filetype = "vim" }, config = { cms_confs = false } })
   child.lua_func(function()
     vim.treesitter.query.set(
       "vim",
@@ -5554,48 +4413,37 @@ T["treesitter"]["only applies the innermost tree-sitter commentstring metadata :
           ((script_file) @_src (#set! @_src bo.commentstring "## %s"))
       ]]
     )
-    vim.bo.tabstop = 2
-    vim.bo.filetype = "vim"
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { cms_confs = false }
   end)
 
-  set_lines({
+  local lines = {
     "set background=dark",
     "let mylist = [",
     [[  \"a",]],
     [[  \"b",]],
     [[  \"c",]],
     "  \\]",
+  }
+  validate_steps(lines, {
+    {
+      { 0, 0 },
+      "gcc",
+      { "## set background=dark", "let mylist = [", [[  \"a",]], [[  \"b",]], [[  \"c",]], "  \\]" },
+      { 0, 3 },
+    },
+    -- should work with dot-repeat
+    {
+      { 3, 0 },
+      ".",
+      { "## set background=dark", "let mylist = [", [[  \"a",]], [[  !! \"b",]], [[  \"c",]], "  \\]" },
+      { 3, 0 },
+    },
   })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), {
-    "## set background=dark",
-    "let mylist = [",
-    [[  \"a",]],
-    [[  \"b",]],
-    [[  \"c",]],
-    "  \\]",
-  })
-  eq(get_cursor(), { 0, 3 })
-
-  -- should work with dot-repeat
-  set_cursor(3, 0)
-  feed(".")
-  eq(get_lines(), {
-    "## set background=dark",
-    "let mylist = [",
-    [[  \"a",]],
-    [[  !! \"b",]],
-    [[  \"c",]],
-    "  \\]",
-  })
-  eq(get_cursor(), { 3, 0 })
 end
 
 -- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L673
 T["treesitter"]["respects injected tree-sitter commentstring metadata : nvim-like builtin resolver"] = function()
+  set_context({ bo = { tabstop = 2, filetype = "vim" }, config = { cms_confs = false } })
   child.lua_func(function()
     vim.treesitter.query.set(
       "lua",
@@ -5604,61 +4452,35 @@ T["treesitter"]["respects injected tree-sitter commentstring metadata : nvim-lik
         ((string) @string (#set! @string bo.commentstring "; %s"))
       ]]
     )
-    vim.bo.tabstop = 2
-    vim.bo.filetype = "vim"
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { cms_confs = false }
   end)
-  set_lines({
-    "set background=dark",
-    "lua << EOF",
-    "print[[",
-    "Inside string",
-    "]]",
-    "EOF",
+  validate_steps({ "set background=dark", "lua << EOF", "print[[", "Inside string", "]]", "EOF" }, {
+    {
+      { 0, 0 },
+      "gcc",
+      { '" set background=dark', "lua << EOF", "print[[", "Inside string", "]]", "EOF" },
+      { 0, 2 },
+    },
+    -- Should work with dot-repeat
+    {
+      { 3, 0 },
+      ".",
+      { '" set background=dark', "lua << EOF", "print[[", "; Inside string", "]]", "EOF" },
+      { 3, 2 },
+    },
+    {
+      { 2, 0 },
+      ".",
+      { '" set background=dark', "lua << EOF", "-- print[[", "; Inside string", "]]", "EOF" },
+      { 2, 3 },
+    },
   })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), {
-    '" set background=dark',
-    "lua << EOF",
-    "print[[",
-    "Inside string",
-    "]]",
-    "EOF",
-  })
-  eq(get_cursor(), { 0, 2 })
-
-  -- Should work with dot-repeat
-  set_cursor(3, 0)
-  feed(".")
-  eq(get_lines(), {
-    '" set background=dark',
-    "lua << EOF",
-    "print[[",
-    "; Inside string",
-    "]]",
-    "EOF",
-  })
-  eq(get_cursor(), { 3, 2 })
-
-  set_cursor(2, 0)
-  feed(".")
-  eq(get_lines(), {
-    '" set background=dark',
-    "lua << EOF",
-    "-- print[[",
-    "; Inside string",
-    "]]",
-    "EOF",
-  })
-  eq(get_cursor(), { 2, 3 })
 end
 
 -- Referenced from https://github.com/neovim/neovim/blob/master/test/functional/lua/comment_spec.lua#L725
 T["treesitter"]["works across combined injections"] = function()
+  set_context({ bo = { filetype = "lua" } })
   child.lua_func(function()
-    vim.bo.filetype = "lua"
     vim.treesitter.query.set(
       "lua",
       "injections",
@@ -5676,25 +4498,24 @@ T["treesitter"]["works across combined injections"] = function()
     vim.treesitter.start()
   end)
 
-  set_lines({
+  validate_steps({
     'vim.cmd([[" some text]])',
     "local a = 123",
     'vim.cmd([[" some more text]])',
+  }, {
+    {
+      { 1, 0 },
+      "gcc",
+      { 'vim.cmd([[" some text]])', "-- local a = 123", 'vim.cmd([[" some more text]])' },
+      { 1, 3 },
+    },
   })
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(), {
-    'vim.cmd([[" some text]])',
-    "-- local a = 123",
-    'vim.cmd([[" some more text]])',
-  })
-  eq(get_cursor(), { 1, 3 })
 end
 
 T["treesitter"]["use correct position to get comment string"] = function()
   mock_child_msg()
+  set_context({ bo = { filetype = "lua" } })
   child.lua_func(function()
-    vim.bo.filetype = "lua"
     vim.treesitter.query.set(
       "lua",
       "injections",
@@ -5715,28 +4536,28 @@ T["treesitter"]["use correct position to get comment string"] = function()
   set_lines(lines)
   set_cursor(0, 9)
   feed("gcc")
-  eq(get_lines(), { "-- vim.cmd([[some text]])" })
-  eq(get_cursor(), { 0, 12 })
+  eq_lines({ "-- vim.cmd([[some text]])" })
+  eq_cursor({ 0, 12 })
   feed("gcc")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 0, 9 })
+  eq_lines(lines)
+  eq_cursor({ 0, 9 })
   feed("gbiw")
-  eq(get_lines(), { "vim.cmd--[[ ([[ ]]some text]])" })
-  eq(get_cursor(), { 0, 14 })
+  eq_lines({ "vim.cmd--[[ ([[ ]]some text]])" })
+  eq_cursor({ 0, 14 })
   feed("gbgb")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 0, 9 })
+  eq_lines(lines)
+  eq_cursor({ 0, 9 })
   eq(child_msg(), {})
 
   set_cursor(0, 10)
   feed("gbiw")
-  eq(get_lines(), lines)
-  eq(get_cursor(), { 0, 10 })
+  eq_lines(lines)
+  eq_cursor({ 0, 10 })
   eq(child_msg(), { "No available block comment string config" })
   clear_child_msg()
   feed("gciw")
-  eq(get_lines(), { "-- vim.cmd([[some text]])" })
-  eq(get_cursor(), { 0, 13 })
+  eq_lines({ "-- vim.cmd([[some text]])" })
+  eq_cursor({ 0, 13 })
   eq(child_msg(), {})
 
   unmock_child_msg()
@@ -5747,31 +4568,22 @@ end
 T["from_options_comments"] = new_set()
 
 T["from_options_comments"]["works"] = function()
-  child.bo.filetype = "haskell"
-  child.b.celeste_comment_config = { cms_confs = false }
-  set_lines({ "  some text" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "--   some text" })
-  feed(".")
-  eq(get_lines(), { "  some text" })
-
-  feed("gbc")
-  eq(get_lines(), { "  {- some text -}" })
+  validate_steps({ "  some text" }, {
+    { "gcc", { "--   some text" } },
+    { ".", { "  some text" } },
+    { "gbc", { "  {- some text -}" } },
+  }, { bo = { filetype = "haskell" }, config = { cms_confs = false } })
 end
 
 T["from_options_comments"]["works with injection"] = function()
+  set_context({ bo = { filetype = "markdown", tabstop = 2, expandtab = false }, config = { cms_confs = false } })
   child.lua_func(function()
-    vim.bo.filetype = "markdown"
-    vim.bo.tabstop = 2
-    vim.bo.expandtab = false
     vim.treesitter.language.add("cpp")
     vim.treesitter.language.add("bash")
     vim.treesitter.start()
-    vim.b.celeste_comment_config = { cms_confs = false }
   end)
 
-  set_lines({
+  validate_steps({
     "# H1",
     "```cpp",
     '  printf("hello");',
@@ -5780,25 +4592,15 @@ T["from_options_comments"]["works with injection"] = function()
     "```bash",
     "echo hello",
     "```",
+  }, {
+    { { 2, 0 }, "gcc", { from = 3, '  // printf("hello");' } },
+    { ".", { from = 3, '  printf("hello");' } },
+    { "gbc", { from = 3, '  /* printf("hello"); */' } },
+    { ".", { from = 3, '  printf("hello");' } },
+    { { 6, 0 }, ".", { from = 7, "echo hello" } },
+    { "gcc", { from = 7, "# echo hello" } },
+    { ".", { from = 7, "echo hello" } },
   })
-
-  set_cursor(2, 0)
-  feed("gcc")
-  eq(get_lines(2, 2), { '  // printf("hello");' })
-  feed(".")
-  eq(get_lines(2, 2), { '  printf("hello");' })
-  feed("gbc")
-  eq(get_lines(2, 2), { '  /* printf("hello"); */' })
-  feed(".")
-  eq(get_lines(2, 2), { '  printf("hello");' })
-
-  set_cursor(6, 0)
-  feed(".")
-  eq(get_lines(6, 6), { "echo hello" })
-  feed("gcc")
-  eq(get_lines(6, 6), { "# echo hello" })
-  feed(".")
-  eq(get_lines(6, 6), { "echo hello" })
 end
 
 -- markdown injected language tests ───────────────────────────────────────────
@@ -5806,57 +4608,39 @@ end
 T["markdown"] = new_set()
 
 T["markdown"]["gcc toggle line works"] = function()
-  child.bo.filetype = "markdown"
-  child.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
-  set_lines({
-    "aaa",
-    "```bash",
-    "echo here",
-    "```",
-    "bbb",
-  })
+  set_context({ bo = { filetype = "markdown" }, config = { fallback_to_block = "if_line_cms_wrapped" } })
   child.lua_func(function() vim.treesitter.language.add("bash") end)
   child.treesitter.start()
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(0, 0), { "<!-- aaa -->" })
-  feed("gcc")
-  eq(get_lines(0, 0), { "aaa" })
-  set_cursor(2, 0)
-  feed("gcc")
-  eq(get_lines(2, 2), { "# echo here" })
-  feed("gcc")
-  eq(get_lines(2, 2), { "echo here" })
+  validate_steps({ "aaa", "```bash", "echo here", "```", "bbb" }, {
+    { "gcc", { from = 1, "<!-- aaa -->" } },
+    { "gcc", { from = 1, "aaa" } },
+    { { 2, 0 }, "gcc", { from = 3, "# echo here" } },
+    { "gcc", { from = 3, "echo here" } },
+  })
 end
 
 T["markdown"]["gcc works"] = function()
-  child.bo.filetype = "markdown"
-  child.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
-  set_lines({
-    "aaa",
-    "```lua",
-    "print('hello')",
-    "```",
-    "bbb",
-  })
+  set_context({ bo = { filetype = "markdown" }, config = { fallback_to_block = "if_line_cms_wrapped" } })
   child.treesitter.start()
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(0, 0), { "<!-- aaa -->" })
-  feed("gcc")
-  eq(get_lines(0, 0), { "aaa" })
-  set_cursor(2, 0)
-  feed("gcc")
-  eq(get_lines(2, 2), { "-- print('hello')" })
-  feed("gcc")
-  eq(get_lines(2, 2), { "print('hello')" })
+  validate_steps({ "aaa", "```lua", "print('hello')", "```", "bbb" }, {
+    { "gcc", { from = 1, "<!-- aaa -->" } },
+    { "gcc", { from = 1, "aaa" } },
+    { { 2, 0 }, "gcc", { from = 3, "-- print('hello')" } },
+    { "gcc", { from = 3, "print('hello')" } },
+  })
 end
 
 T["markdown"]["gcc on code block lua line uses --"] = function()
-  child.bo.filetype = "markdown"
-  child.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
-  child.bo.commentstring = "<!-- %s -->"
-  set_lines({
+  set_context({
+    bo = { filetype = "markdown", commentstring = "<!-- %s -->" },
+    config = { fallback_to_block = "if_line_cms_wrapped" },
+  })
+  child.lua([[
+    vim.treesitter.language.add("lua")
+    vim.treesitter.start()
+  ]])
+
+  validate_steps({
     "# Title",
     "",
     "Some text.",
@@ -5869,164 +4653,73 @@ T["markdown"]["gcc on code block lua line uses --"] = function()
     "```",
     "",
     "More text.",
+  }, {
+    -- Inside lua code block → "-- "
+    { { 5, 0 }, "gcc", { from = 6, "-- local x = 1" } },
+    { { 6, 0 }, "gcc", { from = 7, "-- function foo()" } },
+    -- Outside code block → commentstring fallback
+    { { 0, 0 }, "gcc", { from = 1, "<!-- # Title -->" } },
+    { { 11, 0 }, "gcc", { from = 12, "<!-- More text. -->" } },
   })
-  child.lua([[
-    vim.treesitter.language.add("lua")
-    vim.treesitter.start()
-  ]])
-
-  -- Inside lua code block → "-- "
-  set_cursor(5, 0)
-  feed("gcc")
-  eq(get_lines()[6], "-- local x = 1")
-
-  set_cursor(6, 0)
-  feed("gcc")
-  eq(get_lines()[7], "-- function foo()")
-
-  -- Outside code block → commentstring fallback
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines()[1], "<!-- # Title -->")
-
-  set_cursor(11, 0)
-  feed("gcc")
-  eq(get_lines()[12], "<!-- More text. -->")
 end
 
 T["markdown"]["gcc on code fence marker uses markdown comment"] = function()
-  child.bo.filetype = "markdown"
-  child.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
-  child.bo.commentstring = "<!-- %s -->"
-  set_lines({
-    "",
-    "```lua",
-    "local x = 1",
-    "```",
-    "",
+  set_context({
+    bo = { filetype = "markdown", commentstring = "<!-- %s -->" },
+    config = { fallback_to_block = "if_line_cms_wrapped" },
   })
   child.lua([[
     vim.treesitter.language.add("lua")
     vim.treesitter.start()
   ]])
 
-  -- Code fence marker line → resolve_language_tree returns markdown root
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines()[2], "<!-- ```lua -->")
-
-  -- Closing fence
-  set_cursor(3, 0)
-  feed("gcc")
-  eq(get_lines()[4], "<!-- ``` -->")
+  validate_steps({ "", "```lua", "local x = 1", "```", "" }, {
+    -- Code fence marker line → resolve_language_tree returns markdown root
+    { { 1, 0 }, "gcc", { from = 2, "<!-- ```lua -->" } },
+    -- Closing fence
+    { { 3, 0 }, "gcc", { from = 4, "<!-- ``` -->" } },
+  })
 end
 
 T["markdown"]["gco respects injected language in code block"] = function()
-  child.bo.filetype = "markdown"
-  child.bo.commentstring = "<!-- %s -->"
-  set_lines({
-    "",
-    "```lua",
-    "local x = 1",
-    "```",
-    "",
-  })
+  set_context({ bo = { filetype = "markdown", commentstring = "<!-- %s -->" } })
   child.lua([[
     vim.treesitter.language.add("lua")
     vim.treesitter.start()
   ]])
 
   -- gco inside code block → new line with "-- "
-  set_cursor(2, 0)
-  feed("gco")
-  feed("<Esc>")
-  local result = get_lines()
-  eq(result[4], "-- ")
+  validate_steps({ "", "```lua", "local x = 1", "```", "" }, {
+    { { 2, 0 }, { "gco", "<Esc>" }, { from = 4, "-- " } },
+  })
 end
 
 T["markdown"]["visual mode works"] = function()
-  child.bo.tabstop = 2
-  child.bo.filetype = "markdown"
-  child.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
-  set_lines({
-    "## head",
-    "aaa",
-    "```lua",
-    "  local x = 1",
-    "  local y = 2",
-    "```",
-    "bbb",
+  set_context({ bo = { tabstop = 2, filetype = "markdown" }, config = { fallback_to_block = "if_line_cms_wrapped" } })
+  local original = { "## head", "aaa", "```lua", "  local x = 1", "  local y = 2", "```", "bbb" }
+  validate_steps(original, {
+    {
+      { 0, 0, 3, 12 },
+      "gc",
+      { "<!-- ## head", "aaa", "```lua", "  local x = 1 -->", "  local y = 2", "```", "bbb" },
+      { 3, 12 },
+    },
+    { "gcu", original, { 3, 12 } },
+    {
+      { 2, 0, 3, 0 },
+      "gc",
+      { "## head", "aaa", "<!-- ```lua", "  local x = 1 -->", "  local y = 2", "```", "bbb" },
+      { 3, 0 },
+    },
+    { "gcu", original },
+    {
+      { 3, 0, 4, 12 },
+      "gc",
+      { "## head", "aaa", "```lua", "--   local x = 1", "--   local y = 2", "```", "bbb" },
+      { 4, 15 },
+    },
+    { "gcu", original, { 4, 12 } },
   })
-  selection(0, 0, 3, 12)
-  feed("gc")
-  eq(get_lines(), {
-    "<!-- ## head",
-    "aaa",
-    "```lua",
-    "  local x = 1 -->",
-    "  local y = 2",
-    "```",
-    "bbb",
-  })
-  eq(get_cursor(), { 3, 12 })
-  feed("gcu")
-  eq(get_lines(), {
-    "## head",
-    "aaa",
-    "```lua",
-    "  local x = 1",
-    "  local y = 2",
-    "```",
-    "bbb",
-  })
-  eq(get_cursor(), { 3, 12 })
-
-  selection(2, 0, 3, 0)
-  feed("gc")
-  eq(get_lines(), {
-    "## head",
-    "aaa",
-    "<!-- ```lua",
-    "  local x = 1 -->",
-    "  local y = 2",
-    "```",
-    "bbb",
-  })
-  eq(get_cursor(), { 3, 0 })
-  feed("gcu")
-  eq(get_lines(), {
-    "## head",
-    "aaa",
-    "```lua",
-    "  local x = 1",
-    "  local y = 2",
-    "```",
-    "bbb",
-  })
-
-  selection(3, 0, 4, 12)
-  feed("gc")
-  eq(get_lines(), {
-    "## head",
-    "aaa",
-    "```lua",
-    "--   local x = 1",
-    "--   local y = 2",
-    "```",
-    "bbb",
-  })
-  eq(get_cursor(), { 4, 15 })
-  feed("gcu")
-  eq(get_lines(), {
-    "## head",
-    "aaa",
-    "```lua",
-    "  local x = 1",
-    "  local y = 2",
-    "```",
-    "bbb",
-  })
-  eq(get_cursor(), { 4, 12 })
 end
 
 -- disable tests ───────────────────────────────────────────────────────────────
@@ -6034,19 +4727,11 @@ end
 T["disable"] = new_set()
 
 T["disable"]["vim.g disables mappings"] = function()
-  child.g.celeste_comment_disable = true
-  set_lines({ "aa" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "aa" })
+  validate_steps({ "aa" }, { { "gcc", { "aa" } } }, { g = { celeste_comment_disable = true } })
 end
 
 T["disable"]["vim.b disables for buffer"] = function()
-  child.b.celeste_comment_disable = true
-  set_lines({ "aa" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "aa" })
+  validate_steps({ "aa" }, { { "gcc", { "aa" } } }, { b = { celeste_comment_disable = true } })
 end
 
 -- warning msg tests ──────────────────────────────────────────────────────────
@@ -6055,12 +4740,11 @@ T["warning"] = new_set({
   hooks = {
     pre_case = function()
       mock_child_msg()
-      child.lua_func(function()
-        vim.b.celeste_comment_config = { cms_confs = false, fallback_to_block = "never" }
-        vim.bo.filetype = "unknown"
-        vim.bo.commentstring = ""
-        vim.b.celeste_comment_block_commentstring = ""
-      end)
+      set_context({
+        config = { cms_confs = false, fallback_to_block = "never" },
+        bo = { filetype = "unknown", commentstring = "" },
+        b = { celeste_comment_block_commentstring = "" },
+      })
     end,
     post_case = function() unmock_child_msg() end,
   },
@@ -6070,53 +4754,54 @@ T["warning"]["all invalid"] = function()
   set_lines({ "a" })
   set_cursor(0, 0)
   feed("gcc")
-  eq(get_lines(), { "a" })
-  eq(get_cursor(), { 0, 0 })
+  eq_lines({ "a" })
+  eq_cursor({ 0, 0 })
   eq(child_msg(), { 'Invalid CommentStringConf : { { "" }, { "" } }' })
 end
 
 T["warning"]["no available"] = function()
   set_lines({ "a" })
   set_cursor(0, 0)
-  child.b.celeste_comment_block_commentstring = "{%s}"
+  set_context({ b = { celeste_comment_block_commentstring = "{%s}" } })
   feed("gcc")
-  eq(get_lines(), { "a" })
-  eq(get_cursor(), { 0, 0 })
+  eq_lines({ "a" })
+  eq_cursor({ 0, 0 })
   eq(child_msg(), { "No available line comment string config" })
   clear_child_msg()
 
   feed("gbc")
-  eq(get_lines(), { "{ a }" })
-  eq(get_cursor(), { 0, 2 })
+  eq_lines({ "{ a }" })
+  eq_cursor({ 0, 2 })
   feed(".")
   eq(child_msg(), {})
-  child.b.celeste_comment_block_commentstring = ""
-  child.bo.commentstring = "//%s"
+  set_context({ bo = { commentstring = "//%s" }, b = { celeste_comment_block_commentstring = "" } })
   feed("gbc")
-  eq(get_lines(), { "a" })
-  eq(get_cursor(), { 0, 0 })
+  eq_lines({ "a" })
+  eq_cursor({ 0, 0 })
   eq(child_msg(), { "No available block comment string config" })
 
   clear_child_msg()
-  child.b.celeste_comment_config = { cms_confs = false, fallback_to_block = "if_line_cms_wrapped" }
-  child.b.celeste_comment_block_commentstring = "!@#%s#@!"
-  child.bo.commentstring = ""
+  set_context({
+    config = { cms_confs = false, fallback_to_block = "if_line_cms_wrapped" },
+    b = { celeste_comment_block_commentstring = "!@#%s#@!" },
+    bo = { commentstring = "" },
+  })
   feed("gcc")
-  eq(get_lines(), { "!@# a #@!" })
-  eq(get_cursor(), { 0, 4 })
+  eq_lines({ "!@# a #@!" })
+  eq_cursor({ 0, 4 })
   eq(child_msg(), {})
 end
 
 T["warning"]["unmodifiable"] = function()
-  child.bo.filetype = "lua"
+  set_context({ bo = { filetype = "lua" } })
   set_lines({ "a" })
   set_cursor(0, 0)
-  child.bo.modifiable = false
+  set_context({ bo = { modifiable = false } })
 
   local f = function(k, msg)
     msg = msg or { "celeste_comment.nvim buffer unmodifiable" }
     feed(k)
-    eq(get_lines(), { "a" })
+    eq_lines({ "a" })
     eq(child_msg(), msg)
     clear_child_msg()
   end
@@ -6128,12 +4813,12 @@ T["warning"]["unmodifiable"] = function()
 end
 
 T["warning"]["disabled"] = function()
-  child.b.celeste_comment_disable = true
+  set_context({ b = { celeste_comment_disable = true } })
   feed("gcc")
   eq(child_msg(), { "celeste_comment.nvim disabled" })
   clear_child_msg()
-  child.b.celeste_comment_disable = false
-  child.g.celeste_comment_disable = true
+  set_context({ b = { celeste_comment_disable = false } })
+  set_context({ g = { celeste_comment_disable = true } })
   feed("gcc")
   eq(child_msg(), { "celeste_comment.nvim disabled" })
 end
@@ -6143,43 +4828,36 @@ end
 T["referenced_from_vscode"] = new_set({
   hooks = {
     pre_case = function()
-      child.b.celeste_comment_config = {
-        ignore_empty_lines = "never",
-        insert_space = true,
-        case_insensitive = true,
-        fallback_to_block = "if_line_cms_wrapped",
-      }
-      child.bo.commentstring = "!@#%s"
-      child.bo.filetype = "vscode-comment-test"
-      child.bo.tabstop = 4
+      set_context({
+        config = {
+          ignore_empty_lines = "never",
+          insert_space = true,
+          case_insensitive = true,
+          fallback_to_block = "if_line_cms_wrapped",
+        },
+      })
+      set_context({ bo = { commentstring = "!@#%s", filetype = "vscode-comment-test", tabstop = 4 } })
     end,
   },
 })
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L56
 T["referenced_from_vscode"]["comment single line"] = function()
-  set_lines({ "some text", "\tsome more text" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "!@# some text", "\tsome more text" })
+  validate_steps({ "some text", "\tsome more text" }, {
+    { "gcc", { "!@# some text", "\tsome more text" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L71
 T["referenced_from_vscode"]["case insensitive"] = function()
-  child.bo.commentstring = "rem%s"
-  set_lines({ "REM some text" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "some text" })
+  validate_steps({ "REM some text" }, { { "gcc", { "some text" } } }, { bo = { commentstring = "rem%s" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L89
 T["referenced_from_vscode"]["comment with token column fixed"] = function()
-  set_config({ line_comment_no_indent = true })
-  set_lines({ "some text", "\tsome more text" })
-  set_cursor(1, 3)
-  feed("gcc")
-  eq(get_lines(), { "some text", "!@# \tsome more text" })
+  validate_steps({ "some text", "\tsome more text" }, {
+    { { 1, 3 }, "gcc", { "some text", "!@# \tsome more text" } },
+  }, { config = { line_comment_no_indent = true } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L198
@@ -6308,246 +4986,125 @@ T["referenced_from_vscode"]["normalize_insertion_point"] = function()
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L294
-T["referenced_from_vscode"]["detect indentation"] = function()
-  set_lines({ "\tsome text", "\tsome more text" })
-  set_cursor(1, 2)
-  feed("gck")
-  eq(get_lines(), { "\t!@# some text", "\t!@# some more text" })
+T["referenced_from_vscode"]["detect indentation: gck"] = function()
+  validate_steps({ "\tsome text", "\tsome more text" }, {
+    { { 1, 2 }, "gck", { "\t!@# some text", "\t!@# some more text" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L309
-T["referenced_from_vscode"]["detect indentation"] = function()
-  set_lines({ "\tsome text", "    some more text" })
-  set_cursor(0, 2)
-  feed("gcj")
-  eq(get_lines(), { "\t!@# some text", "    !@# some more text" })
+T["referenced_from_vscode"]["detect indentation: gcj"] = function()
+  validate_steps({ "\tsome text", "    some more text" }, {
+    { { 0, 2 }, "gcj", { "\t!@# some text", "    !@# some more text" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L324
 T["referenced_from_vscode"]["ignores whitespace lines"] = function()
-  set_config({ ignore_empty_lines = "always" })
-  set_lines({
-    "\tsome text",
-    "\t   ",
-    "",
-    "\tsome more text",
-  })
-  set_cursor(3, 2)
-  feed("gc3k")
-  eq(get_lines(), {
-    "\t!@# some text",
-    "\t   ",
-    "",
-    "\t!@# some more text",
-  })
+  validate_steps({ "\tsome text", "\t   ", "", "\tsome more text" }, {
+    { { 3, 2 }, "gc3k", { "\t!@# some text", "\t   ", "", "\t!@# some more text" } },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L343
 T["referenced_from_vscode"]["remove its own"] = function()
-  set_config({ ignore_empty_lines = "always" })
-  set_lines({ "\t!@# some text", "\t   ", "\t\t!@# some more text" })
-  set_cursor(2, 4)
-  feed("gc2k")
-  eq(get_lines(), { "\tsome text", "\t   ", "\t\tsome more text" })
+  validate_steps({ "\t!@# some text", "\t   ", "\t\t!@# some more text" }, {
+    { { 2, 4 }, "gc2k", { "\tsome text", "\t   ", "\t\tsome more text" } },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L360
 T["referenced_from_vscode"]["works in only whitespace"] = function()
-  set_lines({ "\t    ", "\t", "\t\tsome more text" })
-  set_cursor(0, 0)
-  feed("2gcc")
-  eq(get_lines(), { "\t!@#     ", "\t!@# ", "\t\tsome more text" })
+  validate_steps({ "\t    ", "\t", "\t\tsome more text" }, {
+    { "2gcc", { "\t!@#     ", "\t!@# ", "\t\tsome more text" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L377
 T["referenced_from_vscode"]["whitespace before comment token"] = function()
-  set_lines({ "\t !@#first", "\tsecond line" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "\t first", "\tsecond line" })
+  validate_steps({ "\t !@#first", "\tsecond line" }, {
+    { "gcc", { "\t first", "\tsecond line" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L392
 T["referenced_from_vscode"]["line comment before caret"] = function()
-  set_lines({ "first!@#", "\tsecond line" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "!@# first!@#", "\tsecond line" })
+  validate_steps({ "first!@#", "\tsecond line" }, {
+    { "gcc", { "!@# first!@#", "\tsecond line" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L407
 T["referenced_from_vscode"]["comment signle line"] = function()
-  set_lines({ "first!@#", "\tsecond line" })
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(), { "first!@#", "\t!@# second line" })
+  validate_steps({ "first!@#", "\tsecond line" }, {
+    { { 1, 0 }, "gcc", { "first!@#", "\t!@# second line" } },
+  })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L443
 T["referenced_from_vscode"]["multiple lines"] = function()
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  set_cursor(0, 0)
-  feed("gcj")
-  eq(get_lines(), {
-    "!@# first",
-    "!@# \tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    { "gcj", { "!@# first", "!@# \tsecond line", "third line", "fourth line", "fifth" } },
   })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L464
 T["referenced_from_vscode"]["multiple modes on multiple lines"] = function()
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  selection(3, 4, 2, 1)
-  feed("gc")
-  eq(get_lines(), {
-    "first",
-    "\tsecond line",
-    "!@# third line",
-    "!@# fourth line",
-    "fifth",
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    { { 3, 4, 2, 1 }, "gc", { "first", "\tsecond line", "!@# third line", "!@# fourth line", "fifth" } },
   })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L485
 T["referenced_from_vscode"]["toggle signle line"] = function()
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  selection(0, 1, 0, 1)
-  feed("gc")
-  eq(get_lines(), {
-    "!@# first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  selection(0, 4, 0, 4)
-  feed("gc")
-  eq(get_lines(), {
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    { { 0, 1, 0, 1 }, "gc", { "!@# first", "\tsecond line", "third line", "fourth line", "fifth" } },
+    { { 0, 4, 0, 4 }, "gc", { "first", "\tsecond line", "third line", "fourth line", "fifth" } },
   })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L525
 T["referenced_from_vscode"]["toggle multiple lines"] = function()
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  selection(1, 4, 0, 1)
-  feed("gc")
-  eq(get_lines(), {
-    "!@# first",
-    "!@# \tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  selection(1, 7, 0, 4)
-  feed("gc")
-  eq(get_lines(), {
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    { { 1, 4, 0, 1 }, "gc", { "!@# first", "!@# \tsecond line", "third line", "fourth line", "fifth" } },
+    { { 1, 7, 0, 4 }, "gc", { "first", "\tsecond line", "third line", "fourth line", "fifth" } },
   })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L565
 T["referenced_from_vscode"]["cursor is at the beginning of the line"] = function()
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    {
+      { 0, 1, 0, 1 },
+      "gc",
+      { "!@# first", "\tsecond line", "third line", "fourth line", "fifth" },
+      { 0, 5 },
+    },
   })
-  selection(0, 1, 0, 1)
-  feed("gc")
-  eq(get_lines(), {
-    "!@# first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  eq(get_cursor(), { 0, 5 })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L586
 T["referenced_from_vscode"]["comment hotkeys throws the cursor before the comment"] = function()
-  set_lines({
-    "first",
-    "",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
+  validate_steps({ "first", "", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    {
+      { 1, 0 },
+      "gcc",
+      { "first", "!@# ", "\tsecond line", "third line", "fourth line", "fifth" },
+      { 1, 3 },
+    },
   })
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(), {
-    "first",
-    "!@# ",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  eq(get_cursor(), { 1, 3 })
-
-  set_lines({
-    "first",
-    "\t",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  set_cursor(1, 2)
-  feed("gcc")
-  eq(get_lines(), {
-    "first",
-    "\t!@# ",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
+  validate_steps({ "first", "\t", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    {
+      { 1, 2 },
+      "gcc",
+      { "first", "\t!@# ", "\tsecond line", "third line", "fourth line", "fifth" },
+    },
   })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L630
 T["referenced_from_vscode"]["Add line comment fault when blank lines involved"] = function()
-  set_config({ ignore_empty_lines = "always" })
-  set_lines({
+  validate_steps({
     '    if displayName == "":',
     "        displayName = groupName",
     '    description = getAttr(attributes, "description")',
@@ -6556,155 +5113,93 @@ T["referenced_from_vscode"]["Add line comment fault when blank lines involved"] 
     '    print "||Group name|%s|" % displayName',
     '    print "||Description|%s|" % description',
     '    print "||Email address|[mailto:%s]|" % mailAddress`',
-  })
-  selection(0, 1, 7, 56)
-  feed("gc")
-  eq(get_lines(), {
-    '    !@# if displayName == "":',
-    "    !@#     displayName = groupName",
-    '    !@# description = getAttr(attributes, "description")',
-    '    !@# mailAddress = getAttr(attributes, "mail")',
-    "",
-    '    !@# print "||Group name|%s|" % displayName',
-    '    !@# print "||Description|%s|" % description',
-    '    !@# print "||Email address|[mailto:%s]|" % mailAddress`',
-  })
+  }, {
+    {
+      { 0, 1, 7, 56 },
+      "gc",
+      {
+        '    !@# if displayName == "":',
+        "    !@#     displayName = groupName",
+        '    !@# description = getAttr(attributes, "description")',
+        '    !@# mailAddress = getAttr(attributes, "mail")',
+        "",
+        '    !@# print "||Group name|%s|" % displayName',
+        '    !@# print "||Description|%s|" % description',
+        '    !@# print "||Email address|[mailto:%s]|" % mailAddress`',
+      },
+    },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L657
 T["referenced_from_vscode"]["toggle comments shouldn't move cursor"] = function()
-  set_lines({
-    "    A line",
-    "    Another line",
+  validate_steps({ "    A line", "    Another line" }, {
+    { { 1, 7 }, "gck", { "    !@# A line", "    !@# Another line" }, { 1, 11 } },
   })
-  set_cursor(1, 7)
-  feed("gck")
-  eq(get_lines(), {
-    "    !@# A line",
-    "    !@# Another line",
-  })
-  eq(get_cursor(), { 1, 11 })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L672
 T["referenced_from_vscode"]["insertSpace false"] = function()
-  set_config({ insert_space = false })
-  set_lines({
-    "some text",
-  })
-  set_cursor(0, 1)
-  feed("gcc")
-  eq(get_lines(), {
-    "!@#some text",
-  })
-  eq(get_cursor(), { 0, 4 })
+  validate_steps({ "some text" }, {
+    { { 0, 1 }, "gcc", { "!@#some text" }, { 0, 4 } },
+  }, { config = { insert_space = false } })
 end
 
 -- NOTE: might differ with vscode, when insertSpace false, we respect the origin commentstring format
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L690
 T["referenced_from_vscode"]["insertSpace false does not remove space"] = function()
-  set_config({ insert_space = false })
-  set_lines({
-    "!@#    some text",
-  })
-  set_cursor(0, 1)
-  feed("gcc")
-  eq(get_lines(), {
-    "    some text",
-  })
+  validate_steps({ "!@#    some text" }, {
+    { { 0, 1 }, "gcc", { "    some text" } },
+  }, { config = { insert_space = false } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L718
 T["referenced_from_vscode"]["does not ignore whitespace lines"] = function()
-  set_config({ ignore_empty_lines = "never" })
-  set_lines({
-    "\tsome text",
-    "\t   ",
-    "",
-    "\tsome more text",
-  })
-  selection(3, 2, 0, 1)
-  feed("gc")
-  eq(get_lines(), {
-    "!@# \tsome text",
-    "!@# \t   ",
-    "!@# ",
-    "!@# \tsome more text",
-  })
+  validate_steps({ "\tsome text", "\t   ", "", "\tsome more text" }, {
+    {
+      { 3, 2, 0, 1 },
+      "gc",
+      { "!@# \tsome text", "!@# \t   ", "!@# ", "!@# \tsome more text" },
+    },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L718
 T["referenced_from_vscode"]["ignore_empty_lines removes its own"] = function()
-  set_config({ ignore_empty_lines = "never" })
-  set_lines({
-    "\t!@# some text",
-    "\t   ",
-    "\t\t!@# some more text",
-  })
-  selection(2, 2, 0, 1)
-  feed("gc")
-  eq(get_lines(), {
-    "\tsome text",
-    "\t   ",
-    "\t\tsome more text",
-  })
+  validate_steps({ "\t!@# some text", "\t   ", "\t\t!@# some more text" }, {
+    { { 2, 2, 0, 1 }, "gc", { "\tsome text", "\t   ", "\t\tsome more text" } },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L754
 T["referenced_from_vscode"]["ignore_empty_lines works in only whitespace"] = function()
-  set_config({ ignore_empty_lines = "never" })
-  set_lines({
-    "\t    ",
-    "\t",
-    "\t\tsome more text",
-  })
-  set_cursor(0, 0)
-  feed("gcj")
-  eq(get_lines(), {
-    "\t!@#     ",
-    "\t!@# ",
-    "\t\tsome more text",
-  })
+  validate_steps({ "\t    ", "\t", "\t\tsome more text" }, {
+    { "gcj", { "\t!@#     ", "\t!@# ", "\t\tsome more text" } },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L771
-T["referenced_from_vscode"]["ignore_empty_lines comments signle line"] = function()
-  set_config({ ignore_empty_lines = "never" })
-  set_lines({
-    "some text",
-    "\tsome more text",
-  })
-  selection(0, 1, 0, 1)
-  feed("gcc")
-  eq(get_lines(), {
-    "!@# some text",
-    "\tsome more text",
-  })
+T["referenced_from_vscode"]["ignore_empty_lines comments single line: first line"] = function()
+  validate_steps({ "some text", "\tsome more text" }, {
+    { { 0, 1, 0, 1 }, "gcc", { "!@# some text", "\tsome more text" } },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L786
-T["referenced_from_vscode"]["ignore_empty_lines comments signle line"] = function()
-  set_config({ ignore_empty_lines = "never" })
-  set_lines({
-    "\tsome text",
-    "\tsome more text",
-  })
-  selection(1, 2, 0, 1)
-  feed("gcc")
-  eq(get_lines(), {
-    "\t!@# some text",
-    "\t!@# some more text",
-  })
+T["referenced_from_vscode"]["ignore_empty_lines comments single line: multiple lines"] = function()
+  validate_steps({ "\tsome text", "\tsome more text" }, {
+    { { 1, 2, 0, 1 }, "gcc", { "\t!@# some text", "\t!@# some more text" } },
+  }, { config = { ignore_empty_lines = "never" } })
 end
 
 T["referenced_from_vscode"]["commenting code in JSX files"] = function()
+  set_context({ bo = { filetype = "javascript" } })
   child.lua_func(function()
     vim.treesitter.language.add("javascript")
-    vim.bo.filetype = "javascript"
     vim.treesitter.start()
   end)
 
-  set_lines({
+  local jsx = {
     "import React from 'react';",
     "const Loader = () => (",
     "  <div>",
@@ -6712,41 +5207,35 @@ T["referenced_from_vscode"]["commenting code in JSX files"] = function()
     "  </div>",
     ");",
     "export default Loader;",
-  })
-  set_cursor(0, 0)
-  feed("gc6j")
-  eq(get_lines(), {
-    "// import React from 'react';",
-    "// const Loader = () => (",
-    "//   <div>",
-    "//     Loading...",
-    "//   </div>",
-    "// );",
-    "// export default Loader;",
-  })
-  eq(get_cursor(), { 0, 3 })
-  feed("gcgc")
-  eq(get_lines(), {
-    "import React from 'react';",
-    "const Loader = () => (",
-    "  <div>",
-    "    Loading...",
-    "  </div>",
-    ");",
-    "export default Loader;",
-  })
-  eq(get_cursor(), { 0, 0 })
-
-  set_cursor(3, 0)
-  feed("gcc")
-  eq(get_lines(), {
-    "import React from 'react';",
-    "const Loader = () => (",
-    "  <div>",
-    "    {/* Loading... */}",
-    "  </div>",
-    ");",
-    "export default Loader;",
+  }
+  validate_steps(jsx, {
+    {
+      "gc6j",
+      {
+        "// import React from 'react';",
+        "// const Loader = () => (",
+        "//   <div>",
+        "//     Loading...",
+        "//   </div>",
+        "// );",
+        "// export default Loader;",
+      },
+      { 0, 3 },
+    },
+    { "gcgc", jsx, { 0, 0 } },
+    {
+      { 3, 0 },
+      "gcc",
+      {
+        "import React from 'react';",
+        "const Loader = () => (",
+        "  <div>",
+        "    {/* Loading... */}",
+        "  </div>",
+        ");",
+        "export default Loader;",
+      },
+    },
   })
 end
 
@@ -6755,173 +5244,78 @@ end
 -- https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L832
 -- https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L853
 T["referenced_from_vscode"]["fallback to block comment command"] = function()
-  child.bo.commentstring = ""
-  child.b.celeste_comment_block_commentstring = "(%s)"
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  set_cursor(0, 3)
-  feed("gcc")
-  eq(get_lines(), {
-    "( first )",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  eq(get_cursor(), { 0, 5 })
-
-  feed("gcc")
-  eq(get_lines(), {
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    {
+      { 0, 3 },
+      "gcc",
+      { "( first )", "\tsecond line", "third line", "fourth line", "fifth" },
+      { 0, 5 },
+    },
+    { "gcc", { "first", "\tsecond line", "third line", "fourth line", "fifth" } },
+  }, { bo = { commentstring = "" }, b = { celeste_comment_block_commentstring = "(%s)" } })
 end
 
 -- https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L874
 T["referenced_from_vscode"]["always expand selection to line boundaries"] = function()
-  child.bo.commentstring = ""
-  child.b.celeste_comment_block_commentstring = "(%s)"
-  set_lines({
-    "first",
-    "\tsecond line",
-    "third line",
-    "fourth line",
-    "fifth",
-  })
-  selection(2, 2, 0, 3)
-  feed("gc")
-  eq(get_lines(), {
-    "( first",
-    "\tsecond line",
-    "third line )",
-    "fourth line",
-    "fifth",
-  })
+  validate_steps({ "first", "\tsecond line", "third line", "fourth line", "fifth" }, {
+    {
+      { 2, 2, 0, 3 },
+      "gc",
+      { "( first", "\tsecond line", "third line )", "fourth line", "fifth" },
+    },
+  }, { bo = { commentstring = "" }, b = { celeste_comment_block_commentstring = "(%s)" } })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L924
 T["referenced_from_vscode"]["fallback to block : no selection => uses indentation"] = function()
-  child.bo.commentstring = ""
-  child.b.celeste_comment_block_commentstring = "<!@#%s#@!>"
-  set_lines({
+  set_context({ bo = { commentstring = "" }, b = { celeste_comment_block_commentstring = "<!@#%s#@!>" } })
+  local lines = {
     "\t\tfirst\t    ",
     "\t\tsecond line",
     "\tthird line",
     "fourth line",
     "\t\t<!@#fifth#@!>\t\t",
+  }
+  validate_steps(lines, {
+    {
+      { 0, 3 },
+      "gcc",
+      { "\t\t<!@# first\t     #@!>", "\t\tsecond line", "\tthird line", "fourth line", "\t\t<!@#fifth#@!>\t\t" },
+      { 0, 8 },
+    },
+    { "gcc", lines, { 0, 3 } },
   })
-  set_cursor(0, 3)
-  feed("gcc")
-  eq(get_lines(), {
-    "\t\t<!@# first\t     #@!>",
-    "\t\tsecond line",
-    "\tthird line",
-    "fourth line",
-    "\t\t<!@#fifth#@!>\t\t",
-  })
-  eq(get_cursor(), { 0, 8 })
-
-  feed("gcc")
-  eq(get_lines(), {
-    "\t\tfirst\t    ",
-    "\t\tsecond line",
-    "\tthird line",
-    "fourth line",
-    "\t\t<!@#fifth#@!>\t\t",
-  })
-  eq(get_cursor(), { 0, 3 })
 end
 
 -- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L964
 T["referenced_from_vscode"]["fallback to block : can remove"] = function()
-  child.bo.commentstring = ""
-  child.b.celeste_comment_block_commentstring = "<!@#%s#@!>"
-  set_lines({
+  set_context({ bo = { commentstring = "" }, b = { celeste_comment_block_commentstring = "<!@#%s#@!>" } })
+  local lines = {
     "\t\tfirst\t    ",
     "\t\tsecond line",
     "\tthird line",
     "fourth line",
     "\t\t<!@#fifth#@!>\t\t",
-  })
-  set_cursor(4, 1)
-  feed("gcc")
-  eq(get_lines(), {
+  }
+  local expected = {
     "\t\tfirst\t    ",
     "\t\tsecond line",
     "\tthird line",
     "fourth line",
     "\t\tfifth\t\t",
-  })
-
-  set_lines({
-    "\t\tfirst\t    ",
-    "\t\tsecond line",
-    "\tthird line",
-    "fourth line",
-    "\t\t<!@#fifth#@!>\t\t",
-  })
-  set_cursor(4, 3)
-  feed("gcc")
-  eq(get_lines(), {
-    "\t\tfirst\t    ",
-    "\t\tsecond line",
-    "\tthird line",
-    "fourth line",
-    "\t\tfifth\t\t",
-  })
-
-  set_lines({
-    "\t\tfirst\t    ",
-    "\t\tsecond line",
-    "\tthird line",
-    "fourth line",
-    "\t\t<!@#fifth#@!>\t\t",
-  })
-  set_cursor(4, 4)
-  feed("gcc")
-  eq(get_lines(), {
-    "\t\tfirst\t    ",
-    "\t\tsecond line",
-    "\tthird line",
-    "fourth line",
-    "\t\tfifth\t\t",
-  })
+  }
+  validate_steps(lines, { { { 4, 1 }, "gcc", expected } })
+  validate_steps(lines, { { { 4, 3 }, "gcc", expected } })
+  validate_steps(lines, { { { 4, 4 }, "gcc", expected } })
 end
 
 --- Referenced from https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/test/browser/lineCommentCommand.test.ts#L1080
 T["referenced_from_vscode"]["fallback to block : Remove comment not work consistently in HTML"] = function()
-  child.bo.commentstring = ""
-  child.b.celeste_comment_block_commentstring = "<!@#%s#@!>"
-  set_lines({
-    "     asd qwe",
-    "     asd qwe",
-    "",
-  })
-  feed("gcj")
-  eq(get_lines(), {
-    "     <!@# asd qwe",
-    "     asd qwe #@!>",
-    "",
-  })
-
-  set_lines({
-    "     <!@#asd qwe",
-    "     asd qwe#@!>",
-    "",
-  })
-  feed("gcj")
-  eq(get_lines(), {
-    "     asd qwe",
-    "     asd qwe",
-    "",
+  validate_steps({ "     asd qwe", "     asd qwe", "" }, {
+    { "gcj", { "     <!@# asd qwe", "     asd qwe #@!>", "" } },
+  }, { bo = { commentstring = "" }, b = { celeste_comment_block_commentstring = "<!@#%s#@!>" } })
+  validate_steps({ "     <!@#asd qwe", "     asd qwe#@!>", "" }, {
+    { "gcj", { "     asd qwe", "     asd qwe", "" } },
   })
 end
 
@@ -6930,53 +5324,37 @@ end
 T["inline_multi_block"] = new_set()
 
 T["inline_multi_block"]["gbc on line with inline block wraps whole line"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," })
-  set_cursor(0, 30)
-  feed("gbc")
-  eq(get_lines(), { "        /* /* value */ EncodeAsString(k * 2), /* is_delete */ false, */" })
+  validate_steps({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," }, {
+    { { 0, 30 }, "gbc", { "        /* /* value */ EncodeAsString(k * 2), /* is_delete */ false, */" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["block_is_partial checks exact position"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "  /* a */ b(), /* c */ d()," })
-  set_cursor(0, 2)
-  feed("v", "6l", "gb")
-  eq(get_lines(), { "  a b(), /* c */ d()," })
+  validate_steps({ "  /* a */ b(), /* c */ d()," }, {
+    { { 0, 2 }, { "v", "6l", "gb" }, { "  a b(), /* c */ d()," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["dgb multi-line mid-column deletes precisely"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "x /* a", "b */ y" })
-  set_cursor(0, 3)
-  feed("dgb")
-  eq(get_lines(), { "x  y" })
+  validate_steps({ "x /* a", "b */ y" }, {
+    { { 0, 3 }, "dgb", { "x  y" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbgb toggles inline block comment"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "  /* value */ code" })
-  set_cursor(0, 4)
-  feed("gbgb")
-  eq(get_lines(), { "  value code" })
+  validate_steps({ "  /* value */ code" }, {
+    { { 0, 4 }, "gbgb", { "  value code" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbiw toggles specific word only"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "  /* val */ str(), /* del */ true," })
-  set_cursor(0, 13)
-  feed("gbiw")
-  eq(get_lines(), { "  /* val */ /* str */(), /* del */ true," })
+  validate_steps({ "  /* val */ str(), /* del */ true," }, {
+    { { 0, 13 }, "gbiw", { "  /* val */ /* str */(), /* del */ true," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["vib selects multi-line block precisely"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
+  set_context({ bo = { filetype = "cpp", commentstring = "// %s" } })
   child.lua([[
     vim.keymap.set("x", "ib", '<Cmd>lua require("celeste_comment").H.textobject_blockwise()<CR>')
   ]])
@@ -6984,99 +5362,67 @@ T["inline_multi_block"]["vib selects multi-line block precisely"] = function()
   set_cursor(1, 5)
   feed("v", "i", "b", "<Esc>")
 
-  local from = child.api.nvim_buf_get_mark(0, "<")
-  local to = child.api.nvim_buf_get_mark(0, ">")
-
-  eq(from[1], 1)
-  eq(from[2], 4)
-  eq(to[1], 3)
-  eq(to[2], 11)
+  eq_marks({ "<", ">" }, { { 1, 4 }, { 3, 11 } })
 end
 
 T["inline_multi_block"]["gbgb outside inline block does nothing"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," })
   -- Cursor on EncodeAsString, outside any /* */ block
-  set_cursor(0, 23)
-  feed("gbgb")
-  -- No change: should NOT affect /* value */
-  eq(get_lines(), { "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," })
+  validate_steps({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," }, {
+    { { 0, 23 }, "gbgb", { "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbgb inside inline block works"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," })
-  -- Cursor on 'value' inside /* value */
-  set_cursor(0, 12)
-  feed("gbgb")
-  -- /* value */ should be uncommented, is_delete unaffected
-  eq(get_lines(), { "        value EncodeAsString(k * 2), /* is_delete */ false," })
+  -- Cursor on 'value' inside /* value */; is_delete unaffected
+  validate_steps({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," }, {
+    { { 0, 12 }, "gbgb", { "        value EncodeAsString(k * 2), /* is_delete */ false," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbgb on second inline block works"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," })
   -- Cursor on 'is_delete' inside /* is_delete */
-  set_cursor(0, 48)
-  feed("gbgb")
-  eq(get_lines(), { "        /* value */ EncodeAsString(k * 2), is_delete false," })
+  validate_steps({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," }, {
+    { { 0, 48 }, "gbgb", { "        /* value */ EncodeAsString(k * 2), is_delete false," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbgb on marker chars works"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," })
   -- Cursor on '/' in /* value */
-  set_cursor(0, 8)
-  feed("gbgb")
-  eq(get_lines(), { "        value EncodeAsString(k * 2), /* is_delete */ false," })
+  validate_steps({ "        /* value */ EncodeAsString(k * 2), /* is_delete */ false," }, {
+    { { 0, 8 }, "gbgb", { "        value EncodeAsString(k * 2), /* is_delete */ false," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbgb on empty line below inline block does nothing"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "        /* use_contiguous_buffer */ true);", "", "    /* is_delete */ true," })
-  set_cursor(1, 0)
-  feed("gbgb")
-  eq(get_lines(), { "        /* use_contiguous_buffer */ true);", "", "    /* is_delete */ true," })
+  validate_steps({ "        /* use_contiguous_buffer */ true);", "", "    /* is_delete */ true," }, {
+    { { 1, 0 }, "gbgb", { "        /* use_contiguous_buffer */ true);", "", "    /* is_delete */ true," } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["inline_multi_block"]["gbgb beyond block_textobj_nlines does nothing"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  child.b.celeste_comment_config = { block_textobj_nlines = 1 }
-  local lines = {}
-  for i = 1, 5 do
-    lines[i] = ""
-  end
-  lines[1] = "/* far */ code"
-  lines[5] = "content"
-  set_lines(lines)
-  set_cursor(4, 0)
-  feed("gbgb")
-  eq(get_lines()[1], "/* far */ code")
+  validate_steps({ "/* far */ code", "", "", "", "content" }, {
+    { { 4, 0 }, "gbgb", { from = 1, "/* far */ code" } },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" }, config = { block_textobj_nlines = 1 } })
 end
 
 T["inline_multi_block"]["gbgb on first inline block in multi-line works"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({
+  validate_steps({
     "input_descs.emplace_back(",
     "        /* key */ EncodeAsString(k), /* timestamp */ EncodeAsUint64(k),",
     "        /* value */ EncodeAsString(k), /* is_delete */ false,",
     "        /* use_contiguous_buffer */ false);",
-  })
-  set_cursor(1, 14)
-  feed("gbgb")
-  eq(get_lines(), {
-    "input_descs.emplace_back(",
-    "        key EncodeAsString(k), /* timestamp */ EncodeAsUint64(k),",
-    "        /* value */ EncodeAsString(k), /* is_delete */ false,",
-    "        /* use_contiguous_buffer */ false);",
-  })
+  }, {
+    {
+      { 1, 14 },
+      "gbgb",
+      {
+        "input_descs.emplace_back(",
+        "        key EncodeAsString(k), /* timestamp */ EncodeAsUint64(k),",
+        "        /* value */ EncodeAsString(k), /* is_delete */ false,",
+        "        /* use_contiguous_buffer */ false);",
+      },
+    },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 -- multi line comment string tests ─────────────────────────────────────────────
@@ -7102,41 +5448,32 @@ T["multi_line_comment_string"]["tomake_csi_multi_token_sorted"] = function()
 end
 
 T["multi_line_comment_string"]["gcc_removes_longest_token"] = function()
-  child.bo.filetype = "rust"
-  child.b.celeste_comment_config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } }
-  set_lines({ "/// doc comment" })
-  set_cursor(0, 0)
-  feed("gcc")
   -- removes "/// " leaving "doc comment"
-  eq(get_lines(), { "doc comment" })
+  validate_steps({ "/// doc comment" }, { { "gcc", { "doc comment" } } }, {
+    bo = { filetype = "rust" },
+    config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } },
+  })
 end
 
 T["multi_line_comment_string"]["gcc_removes_correct_token"] = function()
-  child.bo.filetype = "rust"
-  child.b.celeste_comment_config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } }
-  set_lines({ "//! inner doc" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "inner doc" })
+  validate_steps({ "//! inner doc" }, { { "gcc", { "inner doc" } } }, {
+    bo = { filetype = "rust" },
+    config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } },
+  })
 end
 
 T["multi_line_comment_string"]["gcc_adds_primary_token"] = function()
-  child.bo.filetype = "rust"
-  child.b.celeste_comment_config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } }
-  set_lines({ "normal code" })
-  set_cursor(0, 0)
-  feed("gcc")
   -- primary is "//"
-  eq(get_lines(), { "// normal code" })
+  validate_steps({ "normal code" }, { { "gcc", { "// normal code" } } }, {
+    bo = { filetype = "rust" },
+    config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } },
+  })
 end
 
 T["multi_line_comment_string"]["gcgc_selects_mixed_tokens"] = function()
-  child.bo.filetype = "rust"
-  child.b.celeste_comment_config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } }
-  set_lines({ "/// doc", "// normal", "//! inner", "end" })
-  set_cursor(1, 0)
-  feed("dgc")
-  eq(get_lines(), { "end" })
+  validate_steps({ "/// doc", "// normal", "//! inner", "end" }, {
+    { { 1, 0 }, "dgc", { "end" } },
+  }, { bo = { filetype = "rust" }, config = { cms_confs = { rust = { { "//%s", "///%s", "//!%s" }, "" } } } })
 end
 
 -- fallback_to_block tests ─────────────────────────────────────────────────────
@@ -7144,134 +5481,84 @@ end
 T["fallback_to_block"] = new_set()
 
 T["fallback_to_block"]["never: works"] = function()
-  child.bo.filetype = "test"
-  child.b.celeste_comment_config = {
-    fallback_to_block = "never",
-    cms_confs = { test = { nil, "/*%s*/" } },
-  }
-  set_lines({ "aaa", "bbb" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "aaa", "bbb" })
+  validate_steps({ "aaa", "bbb" }, {
+    { "gcc", { "aaa", "bbb" } },
+  }, { bo = { filetype = "test" }, config = { fallback_to_block = "never", cms_confs = { test = { nil, "/*%s*/" } } } })
 
-  child.b.celeste_comment_config = {
-    fallback_to_block = "never",
-    cms_confs = { test = { "<!--%s-->", "/*%s*/" } },
-  }
-  feed(".")
-  eq(get_lines(), { "<!-- aaa -->", "bbb" })
-  feed("u")
-
-  feed("gc", "2j")
-  eq(get_lines(), { "<!-- aaa -->", "<!-- bbb -->" })
-  eq(get_cursor(), { 0, 5 })
-  feed(".")
-  eq(get_lines(), { "aaa", "bbb" })
+  validate_steps(nil, {
+    { ".", { "<!-- aaa -->", "bbb" } },
+    { "u" },
+    { { "gc", "2j" }, { "<!-- aaa -->", "<!-- bbb -->" }, { 0, 5 } },
+    { ".", { "aaa", "bbb" } },
+  }, { config = { fallback_to_block = "never", cms_confs = { test = { "<!--%s-->", "/*%s*/" } } } })
 end
 
 T["fallback_to_block"]["if_line_cms_wrapped: works1"] = function()
-  child.bo.filetype = "test"
-  child.b.celeste_comment_config = {
-    fallback_to_block = "if_line_cms_wrapped",
-    cms_confs = { test = { nil, "/*%s*/" } },
-  }
-  set_lines({ "hello" })
-  set_cursor(0, 3)
-  feed("gcc")
-  eq(get_lines(), { "/* hello */" })
-  eq(get_cursor(), { 0, 6 })
-  feed(".")
-  eq(get_lines(), { "hello" })
+  validate_steps({ "hello" }, {
+    { { 0, 3 }, "gcc", { "/* hello */" }, { 0, 6 } },
+    { ".", { "hello" } },
+  }, {
+    bo = { filetype = "test" },
+    config = { fallback_to_block = "if_line_cms_wrapped", cms_confs = { test = { nil, "/*%s*/" } } },
+  })
 
-  set_lines({ "    aaa", "    /* bbb */", "    /*ccc*/" })
-  set_cursor(1, 4)
-  feed("gc", "gc")
-  eq(get_lines(), { "    aaa", "    bbb", "    /*ccc*/" })
-  eq(get_cursor(), { 1, 4 })
-  set_cursor(2, 6)
-  feed(".")
-  eq(get_lines(), { "    aaa", "    bbb", "    ccc" })
+  validate_steps({ "    aaa", "    /* bbb */", "    /*ccc*/" }, {
+    { { 1, 4 }, { "gc", "gc" }, { "    aaa", "    bbb", "    /*ccc*/" }, { 1, 4 } },
+    { { 2, 6 }, ".", { "    aaa", "    bbb", "    ccc" } },
+  })
 
-  set_lines({ "aaa", "bbb", "ccc" })
-  set_cursor(0, 0)
-  feed("gcj")
-  eq(get_lines(), { "/* aaa", "bbb */", "ccc" })
-  feed("gcgc")
-  eq(get_lines(), { "aaa", "bbb", "ccc" })
+  validate_steps({ "aaa", "bbb", "ccc" }, {
+    { { 0, 0 }, "gcj", { "/* aaa", "bbb */", "ccc" } },
+    { "gcgc", { "aaa", "bbb", "ccc" } },
+  })
 
-  set_lines({ "/* aaa", "bbb */", "ccc" })
-  set_cursor(0, 0)
-  feed("gcj")
-  eq(get_lines(), { "aaa", "bbb", "ccc" })
+  validate_steps({ "/* aaa", "bbb */", "ccc" }, {
+    { { 0, 0 }, "gcj", { "aaa", "bbb", "ccc" } },
+  })
 
   -- always expand selection to line boundaries when fallback_to_block
-  set_lines({ "hello world", "foo bar baz" })
-  selection(0, 6, 1, 4)
-  feed("gc")
-  eq(get_lines(), { "/* hello world", "foo bar baz */" })
-  -- round-trip: gcgc uncomments
-  feed("gcgc")
-  eq(get_lines(), { "hello world", "foo bar baz" })
-
-  feed("u")
-  set_cursor(0, 8)
-  feed("gcu")
-  eq(get_lines(), { "hello world", "foo bar baz" })
+  validate_steps({ "hello world", "foo bar baz" }, {
+    { { 0, 6, 1, 4 }, "gc", { "/* hello world", "foo bar baz */" } },
+    -- round-trip: gcgc uncomments
+    { "gcgc", { "hello world", "foo bar baz" } },
+    { "u" },
+    { { 0, 8 }, "gcu", { "hello world", "foo bar baz" } },
+  })
 end
 
 T["fallback_to_block"]["if_line_cms_wrapped: works2"] = function()
-  child.bo.filetype = "test"
-  child.b.celeste_comment_config = {
-    fallback_to_block = "if_line_cms_wrapped",
-    cms_confs = { test = { "#%s", "/*%s*/" } },
-  }
+  validate_steps({ "a" }, {
+    { "gcc", { "# a" }, { 0, 2 } },
+    { ".", { "a" } },
+  }, {
+    bo = { filetype = "test" },
+    config = { fallback_to_block = "if_line_cms_wrapped", cms_confs = { test = { "#%s", "/*%s*/" } } },
+  })
 
-  set_lines({ "a" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "# a" })
-  eq(get_cursor(), { 0, 2 })
-  feed(".")
-  eq(get_lines(), { "a" })
+  validate_steps({ "a" }, {
+    { "gcc", { "!@# a #@!" }, { 0, 4 } },
+  }, {
+    config = {
+      fallback_to_block = "if_line_cms_wrapped",
+      cms_confs = { test = { "!@#%s#@!", "/*%s*/" } },
+    },
+  })
 
-  child.b.celeste_comment_config = {
-    fallback_to_block = "if_line_cms_wrapped",
-    cms_confs = { test = { "!@#%s#@!", "/*%s*/" } },
-  }
-  set_lines({ "a" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "!@# a #@!" })
-  eq(get_cursor(), { 0, 4 })
-
-  set_lines({ "aaa", "bbb", "ccc" })
-  set_cursor(0, 0)
-  feed("gcj")
-  eq(get_lines(), { "!@# aaa", "bbb #@!", "ccc" })
-  eq(get_cursor(), { 0, 4 })
-  feed("gc", "gc")
-  eq(get_lines(), { "aaa", "bbb", "ccc" })
-  eq(get_cursor(), { 0, 0 })
-  feed("u")
-
-  set_cursor(0, 6)
-  feed("gcj")
-  eq(get_lines(), { "aaa", "bbb", "ccc" })
-  eq(get_cursor(), { 0, 2 })
+  validate_steps({ "aaa", "bbb", "ccc" }, {
+    { { 0, 0 }, "gcj", { "!@# aaa", "bbb #@!", "ccc" }, { 0, 4 } },
+    { { "gc", "gc" }, { "aaa", "bbb", "ccc" }, { 0, 0 } },
+    { "u" },
+    { { 0, 6 }, "gcj", { "aaa", "bbb", "ccc" }, { 0, 2 } },
+  })
 
   -- always expand selection to linewise
-  set_lines({ "hello world", "foo bar baz" })
-  selection(0, 6, 1, 4)
-  feed("gc")
-  eq(get_lines(), { "!@# hello world", "foo bar baz #@!" })
-  -- round-trip: gcgc uncomments
-  feed("gcgc")
-  eq(get_lines(), { "hello world", "foo bar baz" })
-
-  feed("u")
-  set_cursor(0, 8)
-  feed("gcu")
-  eq(get_lines(), { "hello world", "foo bar baz" })
+  validate_steps({ "hello world", "foo bar baz" }, {
+    { { 0, 6, 1, 4 }, "gc", { "!@# hello world", "foo bar baz #@!" } },
+    -- round-trip: gcgc uncomments
+    { "gcgc", { "hello world", "foo bar baz" } },
+    { "u" },
+    { { 0, 8 }, "gcu", { "hello world", "foo bar baz" } },
+  })
 end
 
 -- Toggle current line comment at insert mode ─────────────────────────────────
@@ -7284,21 +5571,20 @@ local function ins_f(col, etcol, start_line, end_line, expected_after_at)
   set_lines({ start_line })
   set_cursor(0, col)
   feed("<c-/>")
-  eq(get_lines(), { end_line })
-  eq(get_cursor(), { 0, etcol })
+  eq_lines({ end_line })
+  eq_cursor({ 0, etcol })
   feed("@")
-  eq(get_lines(), { expected_after_at })
-  eq(get_cursor(), { 0, etcol + 1 })
+  eq_lines({ expected_after_at })
+  eq_cursor({ 0, etcol + 1 })
   feed("<c-h>")
-  eq(get_cursor(), { 0, etcol })
+  eq_cursor({ 0, etcol })
 end
 
 T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function(fallback)
-  child.b.celeste_comment_config = { fallback_to_block = fallback }
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.bo.filetype = "unknown"
-  child.bo.commentstring = "// %s"
+  set_context({
+    config = { fallback_to_block = fallback },
+    bo = { tabstop = 2, expandtab = true, filetype = "unknown", commentstring = "// %s" },
+  })
   feed("i")
 
   -- stylua: ignore start
@@ -7350,11 +5636,10 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs only cms"] = function(fal
 end
 
 T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function(fallback)
-  child.b.celeste_comment_config = { fallback_to_block = fallback }
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.bo.filetype = "unknown"
-  child.bo.commentstring = "/* %s */"
+  set_context({
+    config = { fallback_to_block = fallback },
+    bo = { tabstop = 2, expandtab = true, filetype = "unknown", commentstring = "/* %s */" },
+  })
   feed("i")
 
   -- stylua: ignore start
@@ -7421,11 +5706,10 @@ T["toggle_line_comment_at_insert_mode"]["works for lcs-rcs cms"] = function(fall
 end
 
 T["toggle_line_comment_at_insert_mode"]["works for rcs only cms"] = function(fallback)
-  child.b.celeste_comment_config = { fallback_to_block = fallback }
-  child.bo.tabstop = 2
-  child.bo.expandtab = true
-  child.bo.filetype = "unknown"
-  child.bo.commentstring = "%s --"
+  set_context({
+    config = { fallback_to_block = fallback },
+    bo = { tabstop = 2, expandtab = true, filetype = "unknown", commentstring = "%s --" },
+  })
   feed("i")
 
   -- stylua: ignore start
@@ -7475,71 +5759,43 @@ end
 T["force_comment"] = new_set()
 
 T["force_comment"]["force add works"] = function()
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello", "// world" })
-  set_cursor(0, 0)
-  feed("gC", "j")
-  eq(get_lines(), { "// hello", "// // world" })
-  eq(get_cursor(), { 0, 3 })
-
-  feed(".")
-  eq(get_lines(), { "// // hello", "// // // world" })
-  eq(get_cursor(), { 0, 6 })
-
-  feed("V", "j", "gC")
-  eq(get_lines(), { "// // // hello", "// // // // world" })
-  eq(get_cursor(), { 1, 9 })
+  validate_steps({ "hello", "// world" }, {
+    { { "gC", "j" }, { "// hello", "// // world" }, { 0, 3 } },
+    { ".", { "// // hello", "// // // world" }, { 0, 6 } },
+    { { "V", "j", "gC" }, { "// // // hello", "// // // // world" }, { 1, 9 } },
+  }, { bo = { commentstring = "// %s" } })
 end
 
 T["force_comment"]["force remove works"] = function()
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello", "// world" })
-  set_cursor(1, 3)
-  feed("gU", "k")
-  eq(get_lines(), { "hello", "world" })
-  eq(get_cursor(), { 1, 0 })
-
-  feed(".")
-  eq(get_lines(), { "hello", "world" })
-  eq(get_cursor(), { 1, 0 })
-
-  set_lines({ "// hello", "  // ", "  ", "    // world" })
-  set_cursor(0, 2)
-  feed("V", "3j", "gU")
-  eq(get_lines(), { "hello", "  ", "  ", "    world" })
-  eq(get_cursor(), { 3, 2 })
+  validate_steps({ "hello", "// world" }, {
+    { { 1, 3 }, { "gU", "k" }, { "hello", "world" }, { 1, 0 } },
+    { ".", { "hello", "world" }, { 1, 0 } },
+  }, { bo = { commentstring = "// %s" } })
+  validate_steps({ "// hello", "  // ", "  ", "    // world" }, {
+    { { 0, 2 }, { "V", "3j", "gU" }, { "hello", "  ", "  ", "    world" }, { 3, 2 } },
+  })
 end
 
 T["force_comment"]["respect ignore_empty_lines"] = function()
-  child.bo.tabstop = 2
-  child.bo.commentstring = "// %s"
-
   -- ForceAdd + always: blank lines skipped
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  set_lines({ "hello", "  ", "// world" })
-  set_cursor(0, 0)
-  feed("V", "2j", "gC")
-  eq(get_lines(), { "// hello", "  ", "// // world" })
+  validate_steps({ "hello", "  ", "// world" }, {
+    { { 0, 0 }, { "V", "2j", "gC" }, { "// hello", "  ", "// // world" } },
+  }, { bo = { tabstop = 2, commentstring = "// %s" }, config = { ignore_empty_lines = "always" } })
 
   -- ForceRemove + always: blank lines skipped, commented lines uncommented
-  set_lines({ "// hello", "  ", "// world" })
-  set_cursor(0, 0)
-  feed("V", "2j", "gU")
-  eq(get_lines(), { "hello", "  ", "world" })
+  validate_steps({ "// hello", "  ", "// world" }, {
+    { { 0, 0 }, { "V", "2j", "gU" }, { "hello", "  ", "world" } },
+  })
 
   -- ForceAdd + never: blank lines participate in alignment, rounding to tabstop
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ "   hello", " " })
-  set_cursor(0, 0)
-  feed("V", "j", "gC")
-  eq(get_lines(), { "//    hello", "//  " })
+  validate_steps({ "   hello", " " }, {
+    { { 0, 0 }, { "V", "j", "gC" }, { "//    hello", "//  " } },
+  }, { config = { ignore_empty_lines = "never" } })
 
   -- ForceAdd + mixed: blank lines excluded from alignment, min col from content
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "   hello", " " })
-  set_cursor(0, 0)
-  feed("V", "j", "gC")
-  eq(get_lines(), { "  //  hello", "  // " })
+  validate_steps({ "   hello", " " }, {
+    { { 0, 0 }, { "V", "j", "gC" }, { "  //  hello", "  // " } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 end
 
 -- invert tests ────────────────────────────────────────────────────────────────
@@ -7547,68 +5803,40 @@ end
 T["invert"] = new_set()
 
 T["invert"]["works"] = function()
-  child.bo.filetype = "cpp"
-  set_lines({ "// a" })
-  set_cursor(0, 3)
-  feed("gcI_")
-  eq(get_lines(), { "a" })
-  eq(get_cursor(), { 0, 0 })
-  feed("gcI_")
-  eq(get_lines(), { "// a" })
-  eq(get_cursor(), { 0, 3 })
-
-  set_lines({ "//a", "b", "//c", "d", "//d" })
-  set_cursor(0, 2)
-  feed("gcI", "4j")
-  eq(get_lines(), { "a", "// b", "c", "// d", "d" })
-  eq(get_cursor(), { 0, 0 })
-  feed("gcI", "4j")
-  eq(get_lines(), { "// a", "b", "// c", "d", "// d" })
-  eq(get_cursor(), { 0, 3 })
+  validate_steps({ "// a" }, {
+    { { 0, 3 }, "gcI_", { "a" }, { 0, 0 } },
+    { "gcI_", { "// a" }, { 0, 3 } },
+  }, { bo = { filetype = "cpp" } })
+  validate_steps({ "//a", "b", "//c", "d", "//d" }, {
+    { { 0, 2 }, { "gcI", "4j" }, { "a", "// b", "c", "// d", "d" }, { 0, 0 } },
+    { { "gcI", "4j" }, { "// a", "b", "// c", "d", "// d" }, { 0, 3 } },
+  })
 end
 
 T["invert"]["works with special cms"] = function()
-  child.bo.filetype = "unknown"
-  child.b.celeste_comment_config = { fallback_to_block = "never" }
-  child.bo.commentstring = "<!--%s-->"
-  set_lines({ "a", "<!--b-->", " c" })
-  set_cursor(2, 1)
-  feed("gcI", "2k")
-  eq(get_lines(), { "<!-- a -->", "b", "<!--  c -->" })
-  eq(get_cursor(), { 2, 6 })
+  validate_steps({ "a", "<!--b-->", " c" }, {
+    { { 2, 1 }, { "gcI", "2k" }, { "<!-- a -->", "b", "<!--  c -->" }, { 2, 6 } },
+  }, { bo = { filetype = "unknown", commentstring = "<!--%s-->" }, config = { fallback_to_block = "never" } })
 
-  child.bo.commentstring = "%s !@#"
-  set_lines({ "aaaa", "bbbb!@#", "ccc" })
-  selection(0, 0, 2, 2)
-  feed("gcI")
-  eq(get_lines(), { "aaaa !@#", "bbbb", "ccc !@#" })
-  eq(get_cursor(), { 2, 2 })
+  validate_steps({ "aaaa", "bbbb!@#", "ccc" }, {
+    { { 0, 0, 2, 2 }, "gcI", { "aaaa !@#", "bbbb", "ccc !@#" }, { 2, 2 } },
+  }, { bo = { commentstring = "%s !@#" } })
 end
 
 T["invert"]["respect ignore_empty_lines"] = function()
-  child.b.celeste_comment_config = { ignore_empty_lines = "never" }
-  set_lines({ "    # a", "", "    # b" })
-  set_cursor(0, 6)
-  feed("gcI", "2j")
-  eq(get_lines(), { "    a", "# ", "    b" })
+  validate_steps({ "    # a", "", "    # b" }, {
+    { { 0, 6 }, { "gcI", "2j" }, { "    a", "# ", "    b" } },
+  }, { config = { ignore_empty_lines = "never" } })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "mixed" }
-  set_lines({ "    # a", "", "    # b" })
-  set_cursor(0, 6)
-  feed("gcI", "2j")
-  eq(get_lines(), { "    a", "    # ", "    b" })
-  eq(get_cursor(), { 0, 4 })
-  feed("gcI", "2j")
-  eq(get_lines(), { "    # a", "    ", "    # b" })
-  eq(get_cursor(), { 0, 6 })
+  validate_steps({ "    # a", "", "    # b" }, {
+    { { 0, 6 }, { "gcI", "2j" }, { "    a", "    # ", "    b" }, { 0, 4 } },
+    { { "gcI", "2j" }, { "    # a", "    ", "    # b" }, { 0, 6 } },
+  }, { config = { ignore_empty_lines = "mixed" } })
 
-  child.b.celeste_comment_config = { ignore_empty_lines = "always" }
-  feed("gcI", "2j")
-  eq(get_lines(), { "    a", "    ", "    b" })
-  eq(get_cursor(), { 0, 4 })
-  feed("gcI", "2j")
-  eq(get_lines(), { "    # a", "    ", "    # b" })
-  eq(get_cursor(), { 0, 6 })
+  validate_steps(nil, {
+    { { "gcI", "2j" }, { "    a", "    ", "    b" }, { 0, 4 } },
+    { { "gcI", "2j" }, { "    # a", "    ", "    # b" }, { 0, 6 } },
+  }, { config = { ignore_empty_lines = "always" } })
 end
 
 -- Vue files test ─────────────────────────────────────────────────────────────
@@ -7616,20 +5844,19 @@ end
 T["vue"] = new_set({
   hooks = {
     pre_case = function()
+      set_context({ config = { fallback_to_block = "if_line_cms_wrapped" } })
       child.lua_func(function()
         vim.treesitter.language.add("vue")
         vim.treesitter.language.add("html")
         vim.treesitter.language.add("css")
         vim.treesitter.language.add("javascript")
-        vim.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
       end)
     end,
   },
 })
 
 T["vue"]["works"] = function()
-  child.bo.filetype = "vue"
-  child.bo.tabstop = 2
+  set_context({ bo = { filetype = "vue", tabstop = 2 } })
   local lines = {
     "<template>",
     "  <!-- template comment -->",
@@ -7650,26 +5877,14 @@ T["vue"]["works"] = function()
   set_lines(lines)
   child.lua_func(function() vim.treesitter.start() end)
 
-  set_cursor(1, 0)
-  feed("gcc")
-  eq(get_lines(1, 1), { "  template comment" })
-  set_cursor(2, 0)
-  feed(".")
-  eq(get_lines(2, 2), { "  <!-- <div>{{ msg }}</div> -->" })
-
-  set_cursor(6, 0)
-  feed(".")
-  eq(get_lines(6, 6), { "script single-line comment" })
-  set_cursor(7, 0)
-  feed("gbc")
-  eq(get_lines(7, 7), { "script multi-line comment" })
-
-  set_cursor(12, 0)
-  feed(".")
-  eq(get_lines(12, 12), { "style comment" })
-  set_cursor(13, 0)
-  feed("gcc")
-  eq(get_lines(13, 13), { "/* div { color: red; } */" })
+  validate_steps(nil, {
+    { { 1, 0 }, "gcc", { from = 2, "  template comment" } },
+    { { 2, 0 }, ".", { from = 3, "  <!-- <div>{{ msg }}</div> -->" } },
+    { { 6, 0 }, ".", { from = 7, "script single-line comment" } },
+    { { 7, 0 }, "gbc", { from = 8, "script multi-line comment" } },
+    { { 12, 0 }, ".", { from = 13, "style comment" } },
+    { { 13, 0 }, "gcc", { from = 14, "/* div { color: red; } */" } },
+  })
 end
 
 -- PHP files test ─────────────────────────────────────────────────────────────
@@ -7677,12 +5892,9 @@ end
 T["php"] = new_set({
   hooks = {
     pre_case = function()
+      set_context({ bo = { filetype = "php" }, config = { fallback_to_block = "if_line_cms_wrapped" } })
       child.lua_func(function()
         vim.treesitter.language.add("php")
-        vim.b.celeste_comment_config = {
-          fallback_to_block = "if_line_cms_wrapped",
-        }
-        vim.bo.filetype = "php"
         vim.treesitter.start()
       end)
     end,
@@ -7699,56 +5911,53 @@ T["php"]["works"] = function()
     "?>",
     "</html>",
   }
-  set_lines(lines)
-  set_cursor(2, 0)
-  feed("gc2j")
-  eq(get_cursor(), { 2, 3 })
-  eq(get_lines(2, 4), {
-    "// for ($i = 0; $i < 10; $i++)",
-    "//     print_r($i)",
-    "// }",
-  })
-  feed("gcgc")
-  eq(get_cursor(), { 2, 0 })
-  eq(get_lines(2, 4), {
-    "for ($i = 0; $i < 10; $i++)",
-    "    print_r($i)",
-    "}",
-  })
-
-  feed("gb2j")
-  eq(get_cursor(), { 2, 3 })
-  eq(get_lines(2, 4), {
-    "/* for ($i = 0; $i < 10; $i++)",
-    "    print_r($i)",
-    "} */",
-  })
-  feed(".")
-  eq(get_cursor(), { 2, 0 })
-  eq(get_lines(2, 4), {
-    "for ($i = 0; $i < 10; $i++)",
-    "    print_r($i)",
-    "}",
-  })
-
-  set_cursor(1, 0)
-  feed("gc4j")
-  eq(get_cursor(), { 1, 5 })
-  eq(get_lines(1, 5), {
-    "<!-- <?php",
-    "for ($i = 0; $i < 10; $i++)",
-    "    print_r($i)",
-    "}",
-    "?> -->",
-  })
-  feed("gcgc")
-  eq(get_cursor(), { 1, 0 })
-  eq(get_lines(1, 5), {
-    "<?php",
-    "for ($i = 0; $i < 10; $i++)",
-    "    print_r($i)",
-    "}",
-    "?>",
+  validate_steps(lines, {
+    {
+      { 2, 0 },
+      "gc2j",
+      { from = 3, "// for ($i = 0; $i < 10; $i++)", "//     print_r($i)", "// }" },
+      { 2, 3 },
+    },
+    {
+      "gcgc",
+      { from = 3, "for ($i = 0; $i < 10; $i++)", "    print_r($i)", "}" },
+      { 2, 0 },
+    },
+    {
+      "gb2j",
+      { from = 3, "/* for ($i = 0; $i < 10; $i++)", "    print_r($i)", "} */" },
+      { 2, 3 },
+    },
+    {
+      ".",
+      { from = 3, "for ($i = 0; $i < 10; $i++)", "    print_r($i)", "}" },
+      { 2, 0 },
+    },
+    {
+      { 1, 0 },
+      "gc4j",
+      {
+        from = 2,
+        "<!-- <?php",
+        "for ($i = 0; $i < 10; $i++)",
+        "    print_r($i)",
+        "}",
+        "?> -->",
+      },
+      { 1, 5 },
+    },
+    {
+      "gcgc",
+      {
+        from = 2,
+        "<?php",
+        "for ($i = 0; $i < 10; $i++)",
+        "    print_r($i)",
+        "}",
+        "?>",
+      },
+      { 1, 0 },
+    },
   })
 end
 
@@ -7757,14 +5966,10 @@ end
 T["html"] = new_set({
   hooks = {
     pre_case = function()
+      set_context({ bo = { filetype = "html", tabstop = 2 }, config = { fallback_to_block = "if_line_cms_wrapped" } })
       child.lua_func(function()
         vim.treesitter.language.add("html")
         vim.treesitter.language.add("css")
-        vim.b.celeste_comment_config = {
-          fallback_to_block = "if_line_cms_wrapped",
-        }
-        vim.bo.filetype = "html"
-        vim.bo.tabstop = 2
         vim.treesitter.start()
       end)
     end,
@@ -7772,7 +5977,7 @@ T["html"] = new_set({
 })
 
 T["html"]["works"] = function()
-  local lines = {
+  validate_steps({
     "<!DOCTYPE html>",
     '<html lang="en">',
     "<body>",
@@ -7783,34 +5988,20 @@ T["html"]["works"] = function()
     "  </style>",
     "</body>",
     "</html>",
-  }
-  set_lines(lines)
-
-  set_cursor(3, 4)
-  feed("gcc")
-  eq(get_lines(3, 3), { "  <!-- <style> -->" })
-  eq(get_cursor(), { 3, 9 })
-  feed(".")
-  eq(get_lines(3, 3), { "  <style>" })
-  set_cursor(7, 4)
-  feed("gcc")
-  eq(get_lines(7, 7), { "  <!-- </style> -->" })
-  eq(get_cursor(), { 7, 9 })
-  feed(".")
-  eq(get_lines(7, 7), { "  </style>" })
-
-  selection(4, 0, 6, 0)
-  feed("gc")
-  eq(get_lines(4, 6), {
-    "    /* p {",
-    "      color:'#36f482'",
-    "    } */",
-  })
-  feed("gcgc")
-  eq(get_lines(4, 6), {
-    "    p {",
-    "      color:'#36f482'",
-    "    }",
+  }, {
+    { { 3, 4 }, "gcc", { from = 4, "  <!-- <style> -->" }, { 3, 9 } },
+    { ".", { from = 4, "  <style>" } },
+    { { 7, 4 }, "gcc", { from = 8, "  <!-- </style> -->" }, { 7, 9 } },
+    { ".", { from = 8, "  </style>" } },
+    {
+      { 4, 0, 6, 0 },
+      "gc",
+      { from = 5, "    /* p {", "      color:'#36f482'", "    } */" },
+    },
+    {
+      "gcgc",
+      { from = 5, "    p {", "      color:'#36f482'", "    }" },
+    },
   })
 end
 
@@ -7819,12 +6010,11 @@ end
 T["jsx/tsx"] = new_set({
   hooks = {
     pre_case = function()
+      set_context({ bo = { tabstop = 2 }, config = { fallback_to_block = "if_line_cms_wrapped" } })
       child.lua_func(function()
         vim.treesitter.language.add("tsx")
         vim.treesitter.language.add("javascript")
         vim.treesitter.language.add("markdown")
-        vim.bo.tabstop = 2
-        vim.b.celeste_comment_config = { fallback_to_block = "if_line_cms_wrapped" }
       end)
     end,
   },
@@ -7842,7 +6032,7 @@ T["jsx/tsx"]["works"] = function()
     "}",
   }
   set_lines(lines)
-  child.bo.filetype = "tsx"
+  set_context({ bo = { filetype = "tsx" } })
   child.lua_func(function() vim.treesitter.start() end)
 
   local function fl(l, exp_lines, cmd)
@@ -7850,7 +6040,7 @@ T["jsx/tsx"]["works"] = function()
     feed(cmd or "gcc")
     eq(get_lines(l, l), exp_lines)
     feed(".")
-    eq(get_lines(), lines)
+    eq_lines(lines)
   end
 
   local function fs(range, exp_lines, cmd)
@@ -7858,7 +6048,7 @@ T["jsx/tsx"]["works"] = function()
     feed(cmd or "gc")
     eq(get_lines(range[1], range[3]), exp_lines)
     feed(cmd and cmd .. cmd or "gcgc")
-    eq(get_lines(), lines)
+    eq_lines(lines)
   end
 
   fl(0, { "// export default function App() {" })
@@ -7918,107 +6108,67 @@ T["jsx/tsx"]["works in markdown"] = function()
     "```",
   }
   set_lines(lines)
-  child.bo.filetype = "markdown"
-  child.bo.tabstop = 2
-  child.bo.shiftwidth = 2
+  set_context({ bo = { filetype = "markdown", tabstop = 2, shiftwidth = 2 } })
   child.lua_func(function() vim.treesitter.start() end)
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(0, 0), { "<!-- ```tsx -->" })
-  feed(".")
-  eq(get_lines(0, 0), { "```tsx" })
-  set_cursor(3, 0)
-  feed(".")
-  eq(get_lines(3, 3), { '    {/* <div className="app"> */}' })
-  feed(".")
-  eq(get_lines(3, 3), { '    <div className="app">' })
-  set_cursor(4, 0)
-  feed(".")
-  eq(get_lines(4, 4), { "      {/* <h1>Hello</h1> */}" })
-  feed(".")
-  eq(get_lines(4, 4), { "      <h1>Hello</h1>" })
 
-  selection(3, 0, 6, 10)
-  feed("gc")
-  eq(get_lines(), {
-    "```tsx",
-    "export default function App() {",
-    "  return (",
-    '    {/* <div className="app">',
-    "      <h1>Hello</h1>",
-    "      <Foo bar={1} />",
-    "    </div> */}",
-    "  );",
-    "}",
-    "```",
-  })
-  feed("gcgc")
-  eq(get_lines(), {
-    "```tsx",
-    "export default function App() {",
-    "  return (",
-    '    <div className="app">',
-    "      <h1>Hello</h1>",
-    "      <Foo bar={1} />",
-    "    </div>",
-    "  );",
-    "}",
-    "```",
-  })
-
-  selection(2, 0, 7, 3)
-  feed("gc")
-  eq(get_lines(), {
-    "```tsx",
-    "export default function App() {",
-    "  // return (",
-    '  //   <div className="app">',
-    "  //     <h1>Hello</h1>",
-    "  //     <Foo bar={1} />",
-    "  //   </div>",
-    "  // );",
-    "}",
-    "```",
-  })
-  feed("gcgc")
-  eq(get_lines(), {
-    "```tsx",
-    "export default function App() {",
-    "  return (",
-    '    <div className="app">',
-    "      <h1>Hello</h1>",
-    "      <Foo bar={1} />",
-    "    </div>",
-    "  );",
-    "}",
-    "```",
-  })
-  selection(2, 0, 7, 3)
-  feed("gb")
-  eq(get_lines(), {
-    "```tsx",
-    "export default function App() {",
-    "/*   return (",
-    '    <div className="app">',
-    "      <h1>Hello</h1>",
-    "      <Foo bar={1} />",
-    "    </div>",
-    "  ); */",
-    "}",
-    "```",
-  })
-  feed("gbgb")
-  eq(get_lines(), {
-    "```tsx",
-    "export default function App() {",
-    "  return (",
-    '    <div className="app">',
-    "      <h1>Hello</h1>",
-    "      <Foo bar={1} />",
-    "    </div>",
-    "  );",
-    "}",
-    "```",
+  validate_steps(nil, {
+    { { 0, 0 }, "gcc", { from = 1, "<!-- ```tsx -->" } },
+    { ".", { from = 1, "```tsx" } },
+    { { 3, 0 }, ".", { from = 4, '    {/* <div className="app"> */}' } },
+    { ".", { from = 4, '    <div className="app">' } },
+    { { 4, 0 }, ".", { from = 5, "      {/* <h1>Hello</h1> */}" } },
+    { ".", { from = 5, "      <h1>Hello</h1>" } },
+    {
+      { 3, 0, 6, 10 },
+      "gc",
+      {
+        "```tsx",
+        "export default function App() {",
+        "  return (",
+        '    {/* <div className="app">',
+        "      <h1>Hello</h1>",
+        "      <Foo bar={1} />",
+        "    </div> */}",
+        "  );",
+        "}",
+        "```",
+      },
+    },
+    { "gcgc", lines },
+    {
+      { 2, 0, 7, 3 },
+      "gc",
+      {
+        "```tsx",
+        "export default function App() {",
+        "  // return (",
+        '  //   <div className="app">',
+        "  //     <h1>Hello</h1>",
+        "  //     <Foo bar={1} />",
+        "  //   </div>",
+        "  // );",
+        "}",
+        "```",
+      },
+    },
+    { "gcgc", lines },
+    {
+      { 2, 0, 7, 3 },
+      "gb",
+      {
+        "```tsx",
+        "export default function App() {",
+        "/*   return (",
+        '    <div className="app">',
+        "      <h1>Hello</h1>",
+        "      <Foo bar={1} />",
+        "    </div>",
+        "  ); */",
+        "}",
+        "```",
+      },
+    },
+    { "gbgb", lines },
   })
 end
 
@@ -8040,93 +6190,105 @@ T["jsx/tsx"]["special case1"] = function()
     "}",
   }
   set_lines(lines)
-  child.bo.filetype = "tsx"
-  child.bo.tabstop = 2
+  set_context({ bo = { filetype = "tsx", tabstop = 2 } })
   child.lua_func(function() vim.treesitter.start() end)
-  set_cursor(3, 0)
-  feed("gcc")
-  eq(get_lines(3, 3), { '      // propA="propA"' })
-  feed(".")
-  eq(get_lines(3, 3), { '      propA="propA"' })
-  set_cursor(10, 0)
-  feed(".")
-  eq(get_lines(10, 10), { "      {/* children */}" })
-  feed(".")
-  eq(get_lines(10, 10), { "      children" })
 
-  selection(2, 0, 9, 4)
-  feed("gc")
-  eq(get_lines(2, 9), {
-    "    {/* <Component",
-    '      propA="propA"',
-    '      propB="propB"',
-    '      propC="propC"',
-    '      propD="propD"',
-    '      propE="propE"',
-    '      propF="propF"',
-    "    > */}",
-  })
-  feed("gcgc")
-  eq(get_lines(2, 9), {
-    "    <Component",
-    '      propA="propA"',
-    '      propB="propB"',
-    '      propC="propC"',
-    '      propD="propD"',
-    '      propE="propE"',
-    '      propF="propF"',
-    "    >",
-  })
-  selection(1, 0, 9, 4)
-  feed("gc")
-  eq(get_lines(1, 9), {
-    "  // return (",
-    "  //   <Component",
-    '  //     propA="propA"',
-    '  //     propB="propB"',
-    '  //     propC="propC"',
-    '  //     propD="propD"',
-    '  //     propE="propE"',
-    '  //     propF="propF"',
-    "  //   >",
-  })
-  feed("gcgc")
-  eq(get_lines(1, 9), {
-    "  return (",
-    "    <Component",
-    '      propA="propA"',
-    '      propB="propB"',
-    '      propC="propC"',
-    '      propD="propD"',
-    '      propE="propE"',
-    '      propF="propF"',
-    "    >",
-  })
-
-  selection(1, 0, 9, 4)
-  feed("gb")
-  eq(get_lines(1, 9), {
-    "/*   return (",
-    "    <Component",
-    '      propA="propA"',
-    '      propB="propB"',
-    '      propC="propC"',
-    '      propD="propD"',
-    '      propE="propE"',
-    '      propF="propF"',
-    "    > */",
-  })
-  feed("gbgb")
-  eq(get_lines(1, 9), {
-    "  return (",
-    "    <Component",
-    '      propA="propA"',
-    '      propB="propB"',
-    '      propC="propC"',
-    '      propD="propD"',
-    '      propE="propE"',
-    '      propF="propF"',
-    "    >",
+  validate_steps(nil, {
+    { { 3, 0 }, "gcc", { from = 4, '      // propA="propA"' } },
+    { ".", { from = 4, '      propA="propA"' } },
+    { { 10, 0 }, ".", { from = 11, "      {/* children */}" } },
+    { ".", { from = 11, "      children" } },
+    {
+      { 2, 0, 9, 4 },
+      "gc",
+      {
+        from = 3,
+        "    {/* <Component",
+        '      propA="propA"',
+        '      propB="propB"',
+        '      propC="propC"',
+        '      propD="propD"',
+        '      propE="propE"',
+        '      propF="propF"',
+        "    > */}",
+      },
+    },
+    {
+      "gcgc",
+      {
+        from = 3,
+        "    <Component",
+        '      propA="propA"',
+        '      propB="propB"',
+        '      propC="propC"',
+        '      propD="propD"',
+        '      propE="propE"',
+        '      propF="propF"',
+        "    >",
+      },
+    },
+    {
+      { 1, 0, 9, 4 },
+      "gc",
+      {
+        from = 2,
+        "  // return (",
+        "  //   <Component",
+        '  //     propA="propA"',
+        '  //     propB="propB"',
+        '  //     propC="propC"',
+        '  //     propD="propD"',
+        '  //     propE="propE"',
+        '  //     propF="propF"',
+        "  //   >",
+      },
+    },
+    {
+      "gcgc",
+      {
+        from = 2,
+        "  return (",
+        "    <Component",
+        '      propA="propA"',
+        '      propB="propB"',
+        '      propC="propC"',
+        '      propD="propD"',
+        '      propE="propE"',
+        '      propF="propF"',
+        "    >",
+      },
+    },
+    {
+      { 1, 0, 9, 4 },
+      "gb",
+      {
+        from = 2,
+        "/*   return (",
+        "    <Component",
+        '      propA="propA"',
+        '      propB="propB"',
+        '      propC="propC"',
+        '      propD="propD"',
+        '      propE="propE"',
+        '      propF="propF"',
+        "    > */",
+      },
+    },
+    {
+      "gbgb",
+      {
+        from = 2,
+        "  return (",
+        "    <Component",
+        '      propA="propA"',
+        '      propB="propB"',
+        '      propC="propC"',
+        '      propD="propD"',
+        '      propE="propE"',
+        '      propF="propF"',
+        "    >",
+      },
+    },
   })
 end
 
@@ -8135,113 +6297,87 @@ end
 T["detect_indent"] = new_set()
 
 T["detect_indent"]["off: shiftwidth grid for space files"] = function()
-  child.bo.tabstop = 8
-  child.bo.shiftwidth = 8
-  child.bo.expandtab = true
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = {}
-  set_lines({ "    code", "    code" })
-  set_cursor(0, 0)
-  feed("gcc")
   -- floor(4 / 8) * 8 = 0
-  eq(get_lines(), { "#     code", "    code" })
+  validate_steps({ "    code", "    code" }, {
+    { "gcc", { "#     code", "    code" } },
+  }, {
+    bo = { tabstop = 8, shiftwidth = 8, expandtab = true, commentstring = "#%s" },
+    b = { celeste_comment_config = {} },
+  })
 end
 
 T["detect_indent"]["off: shiftwidth=4 grid for space files"] = function()
-  child.bo.tabstop = 8
-  child.bo.shiftwidth = 4
-  child.bo.expandtab = true
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = {}
-  set_lines({ "    code", "    code" })
-  set_cursor(0, 0)
-  feed("gcc")
   -- floor(4 / 4) * 4 = 4
-  eq(get_lines(), { "    # code", "    code" })
+  validate_steps({ "    code", "    code" }, {
+    { "gcc", { "    # code", "    code" } },
+  }, {
+    bo = { tabstop = 8, shiftwidth = 4, expandtab = true, commentstring = "#%s" },
+    b = { celeste_comment_config = {} },
+  })
 end
 
 T["detect_indent"]["on: guessed 4-space grid"] = function()
-  child.bo.tabstop = 8
-  child.bo.expandtab = true
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = { detect_indent = true }
-  set_lines({ "    code", "    code" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "    # code", "    code" })
+  validate_steps({ "    code", "    code" }, {
+    { "gcc", { "    # code", "    code" } },
+  }, { bo = { tabstop = 8, expandtab = true, commentstring = "#%s" }, config = { detect_indent = true } })
 end
 
 T["detect_indent"]["on: tab file blank-line padding uses tabs"] = function()
-  child.bo.tabstop = 4
-  child.bo.expandtab = false
-  child.bo.commentstring = "#%s"
-  child.b.celeste_comment_config = { detect_indent = true, ignore_empty_lines = "mixed" }
-  set_lines({ "\t\taa", "", "\t\tbb" })
-  set_cursor(0, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "\t\t# aa", "\t\t# ", "\t\t# bb" })
-  feed("gc", "2j")
-  eq(get_lines(), { "\t\taa", "\t\t", "\t\tbb" })
+  validate_steps({ "\t\taa", "", "\t\tbb" }, {
+    { { "gc", "2j" }, { "\t\t# aa", "\t\t# ", "\t\t# bb" } },
+    { { "gc", "2j" }, { "\t\taa", "\t\t", "\t\tbb" } },
+  }, {
+    bo = { tabstop = 4, expandtab = false, commentstring = "#%s" },
+    config = { detect_indent = true, ignore_empty_lines = "mixed" },
+  })
 end
 
 T["detect_indent"]["on: tab file toggle does not accumulate blank-line padding"] = function()
-  child.bo.tabstop = 4
-  child.bo.expandtab = false
-  child.bo.commentstring = "//%s"
-  child.b.celeste_comment_config = { detect_indent = true, ignore_empty_lines = "mixed" }
-  set_lines({ "\t\taa", "", "\t\tbb" })
-  set_cursor(0, 0)
-  feed("gc", "2j")
-  eq(get_lines(), { "\t\t// aa", "\t\t// ", "\t\t// bb" })
-  feed("gc", "2j")
-  eq(get_lines(), { "\t\taa", "\t\t", "\t\tbb" })
-  feed("gc", "2j")
-  eq(get_lines(), { "\t\t// aa", "\t\t// ", "\t\t// bb" })
+  validate_steps({ "\t\taa", "", "\t\tbb" }, {
+    { { "gc", "2j" }, { "\t\t// aa", "\t\t// ", "\t\t// bb" } },
+    { { "gc", "2j" }, { "\t\taa", "\t\t", "\t\tbb" } },
+    { { "gc", "2j" }, { "\t\t// aa", "\t\t// ", "\t\t// bb" } },
+  }, {
+    bo = { tabstop = 4, expandtab = false, commentstring = "//%s" },
+    config = { detect_indent = true, ignore_empty_lines = "mixed" },
+  })
 end
 
 T["detect_indent"]["on: tab file non-empty line comment placement"] = function()
-  child.bo.tabstop = 4
-  child.bo.expandtab = false
-  child.bo.commentstring = "//%s"
-  child.b.celeste_comment_config = { detect_indent = true }
-  set_lines({ "\t\tfoo", "\t\tbar" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "\t\t// foo", "\t\tbar" })
-  feed("gcc")
-  eq(get_lines(), { "\t\tfoo", "\t\tbar" })
+  validate_steps({ "\t\tfoo", "\t\tbar" }, {
+    { "gcc", { "\t\t// foo", "\t\tbar" } },
+    { "gcc", { "\t\tfoo", "\t\tbar" } },
+  }, { bo = { tabstop = 4, expandtab = false, commentstring = "//%s" }, config = { detect_indent = true } })
 end
 
 T["detect_indent"]["on: user hook overrides detection"] = function()
-  child.bo.tabstop = 8
-  child.bo.expandtab = true
-  child.bo.commentstring = "//%s"
-  child.lua_func(function()
-    vim.b.celeste_comment_config = {
-      detect_indent = true,
-      hooks = {
-        indent_resolver = function(ctx) ctx.o_indent = { indent_size = 2, indent_style = "space" } end,
-      },
-    }
-  end)
-  set_lines({ "    foo", "    bar" })
-  set_cursor(0, 0)
-  feed("gcc")
-  eq(get_lines(), { "    // foo", "    bar" })
+  validate_steps({ "    foo", "    bar" }, {
+    { "gcc", { "    // foo", "    bar" } },
+  }, {
+    bo = { tabstop = 8, expandtab = true, commentstring = "//%s" },
+    config = function()
+      return {
+        detect_indent = true,
+        hooks = {
+          indent_resolver = function(ctx) ctx.o_indent = { indent_size = 2, indent_style = "space" } end,
+        },
+      }
+    end,
+  })
 end
 
 T["detect_indent"]["on: blank line whitespace at and above aligned offset"] = function()
-  child.bo.tabstop = 4
-  child.bo.expandtab = false
-  child.bo.commentstring = "//%s"
-  child.b.celeste_comment_config = { detect_indent = true, ignore_empty_lines = "mixed" }
   -- blank lines: 3tabs(exceeds), 2tabs(equals), 1tab+4spaces(equals), 2tabs+4spaces(exceeds)
-  set_lines({ "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" })
-  set_cursor(0, 0)
-  feed("gc", "5j")
-  eq(get_lines(), { "\t\t// foo", "\t\t// \t", "\t\t// ", "\t    // ", "\t\t//     ", "\t\t// bar" })
-  feed("gc", "5j")
-  eq(get_lines(), { "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" })
+  validate_steps({ "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" }, {
+    {
+      { "gc", "5j" },
+      { "\t\t// foo", "\t\t// \t", "\t\t// ", "\t    // ", "\t\t//     ", "\t\t// bar" },
+    },
+    { { "gc", "5j" }, { "\t\tfoo", "\t\t\t", "\t\t", "\t    ", "\t\t    ", "\t\tbar" } },
+  }, {
+    bo = { tabstop = 4, expandtab = false, commentstring = "//%s" },
+    config = { detect_indent = true, ignore_empty_lines = "mixed" },
+  })
 end
 
 -- Forced-motion tests ─────────────────────────────────────────────────────────
@@ -8249,88 +6385,67 @@ end
 T["forced_motion"] = new_set()
 
 T["forced_motion"]["gb V forces linewise on charwise motions"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello world foo" })
-  set_cursor(0, 0)
-  feed("gb", "V", "iw")
-  eq(get_lines(), { "/* hello world foo */" })
-  feed("u")
-  feed("gb", "V", "2w")
-  eq(get_lines(), { "/* hello world foo */" })
-  feed("u")
-  set_lines({ "a", "b", "c", "d" })
-  set_cursor(0, 0)
-  feed("gb", "V", "2j")
-  eq(get_lines(), { "/* a", "b", "c */", "d" })
-  feed("u")
-  feed("gb", "V", "ip")
-  eq(get_lines(), { "/* a", "b", "c", "d */" })
-  feed("u")
+  validate_steps({ "hello world foo" }, {
+    { { "gb", "V", "iw" }, { "/* hello world foo */" } },
+    { "u" },
+    { { "gb", "V", "2w" }, { "/* hello world foo */" } },
+    { "u" },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
+  validate_steps({ "a", "b", "c", "d" }, {
+    { { "gb", "V", "2j" }, { "/* a", "b", "c */", "d" } },
+    { "u" },
+    { { "gb", "V", "ip" }, { "/* a", "b", "c", "d */" } },
+    { "u" },
+  })
 end
 
 T["forced_motion"]["gb v forces charwise on linewise motions"] = function()
-  child.bo.filetype = "cpp"
-  child.bo.commentstring = "// %s"
-  set_lines({ "a", "", "b" })
-  set_cursor(0, 0)
-  feed("gb", "v", "ip")
-  eq(get_lines(), { "/* a */", "", "b" })
-  feed("u")
+  validate_steps({ "a", "", "b" }, {
+    { { "gb", "v", "ip" }, { "/* a */", "", "b" } },
+    { "u" },
+  }, { bo = { filetype = "cpp", commentstring = "// %s" } })
 end
 
 T["forced_motion"]["gc V forces linewise on charwise motions"] = function()
-  set_lines({ "hello world foo" })
-  set_cursor(0, 0)
-  feed("gc", "V", "iw")
-  eq(get_lines(), { "# hello world foo" })
-  feed("u")
-  set_lines({ "a", "b", "c", "d" })
-  set_cursor(0, 0)
-  feed("gc", "V", "j")
-  eq(get_lines(), { "# a", "# b", "c", "d" })
-  feed("u")
-  feed("gc", "V", "2j")
-  eq(get_lines(), { "# a", "# b", "# c", "d" })
-  feed("u")
-  feed("gc", "V", "ip")
-  eq(get_lines(), { "# a", "# b", "# c", "# d" })
-  feed("u")
+  validate_steps({ "hello world foo" }, {
+    { { "gc", "V", "iw" }, { "# hello world foo" } },
+    { "u" },
+  })
+  validate_steps({ "a", "b", "c", "d" }, {
+    { { "gc", "V", "j" }, { "# a", "# b", "c", "d" } },
+    { "u" },
+    { { "gc", "V", "2j" }, { "# a", "# b", "# c", "d" } },
+    { "u" },
+    { { "gc", "V", "ip" }, { "# a", "# b", "# c", "# d" } },
+    { "u" },
+  })
 end
 
 T["forced_motion"]["gc v forces charwise on linewise motions"] = function()
-  set_lines({ "a", "b", "c", "d" })
-  set_cursor(0, 0)
-  feed("gc", "v", "ip")
-  eq(get_lines(), { "# a", "# b", "# c", "d" })
-  feed("u")
+  validate_steps({ "a", "b", "c", "d" }, {
+    { { "gc", "v", "ip" }, { "# a", "# b", "# c", "d" } },
+    { "u" },
+  })
 end
 
 T["forced_motion"]["gC V forces linewise"] = function()
-  child.bo.commentstring = "// %s"
-  set_lines({ "hello", "// world", "foo" })
-  set_cursor(0, 0)
-  feed("gC", "V", "j")
-  eq(get_lines(), { "// hello", "// // world", "foo" })
-  feed("u")
-  set_cursor(0, 0)
-  feed("gC", "V", "2j")
-  eq(get_lines(), { "// hello", "// // world", "// foo" })
-  feed("u")
+  validate_steps({ "hello", "// world", "foo" }, {
+    { { "gC", "V", "j" }, { "// hello", "// // world", "foo" } },
+    { "u" },
+    { { "gC", "V", "2j" }, { "// hello", "// // world", "// foo" } },
+    { "u" },
+  }, { bo = { commentstring = "// %s" } })
 end
 
 T["forced_motion"]["gU V forces linewise"] = function()
-  child.bo.commentstring = "// %s"
-  set_lines({ "// hello", "// world", "foo" })
-  set_cursor(0, 0)
-  feed("gU", "V", "j")
-  eq(get_lines(), { "hello", "world", "foo" })
-  feed("u")
-  set_lines({ "// hello", "// world", "// foo" })
-  set_cursor(0, 0)
-  feed("gU", "V", "2j")
-  eq(get_lines(), { "hello", "world", "foo" })
-  feed("u")
+  validate_steps({ "// hello", "// world", "foo" }, {
+    { { "gU", "V", "j" }, { "hello", "world", "foo" } },
+    { "u" },
+  }, { bo = { commentstring = "// %s" } })
+  validate_steps({ "// hello", "// world", "// foo" }, {
+    { { "gU", "V", "2j" }, { "hello", "world", "foo" } },
+    { "u" },
+  })
 end
 
 -- paste comment tests ─────────────────────────────────────────────────────────
@@ -8338,77 +6453,51 @@ end
 T["paste"] = new_set({
   hooks = {
     pre_case = function()
-      child.bo.tabstop = 2
-      child.bo.shiftwidth = 0
-      child.bo.expandtab = true
-      child.bo.commentstring = "// %s"
-      child.b.celeste_comment_block_commentstring = "/*%s*/"
+      set_context({
+        bo = { tabstop = 2, shiftwidth = 0, expandtab = true, commentstring = "// %s" },
+        b = { celeste_comment_block_commentstring = "/*%s*/" },
+      })
     end,
   },
 })
 
 T["paste"]["line below and above"] = function()
-  child.fn.setreg("a", { "function f()", "  return 1", "end" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"agcp')
-  eq(get_lines(), { "  aaa", "  // function f()", "  //   return 1", "  // end", "bbb" })
-  eq(get_cursor(), { 3, 2 })
+  validate_steps({ "  aaa", "bbb" }, {
+    { { 0, 2 }, '"agcp', { "  aaa", "  // function f()", "  //   return 1", "  // end", "bbb" }, { 3, 2 } },
+  }, { reg = { a = { lines = { "function f()", "  return 1", "end" }, type = "V" } } })
 
-  child.fn.setreg("a", { "function f()", "  return 1", "end" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(1, 2)
-  feed('"agcP')
-  eq(get_lines(), { "  aaa", "// function f()", "//   return 1", "// end", "bbb" })
-  eq(get_cursor(), { 3, 0 })
+  validate_steps({ "  aaa", "bbb" }, {
+    { { 1, 2 }, '"agcP', { "  aaa", "// function f()", "//   return 1", "// end", "bbb" }, { 3, 0 } },
+  }, { reg = { a = { lines = { "function f()", "  return 1", "end" }, type = "V" } } })
 
   -- block paste honors the register type: charwise `v` stays inline
-  child.fn.setreg("a", { "XY" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "abc/* XY */def" })
-  eq(get_cursor(), { 0, 4 })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 1, 3 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 1, 10 })
+  validate_steps({ "abcdef" }, {
+    { { 0, 2 }, '"agbp', { "abc/* XY */def" }, { 0, 4 } },
+  }, { reg = { a = { lines = { "XY" }, type = "v" } } })
+  eq_marks({ "[", "]" }, { { 1, 3 }, { 1, 10 } })
 
-  child.fn.setreg("a", { "XY" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('"agbP')
-  eq(get_lines(), { "ab/* XY */cdef" })
-  eq(get_cursor(), { 0, 3 })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 1, 2 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 1, 9 })
+  validate_steps({ "abcdef" }, {
+    { { 0, 2 }, '"agbP', { "ab/* XY */cdef" }, { 0, 3 } },
+  }, { reg = { a = { lines = { "XY" }, type = "v" } } })
+  eq_marks({ "[", "]" }, { { 1, 2 }, { 1, 9 } })
 
   -- linewise register: block comment spans whole lines
-  child.fn.setreg("a", { "L1", "L2" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "  aaa", "  /* L1", "  L2 */", "bbb" })
-  eq(get_cursor(), { 2, 2 })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 3, 6 })
+  validate_steps({ "  aaa", "bbb" }, {
+    { { 0, 2 }, '"agbp', { "  aaa", "  /* L1", "  L2 */", "bbb" }, { 2, 2 } },
+  }, { reg = { a = { lines = { "L1", "L2" }, type = "V" } } })
+  eq_marks({ "[", "]" }, { { 2, 0 }, { 3, 6 } })
 
   -- blockwise register is treated as linewise
-  child.fn.setreg("a", { "ab", "cd" }, "\22" .. "2")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "  aaa", "  /* ab", "  cd */", "bbb" })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 3, 6 })
+  validate_steps({ "  aaa", "bbb" }, {
+    { { 0, 2 }, '"agbp', { "  aaa", "  /* ab", "  cd */", "bbb" } },
+  }, { reg = { a = { lines = { "ab", "cd" }, type = "\22" .. "2" } } })
+  eq_marks({ "[", "]" }, { { 2, 0 }, { 3, 6 } })
 
   -- multi-line charwise register is pasted inline
-  child.fn.setreg("a", { "a", "b" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "abc/* a", "b */def" })
-  eq(get_cursor(), { 0, 3 })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 1, 3 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 2, 3 })
+  validate_steps({ "abcdef" }, {
+    { { 0, 2 }, '"agbp', { "abc/* a", "b */def" }, { 0, 3 } },
+  }, { reg = { a = { lines = { "a", "b" }, type = "v" } } })
+  eq_marks({ "[", "]" }, { { 1, 3 }, { 2, 3 } })
 end
 
 T["paste"]["default_reg"] = function()
@@ -8422,57 +6511,36 @@ T["paste"]["default_reg"] = function()
     )
   end)
   child.fn.setreg("a", { "X" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed("gcq")
-  eq(get_lines(), { "  aaa", "  // X", "bbb" })
+  validate_steps({ "  aaa", "bbb" }, { { { 0, 2 }, "gcq", { "  aaa", "  // X", "bbb" } } })
 end
 
 T["paste"]["count"] = function()
   child.fn.setreg("a", { "X" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('2"agcp')
-  eq(get_lines(), { "  aaa", "  // X", "  // X", "bbb" })
-  eq(get_cursor(), { 2, 2 })
+  validate_steps({ "  aaa", "bbb" }, { { { 0, 2 }, '2"agcp', { "  aaa", "  // X", "  // X", "bbb" }, { 2, 2 } } })
 
   child.fn.setreg("a", { "X" }, "V")
-  set_lines({ "a", "b" })
-  set_cursor(1, 0)
-  feed('3"agcp')
-  eq(get_lines(), { "a", "b", "// X", "// X", "// X" })
-  eq(get_cursor(), { 4, 0 })
+  validate_steps({ "a", "b" }, { { { 1, 0 }, '3"agcp', { "a", "b", "// X", "// X", "// X" }, { 4, 0 } } })
 
   -- charwise block paste uses the native count of `p`
   child.fn.setreg("a", { "X" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('3"agbp')
-  eq(get_lines(), { "abc/* XXX */def" })
+  validate_steps({ "abcdef" }, { { { 0, 2 }, '3"agbp', { "abc/* XXX */def" } } })
 
   -- count repeats a multi-line charwise register the same way as `p`
   child.fn.setreg("a", { "a", "b" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('2"agbp')
-  eq(get_lines(), { "abc/* a", "ba", "b */def" })
+  validate_steps({ "abcdef" }, { { { 0, 2 }, '2"agbp', { "abc/* a", "ba", "b */def" } } })
 end
 
 T["paste"]["dot repeat"] = function()
-  child.fn.setreg("a", { "X" }, "V")
-  set_lines({ "z" })
-  set_cursor(0, 0)
-  feed('"agcp')
-  eq(get_lines(), { "z", "// X" })
-  set_cursor(1, 0)
-  feed(".")
-  eq(get_lines(), { "z", "// X", "// X" })
+  validate_steps({ "z" }, {
+    { { 0, 0 }, '"agcp', { "z", "// X" } },
+    { { 1, 0 }, ".", { "z", "// X", "// X" } },
+  }, { reg = { a = { lines = { "X" }, type = "V" } } })
 
   child.fn.setreg("a", { "X" }, "V")
   set_lines({ "z" })
   set_cursor(0, 0)
   feed('3"agcp')
-  eq(get_lines(), { "z", "// X", "// X", "// X" })
+  eq_lines({ "z", "// X", "// X", "// X" })
   feed(".")
   eq(#get_lines(), 7)
   feed("5.")
@@ -8483,111 +6551,78 @@ T["paste"]["dot repeat"] = function()
   set_lines({ "abcdef", "ghijkl" })
   set_cursor(0, 2)
   feed('"agbp')
-  eq(get_lines(), { "abc/* X */def", "ghijkl" })
+  eq_lines({ "abc/* X */def", "ghijkl" })
   set_cursor(1, 2)
   feed(".")
   if vim.fn.has("nvim-0.13") == 1 then
-    eq(get_lines(), { "abc/* X */def", "ghi/* X */jkl" })
+    eq_lines({ "abc/* X */def", "ghi/* X */jkl" })
   else
     -- nvim-0.12 repeats only the inner put, see neovim/neovim#41594
-    eq(get_lines(), { "abc/* X */def", "ghiXjkl" })
+    eq_lines({ "abc/* X */def", "ghiXjkl" })
   end
 end
 
 T["paste"]["empty register is no-op"] = function()
   child.fn.setreg("a", {}, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"agcp')
-  eq(get_lines(), { "  aaa", "bbb" })
+  validate_steps({ "  aaa", "bbb" }, { { { 0, 2 }, '"agcp', { "  aaa", "bbb" } } })
 
   child.fn.setreg("a", {}, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "  aaa", "bbb" })
+  validate_steps({ "  aaa", "bbb" }, { { { 0, 2 }, '"agbp', { "  aaa", "bbb" } } })
 
   -- charwise register with no text pastes nothing
   child.fn.setreg("a", { "" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "abcdef" })
+  validate_steps({ "abcdef" }, { { { 0, 2 }, '"agbp', { "abcdef" } } })
 end
 
 T["paste"]["change marks"] = function()
-  child.fn.setreg("b", { "1111", "22222" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"b2gcp')
-  eq(get_lines(), { "  aaa", "  // 1111", "  // 22222", "  // 1111", "  // 22222", "bbb" })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 5, 9 })
+  validate_steps({ "  aaa", "bbb" }, {
+    { { 0, 2 }, '"b2gcp', { "  aaa", "  // 1111", "  // 22222", "  // 1111", "  // 22222", "bbb" } },
+  }, { reg = { b = { lines = { "1111", "22222" }, type = "V" } } })
+  eq_marks({ "[", "]" }, { { 2, 0 }, { 5, 9 } })
 
-  child.fn.setreg("b", { "XY" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('"bgbp')
-  eq(get_lines(), { "abc/* XY */def" })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 1, 3 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 1, 10 })
+  validate_steps({ "abcdef" }, {
+    { { 0, 2 }, '"bgbp', { "abc/* XY */def" } },
+  }, { reg = { b = { lines = { "XY" }, type = "v" } } })
+  eq_marks({ "[", "]" }, { { 1, 3 }, { 1, 10 } })
 end
 
 T["paste"]["change marks with selection=exclusive"] = function()
-  child.o.selection = "exclusive"
-  child.fn.setreg("b", { "1111", "22222" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"b2gcp')
-  eq(get_lines(), { "  aaa", "  // 1111", "  // 22222", "  // 1111", "  // 22222", "bbb" })
+  validate_steps({ "  aaa", "bbb" }, {
+    { { 0, 2 }, '"b2gcp', { "  aaa", "  // 1111", "  // 22222", "  // 1111", "  // 22222", "bbb" } },
+  }, {
+    o = { selection = "exclusive" },
+    reg = { b = { lines = { "1111", "22222" }, type = "V" } },
+  })
   -- Same as native `:iput`: `]` stays on the last inserted character.
-  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 5, 9 })
+  eq_marks({ "[", "]" }, { { 2, 0 }, { 5, 9 } })
 end
 
 T["paste"]["change marks with multibyte last line"] = function()
-  child.fn.setreg("a", { "你" }, "V")
-  set_lines({ "aaa", "bbb" })
-  set_cursor(0, 0)
-  feed('"agcp')
-  eq(get_lines(), { "aaa", "// 你", "bbb" })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 2, 0 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 2, 3 })
+  validate_steps({ "aaa", "bbb" }, {
+    { { 0, 0 }, '"agcp', { "aaa", "// 你", "bbb" } },
+  }, { reg = { a = { lines = { "你" }, type = "V" } } })
+  eq_marks({ "[", "]" }, { { 2, 0 }, { 2, 3 } })
 
-  child.fn.setreg("a", { "你" }, "v")
-  set_lines({ "abcdef" })
-  set_cursor(0, 2)
-  feed('"agbp')
-  eq(get_lines(), { "abc/* 你 */def" })
-  eq(child.api.nvim_buf_get_mark(0, "["), { 1, 3 })
-  eq(child.api.nvim_buf_get_mark(0, "]"), { 1, 11 })
+  validate_steps({ "abcdef" }, {
+    { { 0, 2 }, '"agbp', { "abc/* 你 */def" } },
+  }, { reg = { a = { lines = { "你" }, type = "v" } } })
+  eq_marks({ "[", "]" }, { { 1, 3 }, { 1, 11 } })
 end
 
 T["paste"]["blank lines keep empty"] = function()
   child.fn.setreg("a", { "  s1", "", "  s2" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(1, 0)
-  feed('"agcP')
-  eq(get_lines(), { "  aaa", "// s1", "// ", "// s2", "bbb" })
+  validate_steps({ "  aaa", "bbb" }, { { { 1, 0 }, '"agcP', { "  aaa", "// s1", "// ", "// s2", "bbb" } } })
 end
 
 T["paste"]["relative indentation"] = function()
   child.fn.setreg("a", { "    a", "      b", "   c" }, "V")
-  set_lines({ "  anchor", "bbb" })
-  set_cursor(0, 2)
-  feed('"agcp')
-  eq(get_lines(), { "  anchor", "//   a", "//     b", "//  c", "bbb" })
+  validate_steps({ "  anchor", "bbb" }, { { { 0, 2 }, '"agcp', { "  anchor", "//   a", "//     b", "//  c", "bbb" } } })
 end
 
 T["paste"]["tab indentation"] = function()
-  child.bo.tabstop = 4
-  child.bo.shiftwidth = 0
-  child.bo.expandtab = false
+  set_context({ bo = { tabstop = 4, shiftwidth = 0, expandtab = false } })
   child.fn.setreg("a", { "\ts1", "\t\ts2" }, "V")
-  set_lines({ "\taaa", "bbb" })
-  set_cursor(0, 1)
-  feed('"agcp')
-  eq(get_lines(), { "\taaa", "\t// s1", "\t// \ts2", "bbb" })
+  validate_steps({ "\taaa", "bbb" }, { { { 0, 1 }, '"agcp', { "\taaa", "\t// s1", "\t// \ts2", "bbb" } } })
 end
 
 T["paste"]["indent = false"] = function()
@@ -8607,37 +6642,25 @@ T["paste"]["indent = false"] = function()
     )
   end)
   child.fn.setreg("a", { "  X" }, "V")
-  set_lines({ "    aaa", "bbb" })
-  set_cursor(0, 4)
-  feed('"agcq')
-  eq(get_lines(), { "    aaa", "  // X", "bbb" })
+  validate_steps({ "    aaa", "bbb" }, { { { 0, 4 }, '"agcq', { "    aaa", "  // X", "bbb" } } })
 
   -- linewise block paste also honors `indent = false`
   child.fn.setreg("a", { "  X" }, "V")
-  set_lines({ "    aaa", "bbb" })
-  set_cursor(0, 4)
-  feed('"agbq')
-  eq(get_lines(), { "    aaa", "  /* X */", "bbb" })
+  validate_steps({ "    aaa", "bbb" }, { { { 0, 4 }, '"agbq', { "    aaa", "  /* X */", "bbb" } } })
 end
 
 T["paste"]["keep_cursor = false"] = function()
-  child.b.celeste_comment_config = { keep_cursor = false }
+  set_context({ config = { keep_cursor = false } })
   child.fn.setreg("a", { "X" }, "V")
-  set_lines({ "  aaa", "bbb" })
-  set_cursor(0, 2)
-  feed('"agcp')
-  eq(get_lines(), { "  aaa", "  // X", "bbb" })
-  eq(get_cursor(), { 1, 2 })
+  validate_steps({ "  aaa", "bbb" }, { { { 0, 2 }, '"agcp', { "  aaa", "  // X", "bbb" }, { 1, 2 } } })
 end
 
 T["paste"]["undo"] = function()
   child.fn.setreg("a", { "X", "Y" }, "V")
-  set_lines({ "a", "b" })
-  set_cursor(0, 0)
-  feed('"agcp')
-  eq(get_lines(), { "a", "// X", "// Y", "b" })
-  feed("u")
-  eq(get_lines(), { "a", "b" })
+  validate_steps({ "a", "b" }, {
+    { '"agcp', { "a", "// X", "// Y", "b" } },
+    { "u", { "a", "b" } },
+  })
 end
 
 -- multiple cursor tests ──────────────────────────────────────────────────────
@@ -8646,11 +6669,8 @@ if vim.fn.has("nvim-0.13") == 1 then
   T["multicursor"] = new_set({
     hooks = {
       pre_case = function()
+        set_context({ bo = { filetype = "markdown", tabstop = 2, shiftwidth = 0, expandtab = true } })
         child.lua_func(function()
-          vim.bo.filetype = "markdown"
-          vim.bo.tabstop = 2
-          vim.bo.shiftwidth = 0
-          vim.bo.expandtab = true
           vim.treesitter.language.add("markdown")
           vim.treesitter.language.add("lua")
           vim.treesitter.language.add("c")
@@ -8661,10 +6681,6 @@ if vim.fn.has("nvim-0.13") == 1 then
   })
 
   T["multicursor"]["works"] = function()
-    child.b.celeste_comment_config = {
-      keep_selection = "never",
-      fallback_to_block = "if_line_cms_wrapped",
-    }
     local lines = {
       "```lua",
       "  print('a')",
@@ -8681,272 +6697,287 @@ if vim.fn.has("nvim-0.13") == 1 then
     }
     set_lines(lines)
     child.lua_func(function() vim.treesitter.start() end)
-    set_cursor({ { 1, 0 }, { 6, 0 }, { 8, 0 } })
-    feed("q=")
-    feed("w")
-    eq(get_cursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })
 
-    -- gcc
-    feed("gcc")
-    eq(get_lines(1, 1), { "  -- print('a')" })
-    eq(get_lines(6, 6), { "<!-- ### heading -->" })
-    eq(get_lines(8, 8), { '  // printf("a");' })
-    eq(get_cursor(), { { 1, 5 }, { 6, 9 }, { 8, 5 } })
-    feed(".")
-    eq(get_lines(1, 1), { "  print('a')" })
-    eq(get_lines(6, 6), { "### heading" })
-    eq(get_lines(8, 8), { '  printf("a");' })
-    eq(get_cursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })
-
-    -- gbc
-    feed("gbc")
-    eq(get_lines(1, 1), { "  --[[ print('a') ]]" })
-    eq(get_lines(6, 6), { "<!-- ### heading -->" })
-    eq(get_lines(8, 8), { '  /* printf("a"); */' })
-    eq(get_cursor(), { { 1, 7 }, { 6, 9 }, { 8, 5 } })
-    feed(".")
-    eq(get_lines(1, 1), { "  print('a')" })
-    eq(get_lines(6, 6), { "### heading" })
-    eq(get_lines(8, 8), { '  printf("a");' })
-    eq(get_cursor(), { { 1, 2 }, { 6, 4 }, { 8, 2 } })
-
-    clear_cursors()
+    -- gcc / gbc
+    validate_steps(nil, {
+      { { { 1, 0 }, { 6, 0 }, { 8, 0 } }, { "q=", "w" }, nil, { { 1, 2 }, { 6, 4 }, { 8, 2 } } },
+      {
+        "gcc",
+        {
+          { from = 2, "  -- print('a')" },
+          { from = 7, "<!-- ### heading -->" },
+          { from = 9, '  // printf("a");' },
+        },
+        { { 1, 5 }, { 6, 9 }, { 8, 5 } },
+      },
+      {
+        ".",
+        {
+          { from = 2, "  print('a')" },
+          { from = 7, "### heading" },
+          { from = 9, '  printf("a");' },
+        },
+        { { 1, 2 }, { 6, 4 }, { 8, 2 } },
+      },
+      {
+        "gbc",
+        {
+          { from = 2, "  --[[ print('a') ]]" },
+          { from = 7, "<!-- ### heading -->" },
+          { from = 9, '  /* printf("a"); */' },
+        },
+        { { 1, 7 }, { 6, 9 }, { 8, 5 } },
+      },
+      {
+        ".",
+        {
+          { from = 2, "  print('a')" },
+          { from = 7, "### heading" },
+          { from = 9, '  printf("a");' },
+        },
+        { { 1, 2 }, { 6, 4 }, { 8, 2 } },
+      },
+    }, {
+      config = { keep_selection = "never", fallback_to_block = "if_line_cms_wrapped" },
+    })
 
     -- visual gc
-    set_cursor({ { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    eq(get_cursor(), { { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    feed("q=")
-    feed("v", "j", "4l")
-    eq(get_cursor(), { { 2, 4 }, { 6, 4 }, { 9, 4 } })
-    feed("gc")
-    eq(get_lines(), {
-      "```lua",
-      "  -- print('a')",
-      "  -- print('bb')",
-      "  print('ccc')",
-      "```",
-      "<!-- ",
-      "### heading -->",
-      "```c",
-      '  // printf("a");',
-      '  // printf("bb");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      { { { 1, 0 }, { 5, 0 }, { 8, 0 } }, { "q=", "v", "j", "4l" }, nil, { { 2, 4 }, { 6, 4 }, { 9, 4 } } },
+      {
+        "gc",
+        {
+          "```lua",
+          "  -- print('a')",
+          "  -- print('bb')",
+          "  print('ccc')",
+          "```",
+          "<!-- ",
+          "### heading -->",
+          "```c",
+          '  // printf("a");',
+          '  // printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 7 }, { 6, 4 }, { 9, 7 } },
+      },
     })
-    eq(get_cursor(), { { 2, 7 }, { 6, 4 }, { 9, 7 } })
-    clear_cursors()
 
     -- visual gb
-    set_lines(lines)
-    set_cursor({ { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    eq(get_cursor(), { { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    feed("q=")
-    feed("v", "j", "3l")
-    eq(get_cursor(), { { 2, 3 }, { 6, 3 }, { 9, 3 } })
-    feed("gb")
-    eq(get_lines(), {
-      "```lua",
-      "--[[   print('a')",
-      "  pr ]]int('bb')",
-      "  print('ccc')",
-      "```",
-      "<!-- ",
-      "###  -->heading",
-      "```c",
-      '/*   printf("a");',
-      '  pr */intf("bb");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      { { { 1, 0 }, { 5, 0 }, { 8, 0 } }, { "q=", "v", "j", "3l" }, nil, { { 2, 3 }, { 6, 3 }, { 9, 3 } } },
+      {
+        "gb",
+        {
+          "```lua",
+          "--[[   print('a')",
+          "  pr ]]int('bb')",
+          "  print('ccc')",
+          "```",
+          "<!-- ",
+          "###  -->heading",
+          "```c",
+          '/*   printf("a");',
+          '  pr */intf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 3 }, { 6, 3 }, { 9, 3 } },
+      },
     })
-    eq(get_cursor(), { { 2, 3 }, { 6, 3 }, { 9, 3 } })
-    clear_cursors()
 
     -- gco
-    set_lines(lines)
-    set_cursor({ { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    eq(get_cursor(), { { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    feed("q=")
-    feed("gco")
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  -- ",
-      "  print('bb')",
-      "  print('ccc')",
-      "```",
-      "",
-      "<!--  -->",
-      "### heading",
-      "```c",
-      '  printf("a");',
-      "  // ",
-      '  printf("bb");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      {
+        { { 1, 0 }, { 5, 0 }, { 8, 0 } },
+        { "q=", "gco" },
+        {
+          "```lua",
+          "  print('a')",
+          "  -- ",
+          "  print('bb')",
+          "  print('ccc')",
+          "```",
+          "",
+          "<!--  -->",
+          "### heading",
+          "```c",
+          '  printf("a");',
+          "  // ",
+          '  printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 5 }, { 7, 5 }, { 11, 5 } },
+      },
     })
     eq(child.api.nvim_get_mode().mode, "i")
-    eq(get_cursor(), { { 2, 5 }, { 7, 5 }, { 11, 5 } })
-    clear_cursors()
     feed("<esc>")
 
     -- gcO
-    set_lines(lines)
-    set_cursor({ { 2, 0 }, { 6, 0 }, { 9, 0 } })
-    eq(get_cursor(), { { 2, 0 }, { 6, 0 }, { 9, 0 } })
-    feed("q=")
-    feed("gcO")
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  -- ",
-      "  print('bb')",
-      "  print('ccc')",
-      "```",
-      "",
-      "<!--  -->",
-      "### heading",
-      "```c",
-      '  printf("a");',
-      "  // ",
-      '  printf("bb");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      {
+        { { 2, 0 }, { 6, 0 }, { 9, 0 } },
+        { "q=", "gcO" },
+        {
+          "```lua",
+          "  print('a')",
+          "  -- ",
+          "  print('bb')",
+          "  print('ccc')",
+          "```",
+          "",
+          "<!--  -->",
+          "### heading",
+          "```c",
+          '  printf("a");',
+          "  // ",
+          '  printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 5 }, { 7, 5 }, { 11, 5 } },
+      },
     })
     eq(child.api.nvim_get_mode().mode, "i")
-    eq(get_cursor(), { { 2, 5 }, { 7, 5 }, { 11, 5 } })
-    clear_cursors()
     feed("<esc>")
 
     -- gcA
-    set_lines(lines)
-    set_cursor({ { 2, 0 }, { 6, 0 }, { 9, 0 } })
-    eq(get_cursor(), { { 2, 0 }, { 6, 0 }, { 9, 0 } })
-    feed("q=")
-    feed("gcA")
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  print('bb') -- ",
-      "  print('ccc')",
-      "```",
-      "",
-      "### heading <!--  -->",
-      "```c",
-      '  printf("a");',
-      '  printf("bb"); // ',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      {
+        { { 2, 0 }, { 6, 0 }, { 9, 0 } },
+        { "q=", "gcA" },
+        {
+          "```lua",
+          "  print('a')",
+          "  print('bb') -- ",
+          "  print('ccc')",
+          "```",
+          "",
+          "### heading <!--  -->",
+          "```c",
+          '  printf("a");',
+          '  printf("bb"); // ',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 17 }, { 6, 17 }, { 9, 19 } },
+      },
     })
     eq(child.api.nvim_get_mode().mode, "i")
-    eq(get_cursor(), { { 2, 17 }, { 6, 17 }, { 9, 19 } })
     feed("i")
-    clear_cursors()
     feed("<esc>")
 
     -- gcu
-    set_lines(lines)
-    set_cursor(1, 0)
-    feed("gbj")
-    set_cursor(5, 0)
-    feed(".")
-    set_cursor(8, 0)
-    feed("gcj")
-    eq(get_lines(), {
-      "```lua",
-      "  --[[ print('a')",
-      "  print('bb') ]]",
-      "  print('ccc')",
-      "```",
-      "<!-- ",
-      "### heading -->",
-      "```c",
-      '  // printf("a");',
-      '  // printf("bb");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      { { 1, 0 }, "gbj" },
+      { { 5, 0 }, "." },
+      {
+        { 8, 0 },
+        "gcj",
+        {
+          "```lua",
+          "  --[[ print('a')",
+          "  print('bb') ]]",
+          "  print('ccc')",
+          "```",
+          "<!-- ",
+          "### heading -->",
+          "```c",
+          '  // printf("a");',
+          '  // printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+      },
+      {
+        { { 2, 4 }, { 6, 5 }, { 9, 7 } },
+        "q=",
+        nil,
+        { { 2, 4 }, { 6, 5 }, { 9, 7 } },
+      },
+      {
+        "gcu",
+        {
+          "```lua",
+          "  print('a')",
+          "  print('bb')",
+          "  print('ccc')",
+          "```",
+          "",
+          "### heading",
+          "```c",
+          '  printf("a");',
+          '  printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 4 }, { 6, 5 }, { 9, 4 } },
+      },
     })
-    set_cursor({ { 2, 4 }, { 6, 5 }, { 9, 7 } })
-    eq(get_cursor(), { { 2, 4 }, { 6, 5 }, { 9, 7 } })
-    feed("q=")
-    feed("gcu")
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  print('bb')",
-      "  print('ccc')",
-      "```",
-      "",
-      "### heading",
-      "```c",
-      '  printf("a");',
-      '  printf("bb");',
-      '  printf("ccc");',
-      "```",
-    })
-    eq(get_cursor(), { { 2, 4 }, { 6, 5 }, { 9, 4 } })
-    clear_cursors()
 
     -- line textobject (outer, inner)
-    set_lines(lines)
-    set_cursor({ { 1, 0 }, { 5, 0 }, { 8, 0 } })
-    feed("q=")
-    feed("gcj")
-    eq(get_lines(), {
-      "```lua",
-      "  -- print('a')",
-      "  -- print('bb')",
-      "  print('ccc')",
-      "```",
-      "<!-- ",
-      "### heading -->",
-      "```c",
-      '  // printf("a");',
-      '  // printf("bb");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      {
+        { { 1, 0 }, { 5, 0 }, { 8, 0 } },
+        { "q=", "gcj" },
+        {
+          "```lua",
+          "  -- print('a')",
+          "  -- print('bb')",
+          "  print('ccc')",
+          "```",
+          "<!-- ",
+          "### heading -->",
+          "```c",
+          '  // printf("a");',
+          '  // printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 1, 0 }, { 5, 4 }, { 8, 0 } },
+      },
+      { { "v", "agc" }, nil, nil, { { 1, 0, 2, 15 }, { 5, 0, 6, 14 }, { 8, 0, 9, 0 } } },
+      { "<esc>" },
+      { { "v", "ic" }, nil, nil, { { 2, 5, 2, 15 }, { 5, 5, 6, 10 }, { 9, 5, 9, 17 } } },
+      { "<esc>" },
     })
-    eq(get_cursor(), { { 1, 0 }, { 5, 4 }, { 8, 0 } })
-    feed("v", "agc")
-    eq(get_selection(), { { 1, 0, 2, 15 }, { 5, 0, 6, 14 }, { 8, 0, 9, 0 } })
-    feed("<esc>")
-    feed("v", "ic")
-    eq(get_selection(), { { 2, 5, 2, 15 }, { 5, 5, 6, 10 }, { 9, 5, 9, 17 } })
-    feed("<esc>")
-    clear_cursors()
 
     -- block textobject (outer, inner)
-    set_lines(lines)
-    set_cursor({ { 1, 4 }, { 5, 0 }, { 8, 5 } })
-    eq(get_cursor(), { { 1, 4 }, { 5, 0 }, { 8, 5 } })
-    feed("q=")
-    feed("v", "j", "6l")
-    eq(get_cursor(), { { 2, 10 }, { 6, 6 }, { 9, 11 } })
-    feed("gb")
-    eq(get_lines(), {
-      "```lua",
-      "  pr--[[ int('a')",
-      "  print('bb ]]')",
-      "  print('ccc')",
-      "```",
-      "<!-- ",
-      "### hea -->ding",
-      "```c",
-      '  pri/* ntf("a");',
-      '  printf("bb */");',
-      '  printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      {
+        { { 1, 4 }, { 5, 0 }, { 8, 5 } },
+        { "q=", "v", "j", "6l" },
+        nil,
+        { { 2, 10 }, { 6, 6 }, { 9, 11 } },
+      },
+      {
+        "gb",
+        {
+          "```lua",
+          "  pr--[[ int('a')",
+          "  print('bb ]]')",
+          "  print('ccc')",
+          "```",
+          "<!-- ",
+          "### hea -->ding",
+          "```c",
+          '  pri/* ntf("a");',
+          '  printf("bb */");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 10 }, { 6, 6 }, { 9, 11 } },
+      },
+      { { "v", "agb" }, nil, nil, { { 1, 4, 2, 13 }, { 5, 0, 6, 10 }, { 8, 5, 9, 14 } } },
+      { "<esc>" },
+      { { "v", "ic" }, nil, nil, { { 1, 9, 2, 10 }, { 5, 5, 6, 6 }, { 8, 8, 9, 11 } } },
+      { "<esc>" },
     })
-    eq(get_cursor(), { { 2, 10 }, { 6, 6 }, { 9, 11 } })
-    feed("v", "agb")
-    eq(get_selection(), { { 1, 4, 2, 13 }, { 5, 0, 6, 10 }, { 8, 5, 9, 14 } })
-    feed("<esc>")
-    feed("v", "ic")
-    eq(get_selection(), { { 1, 9, 2, 10 }, { 5, 5, 6, 6 }, { 8, 8, 9, 11 } })
-    feed("<esc>")
-    clear_cursors()
 
     -- auto textobject on end-of-line comments (lua + c in one session)
-    set_lines({
+    validate_steps({
       "```lua",
       "local a = 1 -- aaa",
       "local bb = 2 -- bbb",
@@ -8956,283 +6987,271 @@ if vim.fn.has("nvim-0.13") == 1 then
       "int x = 1; /* a // b */ // tail",
       "int x = 1; /* a // b */ // tail",
       "```",
-    })
-    set_cursor({ { 1, 16 }, { 2, 17 }, { 3, 18 }, { 6, 28 }, { 7, 28 } })
-    feed("q=")
-    feed("v", "ga")
-    eq(get_selection(), {
-      { 1, 12, 1, 17 },
-      { 2, 13, 2, 18 },
-      { 3, 14, 3, 19 },
-      { 6, 24, 6, 30 },
-      { 7, 24, 7, 30 },
-    })
-    feed("<esc>")
-    feed("v", "gia")
-    eq(get_selection(), {
-      { 1, 15, 1, 17 },
-      { 2, 16, 2, 18 },
-      { 3, 17, 3, 19 },
-      { 6, 27, 6, 30 },
-      { 7, 27, 7, 30 },
-    })
-    feed("<esc>")
-    feed("d", "ga")
-    eq(get_lines(), {
-      "```lua",
-      "local a = 1 ",
-      "local bb = 2 ",
-      "local ccc = 3 ",
-      "```",
-      "```c",
-      "int x = 1; /* a // b */ ",
-      "int x = 1; /* a // b */ ",
-      "```",
+    }, {
+      {
+        { { 1, 16 }, { 2, 17 }, { 3, 18 }, { 6, 28 }, { 7, 28 } },
+        { "q=", "v", "ga" },
+        nil,
+        nil,
+        {
+          { 1, 12, 1, 17 },
+          { 2, 13, 2, 18 },
+          { 3, 14, 3, 19 },
+          { 6, 24, 6, 30 },
+          { 7, 24, 7, 30 },
+        },
+      },
+      { "<esc>" },
+      {
+        { "v", "gia" },
+        nil,
+        nil,
+        {
+          { 1, 15, 1, 17 },
+          { 2, 16, 2, 18 },
+          { 3, 17, 3, 19 },
+          { 6, 27, 6, 30 },
+          { 7, 27, 7, 30 },
+        },
+      },
+      { "<esc>" },
+      {
+        { "d", "ga" },
+        {
+          "```lua",
+          "local a = 1 ",
+          "local bb = 2 ",
+          "local ccc = 3 ",
+          "```",
+          "```c",
+          "int x = 1; /* a // b */ ",
+          "int x = 1; /* a // b */ ",
+          "```",
+        },
+      },
     })
 
     -- skip block comments on the same line, per cursor
-    clear_cursors()
-    set_lines({
+    validate_steps({
       "```lua",
       "local x = 1 --[[ a ]] -- tail",
       "local x = 1 --[[ a ]] -- tail",
       "local x = 1 --[[ a ]] -- tail",
       "```",
+    }, {
+      {
+        { { 1, 26 }, { 2, 26 }, { 3, 26 } },
+        { "q=", "v", "ga" },
+        nil,
+        nil,
+        { { 1, 22, 1, 28 }, { 2, 22, 2, 28 }, { 3, 22, 3, 28 } },
+      },
+      { "<esc>" },
+      {
+        { "v", "gia" },
+        nil,
+        nil,
+        { { 1, 25, 1, 28 }, { 2, 25, 2, 28 }, { 3, 25, 3, 28 } },
+      },
+      { "<esc>" },
     })
-    set_cursor({ { 1, 26 }, { 2, 26 }, { 3, 26 } })
-    feed("q=")
-    feed("v", "ga")
-    eq(get_selection(), { { 1, 22, 1, 28 }, { 2, 22, 2, 28 }, { 3, 22, 3, 28 } })
-    feed("<esc>")
-    feed("v", "gia")
-    eq(get_selection(), { { 1, 25, 1, 28 }, { 2, 25, 2, 28 }, { 3, 25, 3, 28 } })
-    feed("<esc>")
 
     -- empty content: outer selects the marker, inner / gcu do nothing
-    clear_cursors()
-    set_lines({ "```lua", "x --", "xx --", "xxx --", "```" })
-    set_cursor({ { 1, 3 }, { 2, 4 }, { 3, 5 } })
-    feed("q=")
-    feed("v", "ga")
-    eq(get_selection(), { { 1, 2, 1, 3 }, { 2, 3, 2, 4 }, { 3, 4, 3, 5 } })
-    feed("<esc>")
-    feed("d", "gia", "<esc>")
-    eq(get_lines(), { "```lua", "x --", "xx --", "xxx --", "```" })
-    feed("gcu")
-    eq(get_lines(), { "```lua", "x --", "xx --", "xxx --", "```" })
-    clear_cursors()
+    validate_steps({ "```lua", "x --", "xx --", "xxx --", "```" }, {
+      {
+        { { 1, 3 }, { 2, 4 }, { 3, 5 } },
+        { "q=", "v", "ga" },
+        nil,
+        nil,
+        { { 1, 2, 1, 3 }, { 2, 3, 2, 4 }, { 3, 4, 3, 5 } },
+      },
+      { "<esc>" },
+      { { "d", "gia", "<esc>" }, { "```lua", "x --", "xx --", "xxx --", "```" } },
+      { "gcu", { "```lua", "x --", "xx --", "xxx --", "```" } },
+    })
 
     -- insert mode comment toggle
-    set_lines(lines)
-    set_cursor({ { 2, 12 }, { 3, 3 }, { 6, 10 }, { 9, 13 }, { 10, 3 } })
-    eq(get_cursor(), { { 2, 12 }, { 3, 3 }, { 6, 10 }, { 9, 13 }, { 10, 3 } })
-    feed("a")
-    eq(get_cursor(), { { 2, 13 }, { 3, 4 }, { 6, 11 }, { 9, 14 }, { 10, 4 } })
-    feed("<c-/>")
-    eq(get_cursor(), { { 2, 16 }, { 3, 7 }, { 6, 16 }, { 9, 17 }, { 10, 7 } })
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  -- print('bb')",
-      "  -- print('ccc')",
-      "```",
-      "",
-      "<!-- ### heading -->",
-      "```c",
-      '  printf("a");',
-      '  // printf("bb");',
-      '  // printf("ccc");',
-      "```",
+    validate_steps(lines, {
+      {
+        { { 2, 12 }, { 3, 3 }, { 6, 10 }, { 9, 13 }, { 10, 3 } },
+        "a",
+        nil,
+        { { 2, 13 }, { 3, 4 }, { 6, 11 }, { 9, 14 }, { 10, 4 } },
+      },
+      {
+        "<c-/>",
+        {
+          "```lua",
+          "  print('a')",
+          "  -- print('bb')",
+          "  -- print('ccc')",
+          "```",
+          "",
+          "<!-- ### heading -->",
+          "```c",
+          '  printf("a");',
+          '  // printf("bb");',
+          '  // printf("ccc");',
+          "```",
+        },
+        { { 2, 16 }, { 3, 7 }, { 6, 16 }, { 9, 17 }, { 10, 7 } },
+      },
+      {
+        "<c-/>",
+        {
+          "```lua",
+          "  print('a')",
+          "  print('bb')",
+          "  print('ccc')",
+          "```",
+          "",
+          "### heading",
+          "```c",
+          '  printf("a");',
+          '  printf("bb");',
+          '  printf("ccc");',
+          "```",
+        },
+        { { 2, 13 }, { 3, 4 }, { 6, 11 }, { 9, 14 }, { 10, 4 } },
+      },
+      {
+        { "<c-/>", "@" },
+        {
+          "```lua",
+          "  print('a')",
+          "  -- print('bb')@",
+          "  -- pr@int('ccc')",
+          "```",
+          "",
+          "<!-- ### heading@ -->",
+          "```c",
+          '  printf("a");',
+          '  // printf("bb")@;',
+          '  // pr@intf("ccc");',
+          "```",
+        },
+        { { 2, 17 }, { 3, 8 }, { 6, 17 }, { 9, 18 }, { 10, 8 } },
+      },
+      {
+        "<esc>",
+        {
+          "```lua",
+          "  print('a')",
+          "  -- print('bb')@",
+          "  -- pr@int('ccc')",
+          "```",
+          "",
+          "<!-- ### heading@ -->",
+          "```c",
+          '  printf("a");',
+          '  // printf("bb")@;',
+          '  // pr@intf("ccc");',
+          "```",
+        },
+      },
     })
-    feed("<c-/>")
-    eq(get_cursor(), { { 2, 13 }, { 3, 4 }, { 6, 11 }, { 9, 14 }, { 10, 4 } })
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  print('bb')",
-      "  print('ccc')",
-      "```",
-      "",
-      "### heading",
-      "```c",
-      '  printf("a");',
-      '  printf("bb");',
-      '  printf("ccc");',
-      "```",
-    })
-    feed("<c-/>")
-    feed("@")
-    eq(get_cursor(), { { 2, 17 }, { 3, 8 }, { 6, 17 }, { 9, 18 }, { 10, 8 } })
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  -- print('bb')@",
-      "  -- pr@int('ccc')",
-      "```",
-      "",
-      "<!-- ### heading@ -->",
-      "```c",
-      '  printf("a");',
-      '  // printf("bb")@;',
-      '  // pr@intf("ccc");',
-      "```",
-    })
-    feed("<esc>")
     eq(child.api.nvim_get_mode().mode, "n")
-    eq(get_lines(), {
-      "```lua",
-      "  print('a')",
-      "  -- print('bb')@",
-      "  -- pr@int('ccc')",
-      "```",
-      "",
-      "<!-- ### heading@ -->",
-      "```c",
-      '  printf("a");',
-      '  // printf("bb")@;',
-      '  // pr@intf("ccc");',
-      "```",
-    })
-    clear_cursors()
 
     -- paste and comment
-    child.fn.setreg("a", { "X", "Y" }, "V")
-    set_lines({ "aaaaa", "b", "c", "d", "e", "f", "g" })
-    set_cursor({ { 0, 3 }, { 3, 2 }, { 6, 4 } })
-    feed('"agcp')
-    eq(get_lines(), { "aaaaa", "<!-- X", "Y -->", "b", "c", "d", "<!-- X", "Y -->", "e", "f", "g", "<!-- X", "Y -->" })
-    eq(get_cursor(), { { 2, 0 }, { 7, 0 }, { 12, 0 } })
-    feed(".")
-    eq(get_lines(), {
-      "aaaaa",
-      "<!-- X",
-      "Y -->",
-      "<!-- X",
-      "Y -->",
-      "b",
-      "c",
-      "d",
-      "<!-- X",
-      "Y -->",
-      "<!-- X",
-      "Y -->",
-      "e",
-      "f",
-      "g",
-      "<!-- X",
-      "Y -->",
-      "<!-- X",
-      "Y -->",
-    })
-    clear_cursors()
+    validate_steps({ "aaaaa", "b", "c", "d", "e", "f", "g" }, {
+      {
+        { { 0, 3 }, { 3, 2 }, { 6, 4 } },
+        '"agcp',
+        { "aaaaa", "<!-- X", "Y -->", "b", "c", "d", "<!-- X", "Y -->", "e", "f", "g", "<!-- X", "Y -->" },
+        { { 2, 0 }, { 7, 0 }, { 12, 0 } },
+      },
+      {
+        ".",
+        {
+          "aaaaa",
+          "<!-- X",
+          "Y -->",
+          "<!-- X",
+          "Y -->",
+          "b",
+          "c",
+          "d",
+          "<!-- X",
+          "Y -->",
+          "<!-- X",
+          "Y -->",
+          "e",
+          "f",
+          "g",
+          "<!-- X",
+          "Y -->",
+          "<!-- X",
+          "Y -->",
+        },
+      },
+    }, { reg = { a = { lines = { "X", "Y" }, type = "V" } } })
 
     -- paste uses cursor-local register
-    child.lua_func(function() vim.bo.filetype = "c" end)
-    set_lines({ "foo", "bar", "baz" })
-    set_cursor({ { 0, 0 }, { 1, 0 }, { 2, 0 } })
-    feed("yiw")
-    feed("gcp")
-    eq(get_lines(), { "foo", "// foo", "bar", "// bar", "baz", "// baz" })
-    clear_cursors()
+    validate_steps({ "foo", "bar", "baz" }, {
+      { { { 0, 0 }, { 1, 0 }, { 2, 0 } }, { "yiw", "gcp" }, { "foo", "// foo", "bar", "// bar", "baz", "// baz" } },
+    }, { bo = { filetype = "c" } })
 
     -- charwise block paste uses each cursor's own anchor column
-    child.lua_func(function() vim.bo.filetype = "c" end)
-    set_lines({ "foo", "bar", "baz" })
-    set_cursor({ { 0, 0 }, { 1, 0 }, { 2, 0 } })
-    feed("yiw")
-    feed("gbp")
-    eq(get_lines(), { "f/* foo */oo", "b/* bar */ar", "b/* baz */az" })
-    clear_cursors()
+    validate_steps({ "foo", "bar", "baz" }, {
+      { { { 0, 0 }, { 1, 0 }, { 2, 0 } }, { "yiw", "gbp" }, { "f/* foo */oo", "b/* bar */ar", "b/* baz */az" } },
+    }, { bo = { filetype = "c" } })
   end
 
   T["multicursor"]["keep_selection works"] = function()
-    child.lua_func(function()
-      vim.bo.filetype = "lua"
-      vim.b.celeste_comment_config = { keep_selection = "adjust" }
-    end)
+    set_context({ bo = { filetype = "lua" }, config = { keep_selection = "adjust" } })
     local lines = { "aaaaa", "bbbbb", "", "ccccc", "ddddd" }
-    set_lines(lines)
-    set_cursor({ { 0, 1 }, { 3, 2 } })
-    eq(get_cursor(), { { 0, 1 }, { 3, 2 } })
-    feed("q=")
-    feed("v", "j", "l")
-    eq(get_selection(), { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } })
-    feed("gb")
-    eq(get_lines(), { "a--[[ aaaa", "bbb ]]bb", "", "cc--[[ ccc", "dddd ]]d" })
-    feed("gv")
-    eq(get_selection(), { { 0, 6, 1, 2 }, { 3, 7, 4, 3 } })
-    feed("<esc>")
-    feed("vac", "gb")
-    eq(get_lines(), { "aaaaa", "bbbbb", "", "ccccc", "ddddd" })
-    eq(get_cursor(), { { 1, 2 }, { 4, 3 } })
-    feed("gv")
-    eq(get_selection(), { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } })
+    validate_steps(lines, {
+      { { { 0, 1 }, { 3, 2 } }, { "q=", "v", "j", "l" }, nil, nil, { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } } },
+      { "gb", { "a--[[ aaaa", "bbb ]]bb", "", "cc--[[ ccc", "dddd ]]d" } },
+      { "gv", nil, nil, { { 0, 6, 1, 2 }, { 3, 7, 4, 3 } } },
+      { "<esc>" },
+      { { "vac", "gb" }, { "aaaaa", "bbbbb", "", "ccccc", "ddddd" }, { { 1, 2 }, { 4, 3 } } },
+      { "gv", nil, nil, { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } } },
+      { "gc", { "-- aaaaa", "-- bbbbb", "", "-- ccccc", "-- ddddd" }, { { 1, 5 }, { 4, 6 } } },
+      { "gv", nil, nil, { { 0, 4, 1, 5 }, { 3, 5, 4, 6 } } },
+      { "gc", lines, { { 1, 2 }, { 4, 3 } } },
+      { "gv", nil, nil, { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } } },
+    })
 
-    feed("gc")
-    eq(get_lines(), { "-- aaaaa", "-- bbbbb", "", "-- ccccc", "-- ddddd" })
-    eq(get_cursor(), { { 1, 5 }, { 4, 6 } })
-    feed("gv")
-    eq(get_selection(), { { 0, 4, 1, 5 }, { 3, 5, 4, 6 } })
-    feed("gc")
-    eq(get_lines(), { "aaaaa", "bbbbb", "", "ccccc", "ddddd" })
-    eq(get_cursor(), { { 1, 2 }, { 4, 3 } })
-    feed("gv")
-    eq(get_selection(), { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } })
+    validate_steps(nil, {
+      { "gb", { "a--[[ aaaa", "bbb ]]bb", "", "cc--[[ ccc", "dddd ]]d" } },
+      { "gv", nil, nil, { { 0, 1, 1, 5 }, { 3, 2, 4, 6 } } },
+      { "gb", lines, { { 1, 2 }, { 4, 3 } } },
+      { "gv", nil, nil, { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } } },
+      { "gc", { "-- aaaaa", "-- bbbbb", "", "-- ccccc", "-- ddddd" }, { { 1, 5 }, { 4, 6 } } },
+      { "gv", nil, nil, { { 0, 0, 1, 7 }, { 3, 5, 4, 6 } } },
+      { "gc", lines, { { 1, 2 }, { 4, 3 } } },
+      { "gv", nil, nil, { { 0, 0, 1, 4 }, { 3, 2, 4, 3 } } },
+      { "d", { "" } },
+    }, { config = { keep_selection = "adjust | expand_line | expand_block" } })
 
-    child.lua_func(
-      function() vim.b.celeste_comment_config = { keep_selection = "adjust | expand_line | expand_block" } end
-    )
-    feed("gb")
-    eq(get_lines(), { "a--[[ aaaa", "bbb ]]bb", "", "cc--[[ ccc", "dddd ]]d" })
-    feed("gv")
-    eq(get_selection(), { { 0, 1, 1, 5 }, { 3, 2, 4, 6 } })
-    feed("gb")
-    eq(get_lines(), { "aaaaa", "bbbbb", "", "ccccc", "ddddd" })
-    eq(get_cursor(), { { 1, 2 }, { 4, 3 } })
-    feed("gv")
-    eq(get_selection(), { { 0, 1, 1, 2 }, { 3, 2, 4, 3 } })
-
-    feed("gc")
-    eq(get_lines(), { "-- aaaaa", "-- bbbbb", "", "-- ccccc", "-- ddddd" })
-    eq(get_cursor(), { { 1, 5 }, { 4, 6 } })
-    feed("gv")
-    eq(get_selection(), { { 0, 0, 1, 7 }, { 3, 5, 4, 6 } })
-    feed("gc")
-    eq(get_lines(), { "aaaaa", "bbbbb", "", "ccccc", "ddddd" })
-    eq(get_cursor(), { { 1, 2 }, { 4, 3 } })
-    feed("gv")
-    eq(get_selection(), { { 0, 0, 1, 4 }, { 3, 2, 4, 3 } })
-    feed("d")
-    eq(get_lines(), { "" })
-    clear_cursors()
-
-    set_lines(lines)
-    child.lua_func(
-      function() vim.b.celeste_comment_config = { keep_selection = "adjust | expand_block | keep_visual" } end
-    )
-    set_cursor({ { 0, 2 }, { 3, 3 } })
-    feed("q=")
-    eq(get_cursor(), { { 0, 2 }, { 3, 3 } })
-    feed("viw")
-    eq(get_cursor(), { { 0, 4 }, { 3, 4 } })
-    eq(get_selection(), { { 0, 0, 0, 4 }, { 3, 0, 3, 4 } })
-    feed("gb")
-    eq(get_lines(), { "--[[ aaaaa ]]", "bbbbb", "", "--[[ ccccc ]]", "ddddd" })
-    eq(get_cursor(), { { 0, 12 }, { 3, 12 } })
-    eq(get_selection(), { { 0, 0, 0, 12 }, { 3, 0, 3, 12 } })
-    feed("gb")
-    eq(get_lines(), lines)
-    eq(get_cursor(), { { 0, 4 }, { 3, 4 } })
-    eq(get_selection(), { { 0, 0, 0, 4 }, { 3, 0, 3, 4 } })
-    feed("gc")
-    eq(get_lines(), { "-- aaaaa", "bbbbb", "", "-- ccccc", "ddddd" })
-    eq(get_cursor(), { { 0, 7 }, { 3, 7 } })
-    eq(get_selection(), { { 0, 3, 0, 7 }, { 3, 3, 3, 7 } })
-    feed("gc")
-    eq(get_lines(), { "aaaaa", "bbbbb", "", "ccccc", "ddddd" })
-    eq(get_cursor(), { { 0, 4 }, { 3, 4 } })
-    eq(get_selection(), { { 0, 0, 0, 4 }, { 3, 0, 3, 4 } })
-    clear_cursors()
+    validate_steps(lines, {
+      { { { 0, 2 }, { 3, 3 } }, { "q=", "viw" }, nil, { { 0, 4 }, { 3, 4 } }, { { 0, 0, 0, 4 }, { 3, 0, 3, 4 } } },
+      {
+        "gb",
+        { "--[[ aaaaa ]]", "bbbbb", "", "--[[ ccccc ]]", "ddddd" },
+        { { 0, 12 }, { 3, 12 } },
+        { { 0, 0, 0, 12 }, { 3, 0, 3, 12 } },
+      },
+      {
+        "gb",
+        lines,
+        { { 0, 4 }, { 3, 4 } },
+        { { 0, 0, 0, 4 }, { 3, 0, 3, 4 } },
+      },
+      {
+        "gc",
+        { "-- aaaaa", "bbbbb", "", "-- ccccc", "ddddd" },
+        { { 0, 7 }, { 3, 7 } },
+        { { 0, 3, 0, 7 }, { 3, 3, 3, 7 } },
+      },
+      {
+        "gc",
+        lines,
+        { { 0, 4 }, { 3, 4 } },
+        { { 0, 0, 0, 4 }, { 3, 0, 3, 4 } },
+      },
+    }, { config = { keep_selection = "adjust | expand_block | keep_visual" } })
   end
 end
 
