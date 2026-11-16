@@ -3188,11 +3188,6 @@ function H.get_default_register(fallback)
   return '"'
 end
 
----@class Celeste.Comment.PasteOpts
----@field above? boolean paste above the current line instead of below
----@field indent? boolean reindent linewise paste like Vim's `]p`, defaults to true
----@field default_reg? string register used when no explicit register was given
-
 ---@param pos      vim.Pos  paste anchor (pre-motion cursor)
 ---@param count    integer
 ---@param reg      string
