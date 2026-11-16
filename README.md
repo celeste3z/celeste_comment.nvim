@@ -169,6 +169,10 @@ lua require("celeste_comment").setup()
   -- Comment string configuration.
   cms_confs              = nil,
 
+  -- When `false`, only the keys explicitly set in `mappings` are registered,
+  -- this is equivalent to setting every default mapping to `""` in `mappings`.
+  use_default_mappings   = true,
+
   mappings = {
     -- Line comment by motion (n)
     line_toggle          = "gc",

@@ -194,6 +194,7 @@ M.ACTION = { kToggle = 1, kInvert = 2, kForceAdd = 3, kForceRemove = 4 }
 ---@field ignore_empty_lines         Celeste.Comment.Opts.IgnoreEmptyLines
 ---@field detect_indent              boolean
 ---@field use_set_text               boolean
+---@field use_default_mappings       boolean
 ---@field fallback_to_block          Celeste.Comment.Opts.FallbackToBlock
 ---@field cms_confs?                 Celeste.Comment.CommentStringConfs|boolean
 ---@field mappings                   Celeste.Comment.Opts.Mapping
@@ -212,6 +213,7 @@ M.ACTION = { kToggle = 1, kInvert = 2, kForceAdd = 3, kForceRemove = 4 }
 ---@field ignore_empty_lines?         Celeste.Comment.Opts.IgnoreEmptyLines default 'always'
 ---@field detect_indent?              boolean default false
 ---@field use_set_text?               boolean default false
+---@field use_default_mappings?       boolean default true
 ---@field fallback_to_block?          Celeste.Comment.Opts.FallbackToBlock default 'if_line_cms_wrapped'
 ---@field cms_confs?                  Celeste.Comment.CommentStringConfs|boolean default nil
 ---@field mappings?                   Celeste.Comment.Opts.Mapping
@@ -238,6 +240,7 @@ H.config = {
   ignore_empty_lines        = M.IGN_EMT.kAlways,
   detect_indent             = false,
   use_set_text              = false,
+  use_default_mappings      = true,
   fallback_to_block         = M.FBK2BLOCK.kIfLineCmsWrapped,
   log_level                 = vim.log.levels.OFF,
   cms_confs                 = nil,
@@ -422,7 +425,6 @@ do
     ---@overload fun(win: integer): vim.Pos
     function H.make_cursor(buf, pos)
       buf, pos = normalize_cursor_args(buf, pos)
-      ---@diagnostic disable-next-line: need-check-nil
       return vim.pos.cursor(buf, pos)
     end
 
@@ -446,7 +448,6 @@ do
     ---@param pos [integer, integer] (lnum, col) tuple
     ---@return vim.Pos
     ---@overload fun(win: integer): vim.Pos
-    ---@diagnostic disable-next-line: redundant-parameter
     function H.make_cursor(buf, pos)
       buf, pos = normalize_cursor_args(buf, pos)
       ---@diagnostic disable-next-line: need-check-nil, param-type-mismatch
@@ -692,8 +693,7 @@ end
 function H.split_comments_parts(comments)
   if not H.COMMENTS_PARTS_PATTERN then
     local P, C, Ct = vim.lpeg.P, vim.lpeg.C, vim.lpeg.Ct
-    --- @diagnostic disable-next-line: param-type-mismatch
-    local part = C((P("\\") * P(1) + (1 - P(","))) ^ 0)
+    local part = C(((P("\\") * P(1) + (1 - P(","))) ^ 0) --[[@as integer]])
     H.COMMENTS_PARTS_PATTERN = Ct(part * (P(",") * part) ^ 0)
   end
   return H.COMMENTS_PARTS_PATTERN:match(comments)
@@ -3277,23 +3277,21 @@ function H.make_operator(ctype, opts)
     local buf = pos.buf
     local update_changed_marks = false -- mark '[' and ']'
     local range = nil ---@type Celeste.Comment.Range4?
+    local nmotion ---@type Celeste.Comment.Motion?
 
     if opts.paste then
       local reg, regtype = H.get_default_register(opts.paste.default_reg), (ctype == M.CMT.kLine and "V" or nil)
-
       assert(state_track and state_track.cursor, "unexpected error, not found state_track.cursor")
       pos, state_track, update_changed_marks = state_track.cursor, nil, true
-
-      --- @diagnostic disable-next-line: assign-type-mismatch
-      range, motion = H.paste(pos, vim.v.count1, reg, regtype, opts.paste.above, opts.paste.indent)
+      range, nmotion = H.paste(pos, vim.v.count1, reg, regtype, opts.paste.above, opts.paste.indent)
     else
-      range = H.range_from_mark(buf)
+      range, nmotion = H.range_from_mark(buf)
     end
 
     if not range then return end
 
     local ctx = { cfg = opts.cfg, state_track = state_track, update_changed_marks = update_changed_marks }
-    H.make_action_range(pos, range, ctype, action, motion, ctx)
+    H.make_action_range(pos, range, ctype, action, nmotion or motion, ctx)
   end
 
   return function()
@@ -3304,8 +3302,13 @@ end
 
 ---@param config? Celeste.Comment.PartialOpts
 function M.setup(config)
-  ---@diagnostic disable-next-line: cast-local-type
-  config = vim.tbl_deep_extend("force", vim.deepcopy(H.config), config or {})
+  config = config or {}
+  local base = vim.deepcopy(H.config)
+  if config.use_default_mappings == false then
+    base.mappings = vim.tbl_map(function() return "" end, base.mappings) --[[@as Celeste.Comment.Opts.Mapping]]
+  end
+
+  config = vim.tbl_deep_extend("force", base, config)
 
   ---@param name  string
   ---@param value any
@@ -3336,6 +3339,7 @@ function M.setup(config)
   vim.validate("block_relaxed_detect", config.block_relaxed_detect, "boolean", true, "boolean")
   vim.validate("block_textobj_nlines", config.block_textobj_nlines, "number", true, "number")
   vim.validate("use_set_text", config.use_set_text, "boolean", true, "boolean")
+  vim.validate("use_default_mappings", config.use_default_mappings, "boolean", true, "boolean")
   vim.validate("textobj_treesitter_detect", config.textobj_treesitter_detect, "boolean", true, "boolean")
   vim.validate("mappings", config.mappings, "table", true, "table")
   vim.validate("cms_confs", config.cms_confs, { "table", "boolean" }, true, "table")
@@ -3373,7 +3377,7 @@ function M.setup(config)
     end,
   })
 
-  local m = H.config.mappings --[[@as Celeste.Comment.Opts.Mapping]]
+  local m = H.config.mappings
 
   ---@param mode string|string[]|fun(lhs:string):(string|string[])
   ---@param lhs (string|string[])?
@@ -3389,8 +3393,7 @@ function M.setup(config)
     end
     if t == "string" and lhs ~= "" then
       if vim.is_callable(mode) then mode = mode(lhs) end
-      --- @diagnostic disable-next-line: param-type-mismatch
-      vim.keymap.set(mode, lhs, rhs, opts or {})
+      vim.keymap.set(mode --[[@as string]], lhs, rhs, opts or {})
     end
   end
 

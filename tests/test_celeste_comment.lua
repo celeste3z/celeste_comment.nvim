@@ -4734,6 +4734,37 @@ T["disable"]["vim.b disables for buffer"] = function()
   validate_steps({ "aa" }, { { "gcc", { "aa" } } }, { b = { celeste_comment_disable = true } })
 end
 
+T["disable"]["use_default_mappings = false blanks default mappings"] = function()
+  child.setup()
+  child.lua_func(function()
+    -- Drop Neovim's built-in comment mappings so only the plugin's remain.
+    for _, spec in ipairs({ { "n", "gc" }, { "n", "gcc" }, { "x", "gc" } }) do
+      pcall(vim.keymap.del, spec[1], spec[2])
+    end
+
+    require("celeste_comment").setup({
+      use_default_mappings = false,
+      mappings = { line_toggle = "gxc", line_toggle_cur = "gxq" },
+    })
+  end)
+
+  -- explicit mappings still work
+  eq(child.fn.maparg("gxc", "n") ~= "", true)
+  eq(child.fn.maparg("gxq", "n") ~= "", true)
+
+  -- untouched built-ins are blanked
+  for _, spec in ipairs({
+    { "gc", "n" },
+    { "gcc", "n" },
+    { "gc", "x" },
+    { "gb", "n" },
+    { "gbc", "n" },
+    { "gb", "x" },
+  }) do
+    eq(child.fn.maparg(spec[1], spec[2]), "")
+  end
+end
+
 -- warning msg tests ──────────────────────────────────────────────────────────
 
 T["warning"] = new_set({

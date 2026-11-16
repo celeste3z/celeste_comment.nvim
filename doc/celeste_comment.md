@@ -95,6 +95,7 @@ require("celeste_comment").setup()
   ignore_empty_lines     = "always", -- How to handle empty lines
   fallback_to_block      = "if_line_cms_wrapped", -- Fallback line→block comment
   log_level              = vim.log.levels.OFF, -- Log level (nvim-0.13+)
+  use_default_mappings   = true, -- Register the plugin's default mappings (`gc`, `gcc`, ...)
 
   mappings = {
     line_toggle          = "gc",
@@ -334,9 +335,33 @@ bbb -->
 Default: `vim.log.levels.OFF`.
 Only available on nvim-0.13+. Ignored on older versions.
 
+#### `use_default_mappings` {doc="celeste_comment-config-use_default_mappings"}
+
+Default: `true`.
+Controls whether `setup()` registers the plugin's default mappings (`gc`,
+`gcc`, `gb`, `gbc`, and the default textobject mappings).
+
+When `false`, **only the keys explicitly set in** `mappings` are registered —
+every other default mapping stays disabled:
+
+```lua
+require("celeste_comment").setup({
+  use_default_mappings = false,
+  mappings = { line_toggle = "gx", line_toggle_cur = "gxx" },
+})
+```
+
+This is the same as setting every default mapping to `""` in `mappings`.
+The plugin does not remove mappings defined by Neovim or other plugins.
+
+Like `mappings`, this option is read at `setup()` time and cannot be
+overridden per buffer.
+
 ### Mappings
 
-Set a mapping to `""` to disable it.
+Set a mapping to `""` to disable it individually, or set
+`use_default_mappings` to `false` to disable all of the plugin's default
+mappings at once. Explicit `mappings` entries still apply.
 Mappings cannot be overridden per buffer — they are fixed at `setup()` time.
 Use buffer-local configuration (see `:h celeste_comment-configuration`) only for non-mapping options.
 
