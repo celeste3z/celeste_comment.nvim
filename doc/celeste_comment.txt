@@ -54,7 +54,7 @@ COMPARISON                                        *celeste_comment-comparison*
 
   -------------------------------------------------------------------------------------------------
   Feature         celeste_comment.nvim   Neovim      Comment.nvim   mini.comment   vim-commentary
-                                         built-in                                  
+                                         built-in
   --------------- ---------------------- ----------- -------------- -------------- ----------------
   Edit model      TextEdits              set_lines   set_lines      set_lines      setline()
 
@@ -63,34 +63,34 @@ COMPARISON                                        *celeste_comment-comparison*
   Keep selection  yes                    no          no             no             no
 
   Multicursor     More complete          limited     limited        limited        limited
-  support                                                                          
+  support
 
   Line comment    yes                    yes         yes            yes            yes
 
   Block comment   yes                    no          yes            no             no
 
   Paste and       yes — regtype aware    no          no             no             no
-  comment                                                                          
+  comment
 
   Dot-repeat      yes                    yes         yes            yes            yes
 
   Count           yes                    yes         yes            yes            yes
 
   Force add       yes                    no          no             no             no
-  comment                                                                          
+  comment
 
   Force remove    yes                    no          no             no             no
-  comment                                                                          
+  comment
 
   Indent          VSCode-style           Simple      Standard       Simple         Minimal
-  algorithm                                                                        
+  algorithm
 
   Invert per line yes                    no          no             no             no
 
   Line textobject yes                    yes         no             yes            yes
 
   Block           yes                    no          no             no             no
-  textobject                                                                       
+  textobject
 
   Textobject auto yes                    no          no             no             no
 
@@ -145,7 +145,7 @@ DEFAULT CONFIG ~
       fallback_to_block      = "if_line_cms_wrapped", -- Fallback line→block comment
       log_level              = vim.log.levels.OFF, -- Log level (nvim-0.13+)
       use_default_mappings   = true, -- Register the plugin's default mappings (`gc`, `gcc`, ...)
-    
+
       mappings = {
         line_toggle          = "gc",
         line_toggle_cur      = "gcc",
@@ -169,7 +169,7 @@ DEFAULT CONFIG ~
         block_paste_before   = "",
         block_paste_after    = "",
       },
-    
+
       hooks = {
         pre_commit_edits     = nil,
         cms_conf_resolver    = nil,
@@ -501,7 +501,7 @@ provider is available), otherwise the unnamed register.
 
   -------------------------------------------------------------------------
   Mapping                     Comment   Register handling
-                              type      
+                              type
   --------------------------- --------- -----------------------------------
   line_paste_before /         line      Always pasted linewise, even for a
   line_paste_after                      charwise register
