@@ -1336,264 +1336,224 @@ end
 
 T["edits"] = new_set()
 
-T["edits"]["sort"] = function()
-  local edits = {
+T["edits"]["sort_edits"] = function()
+  local function validate(edits, expected)
+    edits.need_sort = true
+    H.sort_edits(edits)
+    eq(edits.need_sort, nil)
+    validate_edits(edits, expected)
+  end
+
+  validate({
     { range = { 2, 3, 2, 3 }, text = { "Y" } },
     { range = { 0, 1, 0, 1 }, text = { "X" } },
     { range = { 1, 0, 1, 0 }, text = { "Z" } },
     { range = { 2, 0, 2, 0 }, text = { "W" } },
-  }
-  edits.need_sort = true
-
-  H.sort_edits(edits)
-
-  eq(edits.need_sort, nil)
-  eq(edits[1].range[1], 0)
-  eq(edits[1].range[2], 1)
-  eq(edits[2].range[1], 1)
-  eq(edits[2].range[2], 0)
-  eq(edits[3].range[1], 2)
-  eq(edits[3].range[2], 0)
-  eq(edits[4].range[1], 2)
-  eq(edits[4].range[2], 3)
-end
-
-T["edits"]["sort and commit"] = function()
-  local edits = {
-    { range = { 2, 1, 2, 1 }, text = { "X" } },
-    { range = { 0, 0, 0, 0 }, text = { "Z" } },
-    { range = { 1, 2, 1, 2 }, text = { "Y" } },
-  }
-
-  set_lines({ "ab", "cd", "ef" })
-  child.lua_func(function(e)
-    e.need_sort = true
-    e.any_multi = true
-    require("celeste_comment").H.commit_edits(0, nil, nil, e, false)
-  end, edits)
-  eq_lines({ "Zab", "cdY", "eXf" })
-end
-
-T["edits"]["commit_edits"] = function()
-  local function commit(edits, opts)
-    opts = opts or {}
-    child.lua_func(function(e, need_sort, any_multi)
-      if need_sort then e.need_sort = true end
-      if any_multi then e.any_multi = true end
-      require("celeste_comment").H.commit_edits(0, nil, nil, e, false)
-    end, edits, opts.need_sort == true, opts.any_multi == true)
-  end
-
-  -- 1. any_multi + set_text: multi-element text, expand 1 line to 3
-  set_lines({ "hello" })
-  commit({ { range = { 0, 0, 0, 5 }, text = { "/*", "hello", "*/" } } }, { any_multi = true })
-  eq_lines({ "/*", "hello", "*/" })
-
-  -- 2. any_multi + set_text: multi-line range replaced with fewer lines (delete 2 lines)
-  set_lines({ "a", "b", "c", "d" })
-  commit({ { range = { 1, 0, 3, 1 }, text = { "x" } } }, { any_multi = true })
-  eq_lines({ "a", "x" })
-
-  -- 3. any_multi + set_text: append beyond buffer (max <= range[1])
-  set_lines({ "aa", "bb" })
-  commit({ { range = { 2, 0, 2, 0 }, text = { "cc" } } }, { any_multi = true })
-  eq_lines({ "aa", "bb", "cc" })
-
-  -- 4. sentinel: insert 1 line at start
-  set_lines({ "aa", "bb" })
-  commit({ { range = { 0, -1, 0, -1 }, text = { "/*" } } }, { any_multi = true })
-  eq_lines({ "/*", "aa", "bb" })
-
-  -- 5. sentinel: insert 1 line in middle
-  set_lines({ "aa", "bb" })
-  commit({ { range = { 1, -1, 1, -1 }, text = { "/*" } } }, { any_multi = true })
-  eq_lines({ "aa", "/*", "bb" })
-
-  -- 6. sentinel: insert 2 lines at start
-  set_lines({ "aa" })
-  commit({ { range = { 0, -1, 0, -1 }, text = { "/*", "*/" } } }, { any_multi = true })
-  eq_lines({ "/*", "*/", "aa" })
-
-  -- 7. sentinel: delete 1 line
-  set_lines({ "aa", "bb", "cc" })
-  commit({ { range = { 1, -1, 2, -1 }, text = {} } }, { any_multi = true })
-  eq_lines({ "aa", "cc" })
-
-  -- 8. sentinel: delete 2 lines
-  set_lines({ "aa", "bb", "cc" })
-  commit({ { range = { 0, -1, 2, -1 }, text = {} } }, { any_multi = true })
-  eq_lines({ "cc" })
-
-  -- 9. sentinel + need_sort: insert both /* and */ around content
-  set_lines({ "aa", "bb" })
-  commit({
-    { range = { 2, -1, 2, -1 }, text = { "*/" } },
-    { range = { 0, -1, 0, -1 }, text = { "/*" } },
-  }, { need_sort = true, any_multi = true })
-  eq_lines({ "/*", "aa", "bb", "*/" })
-
-  -- 10. non-any_multi: apply_edits path
-  set_lines({ "hello" })
-  child.lua_func(
-    function(e) require("celeste_comment").H.commit_edits(0, { 0, 0, 0, 5 }, { "hello" }, e, false) end,
-    { { range = { 0, 0, 0, 0 }, text = { "# " } } }
-  )
-  eq_lines({ "# hello" })
-end
-
-T["edits"]["make_comment_edits"] = function()
-  local csi = H.make_csi({ { "# ", "" } })
-  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "hello", {})
-  assert(edits)
-  eq(apply_edits("hello", edits), "# hello")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
-end
-
-T["edits"]["make_comment_edits_with_indent"] = function()
-  local csi = H.make_csi({ { "# ", "" } })
-  local edits = H.make_comment_edits(make_line_info({ offset = 2, csi = csi }), "  hello", {})
-  assert(edits)
-  eq(apply_edits("  hello", edits), "  # hello")
-  validate_edits(edits, { { range = { 0, 2, 0, 2 }, text = { "# " } } })
-end
-
-T["edits"]["make_uncomment_edits"] = function()
-  local info = make_line_info({ lcs_pos = { 0, 0, 1 } })
-  local edits = H.make_uncomment_edits(info, "# hello", {})
-  assert(edits)
-  eq(apply_edits("# hello", edits), "hello")
-  validate_edits(edits, { { range = { 0, 0, 0, 2 }, text = { "" } } })
-end
-
-T["edits"]["make_comment_edits_with_rcs"] = function()
-  local csi = H.make_csi({ { "<!-- ", " -->" } }, { pad = true })
-  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "hello", {})
-  assert(edits)
-  eq(apply_edits("hello", edits), "<!-- hello -->")
-  validate_edits(edits, {
-    { range = { 0, 0, 0, 0 }, text = { "<!-- " } },
-    { range = { 0, 5, 0, 5 }, text = { " -->" } },
+  }, {
+    { range = { 0, 1, 0, 1 }, text = { "X" } },
+    { range = { 1, 0, 1, 0 }, text = { "Z" } },
+    { range = { 2, 0, 2, 0 }, text = { "W" } },
+    { range = { 2, 3, 2, 3 }, text = { "Y" } },
   })
 end
 
-T["edits"]["make_uncomment_edits_with_rcs"] = function()
-  local info = make_line_info({ lcs_pos = { 0, 0, 4 }, rcs_pos = { 0, 10, 13 } })
-  local edits = H.make_uncomment_edits(info, "<!-- hello -->", {})
-  assert(edits)
-  eq(apply_edits("<!-- hello -->", edits), "hello")
-  validate_edits(edits, { { range = { 0, 0, 0, 5 }, text = { "" } }, { range = { 0, 10, 0, 14 }, text = { "" } } })
+T["edits"]["commit_edits"] = function()
+  local function validate(lines, edits, expected, opts)
+    opts = opts or {}
+    set_lines(lines)
+    child.lua_func(function(e, range, ls, need_sort, any_multi)
+      if need_sort then e.need_sort = true end
+      if any_multi then e.any_multi = true end
+      require("celeste_comment").H.commit_edits(0, range, ls, e, false)
+    end, edits, opts.range or {}, lines, opts.need_sort == true, opts.any_multi == true)
+    eq_lines(expected)
+  end
+
+  -- 1. any_multi + set_text: multi-element text, expand 1 line to 3
+  validate(
+    { "hello" },
+    { { range = { 0, 0, 0, 5 }, text = { "/*", "hello", "*/" } } },
+    { "/*", "hello", "*/" },
+    { any_multi = true }
+  )
+
+  -- 2. any_multi + set_text: multi-line range replaced with fewer lines (delete 2 lines)
+  validate({ "a", "b", "c", "d" }, { { range = { 1, 0, 3, 1 }, text = { "x" } } }, { "a", "x" }, { any_multi = true })
+
+  -- 3. any_multi + set_text: append beyond buffer (max <= range[1])
+  validate({ "aa", "bb" }, { { range = { 2, 0, 2, 0 }, text = { "cc" } } }, { "aa", "bb", "cc" }, { any_multi = true })
+
+  -- 4. sentinel: insert 1 line at start
+  validate(
+    { "aa", "bb" },
+    { { range = { 0, -1, 0, -1 }, text = { "/*" } } },
+    { "/*", "aa", "bb" },
+    { any_multi = true }
+  )
+
+  -- 5. sentinel: insert 1 line in middle
+  validate(
+    { "aa", "bb" },
+    { { range = { 1, -1, 1, -1 }, text = { "/*" } } },
+    { "aa", "/*", "bb" },
+    { any_multi = true }
+  )
+
+  -- 6. sentinel: insert 2 lines at start
+  validate(
+    { "aa" },
+    { { range = { 0, -1, 0, -1 }, text = { "/*", "*/" } } },
+    { "/*", "*/", "aa" },
+    { any_multi = true }
+  )
+
+  -- 7. sentinel: delete 1 line
+  validate({ "aa", "bb", "cc" }, { { range = { 1, -1, 2, -1 }, text = {} } }, { "aa", "cc" }, { any_multi = true })
+
+  -- 8. sentinel: delete 2 lines
+  validate({ "aa", "bb", "cc" }, { { range = { 0, -1, 2, -1 }, text = {} } }, { "cc" }, { any_multi = true })
+
+  -- 9. sentinel + need_sort: insert both /* and */ around content
+  validate({ "aa", "bb" }, {
+    { range = { 2, -1, 2, -1 }, text = { "*/" } },
+    { range = { 0, -1, 0, -1 }, text = { "/*" } },
+  }, { "/*", "aa", "bb", "*/" }, { need_sort = true, any_multi = true })
+
+  -- 10. need_sort: sort arbitrary ranges before commit
+  validate({ "ab", "cd", "ef" }, {
+    { range = { 2, 1, 2, 1 }, text = { "X" } },
+    { range = { 0, 0, 0, 0 }, text = { "Z" } },
+    { range = { 1, 2, 1, 2 }, text = { "Y" } },
+  }, { "Zab", "cdY", "eXf" }, { need_sort = true, any_multi = true })
+
+  -- 11. non-any_multi: apply_edits path
+  validate({ "hello" }, { { range = { 0, 0, 0, 0 }, text = { "# " } } }, { "# hello" }, { range = { 0, 0, 0, 5 } })
 end
 
-T["edits"]["make_comment_edits_blank_line"] = function()
-  local csi = H.make_csi({ { "# ", "" } })
-  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "", {})
-  assert(edits)
-  eq(apply_edits("", edits), "# ")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "# " } } })
+T["edits"]["make_comment_edits"] = function()
+  local function validate(line, expected_line, expected_edits, opts)
+    opts = opts or {}
+    local csi = H.make_csi(opts.csi or { { "# ", "" } }, { pad = opts.pad })
+    local info = make_line_info({ offset = opts.offset or 0, csi = csi })
+    local edits = H.make_comment_edits(info, line, opts.cfg or {})
+    eq(apply_edits(line, edits), expected_line)
+    validate_edits(edits, expected_edits)
+  end
+
+  validate("hello", "# hello", { { range = { 0, 0, 0, 0 }, text = { "# " } } })
+
+  -- with indent
+  validate("  hello", "  # hello", { { range = { 0, 2, 0, 2 }, text = { "# " } } }, { offset = 2 })
+
+  -- with right comment string
+  validate("hello", "<!-- hello -->", {
+    { range = { 0, 0, 0, 0 }, text = { "<!-- " } },
+    { range = { 0, 5, 0, 5 }, text = { " -->" } },
+  }, { csi = { { "<!-- ", " -->" } }, pad = true })
+
+  -- blank line
+  validate("", "# ", { { range = { 0, 0, 0, 0 }, text = { "# " } } })
+
+  -- line_comment_no_indent
+  validate("  code", "//   code", { { range = { 0, 0, 0, 0 }, text = { "// " } } }, {
+    csi = { { "// ", "" } },
+    cfg = { line_comment_no_indent = true },
+  })
 end
 
-T["edits"]["make_comment_edits_noindent"] = function()
-  local csi = H.make_csi({ { "// ", "" } })
-  local cfg = { line_comment_no_indent = true }
-  local edits = H.make_comment_edits(make_line_info({ offset = 0, csi = csi }), "  code", cfg)
-  assert(edits)
-  eq(apply_edits("  code", edits), "//   code")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "// " } } })
+T["edits"]["make_uncomment_edits"] = function()
+  local function validate(line, expected_line, expected_edits, info_opts)
+    local edits = H.make_uncomment_edits(make_line_info(info_opts), line, {})
+    eq(apply_edits(line, edits), expected_line)
+    validate_edits(edits, expected_edits)
+  end
+
+  validate("# hello", "hello", { { range = { 0, 0, 0, 2 }, text = { "" } } }, { lcs_pos = { 0, 0, 1 } })
+
+  -- with right comment string
+  validate("<!-- hello -->", "hello", {
+    { range = { 0, 0, 0, 5 }, text = { "" } },
+    { range = { 0, 10, 0, 14 }, text = { "" } },
+  }, { lcs_pos = { 0, 0, 4 }, rcs_pos = { 0, 10, 13 } })
 end
 
-T["edits"]["make_block_comment_edits_two_lines"] = function()
-  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local lines = { "hello", "world" }
-  local edits = H.make_block_comment_edits(lines, csi, { 0 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/* hello")
-  eq(lines[2], "world */")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 1, 5, 1, 5 }, text = { " */" } } })
-end
+T["edits"]["make_block_comment_edits"] = function()
+  local function validate(lines, range, expected_lines, expected_edits, opts)
+    local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
+    local edits = H.make_block_comment_edits(lines, csi, range, opts)
+    H.apply_edits(lines, edits)
+    eq(lines, expected_lines)
+    validate_edits(edits, expected_edits)
+  end
 
-T["edits"]["make_block_comment_edits_empty_lines"] = function()
-  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local lines = { "  " }
-  local edits = H.make_block_comment_edits(lines, csi, { 0, 0, 0, 0 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/*    */")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 2, 0, 2 }, text = { " */" } } })
+  -- two lines
+  validate({ "hello", "world" }, { 0 }, { "/* hello", "world */" }, {
+    { range = { 0, 0, 0, 0 }, text = { "/* " } },
+    { range = { 1, 5, 1, 5 }, text = { " */" } },
+  })
 
-  lines = { "  " }
-  edits = H.make_block_comment_edits(lines, csi, { 0, 1, 0, 1 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/*    */")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 2, 0, 2 }, text = { " */" } } })
-
-  lines = { "  " }
-  edits = H.make_block_comment_edits(lines, csi, { 0, 2, 0, 2 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/*    */")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 2, 0, 2 }, text = { " */" } } })
+  -- empty line, various cursor columns
+  local empty_edits = {
+    { range = { 0, 0, 0, 0 }, text = { "/* " } },
+    { range = { 0, 2, 0, 2 }, text = { " */" } },
+  }
+  validate({ "  " }, { 0, 0, 0, 0 }, { "/*    */" }, empty_edits)
+  validate({ "  " }, { 0, 1, 0, 1 }, { "/*    */" }, empty_edits)
+  validate({ "  " }, { 0, 2, 0, 2 }, { "/*    */" }, empty_edits)
 
   -- insmode
-  lines = { "  " }
-  edits = H.make_block_comment_edits(lines, csi, { 0, 0, 0, 0 }, { insmode = true })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/*  */  ")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 0, 0, 0 }, text = { " */" } } })
+  validate({ "  " }, { 0, 0, 0, 0 }, { "/*  */  " }, {
+    { range = { 0, 0, 0, 0 }, text = { "/* " } },
+    { range = { 0, 0, 0, 0 }, text = { " */" } },
+  }, { insmode = true })
 
-  lines = { "  ", "  " }
-  edits = H.make_block_comment_edits(lines, csi, { 0, 0, 1, 0 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines, { "/*   ", "   */" })
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 1, 2, 1, 2 }, text = { " */" } } })
+  -- two lines with trailing spaces
+  validate({ "  ", "  " }, { 0, 0, 1, 0 }, { "/*   ", "   */" }, {
+    { range = { 0, 0, 0, 0 }, text = { "/* " } },
+    { range = { 1, 2, 1, 2 }, text = { " */" } },
+  })
+
+  -- single line
+  validate({ "hello" }, { 0 }, { "/* hello */" }, {
+    { range = { 0, 0, 0, 0 }, text = { "/* " } },
+    { range = { 0, 5, 0, 5 }, text = { " */" } },
+  })
 end
 
-T["edits"]["make_block_comment_edits_single_line"] = function()
-  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local lines = { "hello" }
-  local edits = H.make_block_comment_edits(lines, csi, { 0 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/* hello */")
-  validate_edits(edits, { { range = { 0, 0, 0, 0 }, text = { "/* " } }, { range = { 0, 5, 0, 5 }, text = { " */" } } })
-end
+T["edits"]["make_block_uncomment_edits"] = function()
+  local function validate(lines, motion, range, expected_lines, expected_edits)
+    local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
+    local info = H.block_comment_info(lines, csi, motion, range)
+    local edits = H.make_block_uncomment_edits(info)
+    H.apply_edits(lines, edits)
+    eq(lines, expected_lines)
+    validate_edits(edits, expected_edits)
+  end
 
-T["edits"]["make_block_uncomment_edits_multi_line"] = function()
-  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local lines = { "/* hello", "world */" }
-  local info = H.block_comment_info(lines, csi, "line", { 0, 0, 1, 11 })
-  assert(info)
-  local edits = H.make_block_uncomment_edits(info)
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "hello")
-  eq(lines[2], "world")
-  validate_edits(edits, { { range = { 0, 0, 0, 3 }, text = { "" } }, { range = { 1, 5, 1, 8 }, text = { "" } } })
-end
+  validate({ "/* hello", "world */" }, "line", { 0, 0, 1, 11 }, { "hello", "world" }, {
+    { range = { 0, 0, 0, 3 }, text = { "" } },
+    { range = { 1, 5, 1, 8 }, text = { "" } },
+  })
 
-T["edits"]["make_block_uncomment_edits_single_line"] = function()
-  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local lines = { "/* hello */" }
-  local info = H.block_comment_info(lines, csi, "char", { 0, 0, 0, 10 })
-  assert(info)
-  local edits = H.make_block_uncomment_edits(info)
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "hello")
-  validate_edits(edits, { { range = { 0, 0, 0, 3 }, text = { "" } }, { range = { 0, 8, 0, 11 }, text = { "" } } })
+  validate({ "/* hello */" }, "char", { 0, 0, 0, 10 }, { "hello" }, {
+    { range = { 0, 0, 0, 3 }, text = { "" } },
+    { range = { 0, 8, 0, 11 }, text = { "" } },
+  })
 end
 
 T["edits"]["make_block_partial_edits"] = function()
-  local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
-  local lines = { "hello world" }
-  local edits = H.make_block_partial_edits(lines, csi, { 0, 3, 0, 7 })
-  assert(edits)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "hel/* lo wo */rld")
-  validate_edits(edits, { { range = { 0, 3, 0, 3 }, text = { "/* " } }, { range = { 0, 8, 0, 8 }, text = { " */" } } })
+  local function validate(lines, range, expected_lines, expected_edits)
+    local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
+    local edits = H.make_block_partial_edits(lines, csi, range)
+    H.apply_edits(lines, edits)
+    eq(lines, expected_lines)
+    validate_edits(edits, expected_edits)
+  end
+
+  validate({ "hello world" }, { 0, 3, 0, 7 }, { "hel/* lo wo */rld" }, {
+    { range = { 0, 3, 0, 3 }, text = { "/* " } },
+    { range = { 0, 8, 0, 8 }, text = { " */" } },
+  })
 end
 
 T["edits"]["compute_line_edits_actions"] = function()
@@ -1601,41 +1561,29 @@ T["edits"]["compute_line_edits_actions"] = function()
   local csi = H.make_csi({ { "// ", "" } })
   local cfg = { hooks = {} }
 
+  local function validate(lines, range, action, expected)
+    local edits = H.compute_line_edits(lines, range, "line", csi, cfg, action)
+    H.apply_edits(lines, edits)
+    eq(lines, expected)
+  end
+
   -- kToggle: all uncommented → all comment
-  local lines = { "hello", "world" }
-  local edits = H.compute_line_edits(lines, { 0, 0, 1, 5 }, "line", csi, cfg, ACT.kToggle)
-  H.apply_edits(lines, edits)
-  eq(lines, { "// hello", "// world" })
+  validate({ "hello", "world" }, { 0, 0, 1, 5 }, ACT.kToggle, { "// hello", "// world" })
 
   -- kToggle: all commented → all uncomment
-  lines = { "// hello", "// world" }
-  edits = H.compute_line_edits(lines, { 0, 0, 1, 11 }, "line", csi, cfg, ACT.kToggle)
-  H.apply_edits(lines, edits)
-  eq(lines, { "hello", "world" })
+  validate({ "// hello", "// world" }, { 0, 0, 1, 11 }, ACT.kToggle, { "hello", "world" })
 
   -- kToggle: mixed → all comment
-  lines = { "hello", "// world" }
-  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kToggle)
-  H.apply_edits(lines, edits)
-  eq(lines, { "// hello", "// // world" })
+  validate({ "hello", "// world" }, { 0, 0, 1, 9 }, ACT.kToggle, { "// hello", "// // world" })
 
   -- kInvert: per-line toggle
-  lines = { "hello", "// world" }
-  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kInvert)
-  H.apply_edits(lines, edits)
-  eq(lines, { "// hello", "world" })
+  validate({ "hello", "// world" }, { 0, 0, 1, 9 }, ACT.kInvert, { "// hello", "world" })
 
   -- kForceAdd: all get comment (already-commented get another layer)
-  lines = { "hello", "// world" }
-  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kForceAdd)
-  H.apply_edits(lines, edits)
-  eq(lines, { "// hello", "// // world" })
+  validate({ "hello", "// world" }, { 0, 0, 1, 9 }, ACT.kForceAdd, { "// hello", "// // world" })
 
   -- kForceRemove: only commented lines get uncommented
-  lines = { "hello", "// world" }
-  edits = H.compute_line_edits(lines, { 0, 0, 1, 9 }, "line", csi, cfg, ACT.kForceRemove)
-  H.apply_edits(lines, edits)
-  eq(lines, { "hello", "world" })
+  validate({ "hello", "// world" }, { 0, 0, 1, 9 }, ACT.kForceRemove, { "hello", "world" })
 end
 
 T["edits"]["compute_block_edits_actions"] = function()
@@ -1643,40 +1591,33 @@ T["edits"]["compute_block_edits_actions"] = function()
   local csi = H.make_csi({ { "/*", "*/" } }, { pad = true })
   local cfg = {}
 
+  local function validate(lines, range, action, expected)
+    local edits = H.compute_block_edits(lines, range, "line", csi, cfg, action)
+    if expected == nil then
+      eq(edits, nil)
+      return
+    end
+    H.apply_edits(lines, edits)
+    eq(lines, expected)
+  end
+
   -- kToggle: no existing block → add
-  local lines = { "hello" }
-  local edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kToggle)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/* hello */")
+  validate({ "hello" }, { 0, 0, 0, 5 }, ACT.kToggle, { "/* hello */" })
 
   -- kToggle: existing block → remove
-  lines = { "/* hello */" }
-  edits = H.compute_block_edits(lines, { 0, 0, 0, 11 }, "line", csi, cfg, ACT.kToggle)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "hello")
+  validate({ "/* hello */" }, { 0, 0, 0, 11 }, ACT.kToggle, { "hello" })
 
   -- kForceAdd: no existing → add
-  lines = { "hello" }
-  edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kForceAdd)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/* hello */")
+  validate({ "hello" }, { 0, 0, 0, 5 }, ACT.kForceAdd, { "/* hello */" })
 
   -- kForceAdd: existing block → add nested
-  lines = { "/* hello */" }
-  edits = H.compute_block_edits(lines, { 0, 0, 0, 11 }, "line", csi, cfg, ACT.kForceAdd)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "/* /* hello */ */")
+  validate({ "/* hello */" }, { 0, 0, 0, 11 }, ACT.kForceAdd, { "/* /* hello */ */" })
 
   -- kForceRemove: existing block → remove
-  lines = { "/* hello */" }
-  edits = H.compute_block_edits(lines, { 0, 0, 0, 11 }, "line", csi, cfg, ACT.kForceRemove)
-  H.apply_edits(lines, edits)
-  eq(lines[1], "hello")
+  validate({ "/* hello */" }, { 0, 0, 0, 11 }, ACT.kForceRemove, { "hello" })
 
   -- kForceRemove: no block → skip
-  lines = { "hello" }
-  edits = H.compute_block_edits(lines, { 0, 0, 0, 5 }, "line", csi, cfg, ACT.kForceRemove)
-  eq(edits, nil)
+  validate({ "hello" }, { 0, 0, 0, 5 }, ACT.kForceRemove, nil)
 end
 
 -- Guess indentation───────────────────────────────────────────────────────────
@@ -1684,75 +1625,88 @@ end
 T["guess_indentation"] = new_set()
 
 T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
-  local function tg(di, dt, ei, et, lines, msg)
-    local r = H.guess_indentation(lines, dt, di)
-    eq(r.insert_spaces, ei, msg)
-    eq(r.tab_size, et, msg)
-  end
-  local function ag(ei, et, lines, msg)
+  -- `{ n }` as `expected_tab_size` means it is only guessed when `insert_spaces` is too
+  local function validate(lines, expected_insert_spaces, expected_tab_size, msg)
+    local function check(detect_indent, tab_size, ei, et)
+      local r = H.guess_indentation(lines, tab_size, detect_indent)
+      eq(r.insert_spaces, ei, { fail_reason = msg })
+      eq(r.tab_size, et, { fail_reason = msg })
+    end
+
+    local ei, et = expected_insert_spaces, expected_tab_size
     if ei == nil then
-      -- cannot guess insertSpaces
+      -- cannot guess insert_spaces
       if et == nil then
-        -- cannot guess tabSize
-        tg(true, 13370, true, 13370, lines, msg)
-        tg(false, 13371, false, 13371, lines, msg)
+        -- cannot guess tab_size
+        check(true, 13370, true, 13370)
+        check(false, 13371, false, 13371)
       elseif type(et) == "number" then
-        -- can guess tabSize
-        tg(true, 13370, true, et, lines, msg)
-        tg(false, 13371, false, et, lines, msg)
+        -- can guess tab_size
+        check(true, 13370, true, et)
+        check(false, 13371, false, et)
       else
-        -- can only guess tabSize when insertSpaces is true
-        tg(true, 13370, true, et[1], lines, msg)
-        tg(false, 13371, false, 13371, lines, msg)
+        -- can only guess tab_size when insert_spaces is true
+        check(true, 13370, true, et[1])
+        check(false, 13371, false, 13371)
       end
     else
-      -- can guess insertSpaces
+      -- can guess insert_spaces
       if et == nil then
-        tg(true, 13370, ei, 13370, lines, msg)
-        tg(false, 13371, ei, 13371, lines, msg)
+        check(true, 13370, ei, 13370)
+        check(false, 13371, ei, 13371)
       elseif type(et) == "number" then
-        tg(true, 13370, ei, et, lines, msg)
-        tg(false, 13371, ei, et, lines, msg)
+        check(true, 13370, ei, et)
+        check(false, 13371, ei, et)
       else
-        -- can only guess tabSize when insertSpaces is true
+        -- can only guess tab_size when insert_spaces is true
         if ei == true then
-          tg(true, 13370, ei, et[1], lines, msg)
-          tg(false, 13371, ei, et[1], lines, msg)
+          check(true, 13370, ei, et[1])
+          check(false, 13371, ei, et[1])
         else
-          tg(true, 13370, ei, 13370, lines, msg)
-          tg(false, 13371, ei, 13371, lines, msg)
+          check(true, 13370, ei, 13370)
+          check(false, 13371, ei, 13371)
         end
       end
     end
   end
 
   -- guess indentation 1 (ported from VSCode textModel.test.ts)
-  ag(nil, nil, { "x", "x", "x", "x", "x", "x", "x" }, "no clues")
-  ag(false, nil, { "\tx", "x", "x", "x", "x", "x", "x" }, "no spaces, 1xTAB")
-  ag(true, 2, { "  x", "x", "x", "x", "x", "x", "x" }, "1x2")
-  ag(false, nil, { "\tx", "\tx", "\tx", "\tx", "\tx", "\tx", "\tx" }, "7xTAB")
-  ag(nil, { 2 }, { "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, "4x2, 4xTAB")
-  ag(false, nil, { "\tx", " x", "\tx", " x", "\tx", " x", "\tx", " x" }, "4x1, 4xTAB")
-  ag(false, nil, { "\tx", "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, "4x2, 5xTAB")
-  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "  x" }, "1x2, 5xTAB")
-  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "    x" }, "1x4, 5xTAB")
-  ag(false, nil, { "\tx", "\tx", "x", "\tx", "x", "\tx", "  x", "\tx", "    x" }, "1x2, 1x4, 5xTAB")
-  ag(nil, nil, { "x", " x", " x", " x", " x", " x", " x", " x" }, "7x1 - 1 space is never guessed as an indentation")
-  ag(true, nil, { "x", "          x", " x", " x", " x", " x", " x", " x" }, "1x10, 6x1")
-  ag(
+  validate({ "x", "x", "x", "x", "x", "x", "x" }, nil, nil, "no clues")
+  validate({ "\tx", "x", "x", "x", "x", "x", "x" }, false, nil, "no spaces, 1xTAB")
+  validate({ "  x", "x", "x", "x", "x", "x", "x" }, true, 2, "1x2")
+  validate({ "\tx", "\tx", "\tx", "\tx", "\tx", "\tx", "\tx" }, false, nil, "7xTAB")
+  validate({ "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, nil, { 2 }, "4x2, 4xTAB")
+  validate({ "\tx", " x", "\tx", " x", "\tx", " x", "\tx", " x" }, false, nil, "4x1, 4xTAB")
+  validate({ "\tx", "\tx", "  x", "\tx", "  x", "\tx", "  x", "\tx", "  x" }, false, nil, "4x2, 5xTAB")
+  validate({ "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "  x" }, false, nil, "1x2, 5xTAB")
+  validate({ "\tx", "\tx", "x", "\tx", "x", "\tx", "x", "\tx", "    x" }, false, nil, "1x4, 5xTAB")
+  validate({ "\tx", "\tx", "x", "\tx", "x", "\tx", "  x", "\tx", "    x" }, false, nil, "1x2, 1x4, 5xTAB")
+  validate(
+    { "x", " x", " x", " x", " x", " x", " x", " x" },
     nil,
     nil,
+    "7x1 - 1 space is never guessed as an indentation"
+  )
+  validate({ "x", "          x", " x", " x", " x", " x", " x", " x" }, true, nil, "1x10, 6x1")
+  validate(
     { "", "  ", "    ", "      ", "        ", "          ", "            ", "              " },
+    nil,
+    nil,
     "whitespace lines don't count"
   )
-  ag(true, 3, { "x", "   x", "   x", "    x", "x", "   x", "   x", "    x", "x", "   x", "   x", "    x" }, "6x3, 3x4")
-  ag(
+  validate(
+    { "x", "   x", "   x", "    x", "x", "   x", "   x", "    x", "x", "   x", "   x", "    x" },
+    true,
+    3,
+    "6x3, 3x4"
+  )
+  validate(
+    { "x", "     x", "     x", "    x", "x", "     x", "     x", "    x", "x", "     x", "     x", "    x" },
     true,
     5,
-    { "x", "     x", "     x", "    x", "x", "     x", "     x", "    x", "x", "     x", "     x", "    x" },
     "6x5, 3x4"
   )
-  ag(true, 7, {
+  validate({
     "x",
     "       x",
     "       x",
@@ -1765,17 +1719,27 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "       x",
     "       x",
     "    x",
-  }, "6x7, 1x5, 2x4")
-  ag(true, 2, { "x", "  x", "  x", "  x", "  x", "x", "  x", "  x", "  x", "  x" }, "8x2")
-  ag(true, 2, { "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x" }, "8x2")
-  ag(true, 2, { "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x" }, "4x2, 4x4")
-  ag(true, 2, { "x", "  x", "  x", "    x", "x", "  x", "  x", "    x", "x", "  x", "  x", "    x" }, "6x2, 3x4")
-  ag(true, 2, { "x", "  x", "  x", "    x", "    x", "x", "  x", "  x", "    x", "    x" }, "4x2, 4x4")
-  ag(true, 2, { "x", "  x", "    x", "    x", "x", "  x", "    x", "    x" }, "2x2, 4x4")
-  ag(true, 4, { "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x" }, "8x4")
-  ag(true, 2, { "x", "  x", "    x", "    x", "      x", "x", "  x", "    x", "    x", "      x" }, "2x2, 4x4, 2x6")
-  ag(true, 2, { "x", "  x", "    x", "    x", "      x", "      x", "        x" }, "1x2, 2x4, 2x6, 1x8")
-  ag(true, 4, {
+  }, true, 7, "6x7, 1x5, 2x4")
+  validate({ "x", "  x", "  x", "  x", "  x", "x", "  x", "  x", "  x", "  x" }, true, 2, "8x2")
+  validate({ "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x", "x", "  x", "  x" }, true, 2, "8x2")
+  validate({ "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x", "x", "  x", "    x" }, true, 2, "4x2, 4x4")
+  validate({ "x", "  x", "  x", "    x", "x", "  x", "  x", "    x", "x", "  x", "  x", "    x" }, true, 2, "6x2, 3x4")
+  validate({ "x", "  x", "  x", "    x", "    x", "x", "  x", "  x", "    x", "    x" }, true, 2, "4x2, 4x4")
+  validate({ "x", "  x", "    x", "    x", "x", "  x", "    x", "    x" }, true, 2, "2x2, 4x4")
+  validate(
+    { "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x", "x", "    x", "    x" },
+    true,
+    4,
+    "8x4"
+  )
+  validate(
+    { "x", "  x", "    x", "    x", "      x", "x", "  x", "    x", "    x", "      x" },
+    true,
+    2,
+    "2x2, 4x4, 2x6"
+  )
+  validate({ "x", "  x", "    x", "    x", "      x", "      x", "        x" }, true, 2, "1x2, 2x4, 2x6, 1x8")
+  validate({
     "x",
     "    x",
     "    x",
@@ -1788,9 +1752,9 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "    x",
     "     x",
     "        x",
-  }, "6x4, 2x5, 2x8")
-  ag(true, 4, { "x", "    x", "    x", "    x", "     x", "        x", "        x" }, "3x4, 1x5, 2x8")
-  ag(true, 4, {
+  }, true, 4, "6x4, 2x5, 2x8")
+  validate({ "x", "    x", "    x", "    x", "     x", "        x", "        x" }, true, 4, "3x4, 1x5, 2x8")
+  validate({
     "x",
     "x",
     "    x",
@@ -1805,13 +1769,13 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "     x",
     "        x",
     "        x",
-  }, "6x4, 2x5, 4x8")
-  ag(true, 3, { "x", " x", " x", " x", " x", " x", "x", "   x", "    x", "    x" }, "5x1, 2x0, 1x3, 2x4")
-  ag(false, nil, { "\t x", " \t x", "\tx" }, "mixed whitespace 1")
-  ag(false, nil, { "\tx", "\t    x" }, "mixed whitespace 2")
+  }, true, 4, "6x4, 2x5, 4x8")
+  validate({ "x", " x", " x", " x", " x", " x", "x", "   x", "    x", "    x" }, true, 3, "5x1, 2x0, 1x3, 2x4")
+  validate({ "\t x", " \t x", "\tx" }, false, nil, "mixed whitespace 1")
+  validate({ "\tx", "\t    x" }, false, nil, "mixed whitespace 2")
 
   -- issue #44991
-  ag(true, 4, {
+  validate({
     "a = 10             # 0 space indent",
     "b = 5              # 0 space indent",
     "if a > 10:         # 0 space indent",
@@ -1826,9 +1790,9 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "        b += 1     # 8 space indent      delta 8 spaces",
     "        b += 1     # 8 space indent",
     "        b += 1     # 8 space indent",
-  })
+  }, true, 4)
   -- issue #55818
-  ag(true, 2, {
+  validate({
     "",
     "/* REQUIRE */",
     "",
@@ -1850,9 +1814,9 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "",
     "module.exports = myFn;",
     "",
-  })
+  }, true, 2)
   -- issue #70832
-  ag(false, nil, {
+  validate({
     "x",
     "x",
     "x",
@@ -1868,18 +1832,18 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "\tx",
     "\tx",
     "x",
-  })
+  }, false, nil)
   -- issue #62143
-  ag(true, 2, { "x", "x", "  x", "  x" })
-  ag(true, 2, { "x", "  - item2", "  - item3" })
-  tg(true, 2, true, 2, { "x x", "  x", "  x" })
-  tg(true, 2, true, 2, { "x x", "  x", "  x", "    x" })
-  tg(true, 2, true, 2, { "<!--test1.md -->", "- item1", "  - item2", "    - item3" })
+  validate({ "x", "x", "  x", "  x" }, true, 2)
+  validate({ "x", "  - item2", "  - item3" }, true, 2)
+  validate({ "x x", "  x", "  x" }, true, 2)
+  validate({ "x x", "  x", "  x", "    x" }, true, 2)
+  validate({ "<!--test1.md -->", "- item1", "  - item2", "    - item3" }, true, 2)
   -- issue #84217
-  ag(true, 4, { "def main():", "    print('hello')" })
-  ag(true, 4, { "def main():", "    with open('foo') as fp:", "        print(fp.read())" })
+  validate({ "def main():", "    print('hello')" }, true, 4)
+  validate({ "def main():", "    with open('foo') as fp:", "        print(fp.read())" }, true, 4)
   -- issue #65668 (YAML 2 spaces)
-  ag(true, 2, {
+  validate({
     "version: 2",
     "",
     "jobs:",
@@ -1923,9 +1887,9 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "",
     "    - store_test_results:",
     "        path: /tmp/test-results",
-  })
+  }, true, 2)
   -- issue #249040 (4-space wins over 2-space when predominant)
-  ag(true, 4, {
+  validate({
     "function foo() {",
     "    let a = 1;",
     "    let b = 2;",
@@ -1939,7 +1903,7 @@ T["guess_indentation"]["port of VSCode indentationGuesser"] = function()
     "    };",
     "    return obj;",
     "}",
-  })
+  }, true, 4)
 
   -- bufnr path
   set_lines({ "x", "  x", "  x", "  x" })
